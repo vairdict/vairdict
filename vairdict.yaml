@@ -1,0 +1,47 @@
+project:
+  name: vairdict
+  type: startup
+  domain: developer-tooling
+  risk_tolerance: medium
+
+agents:
+  planner: claude
+  coder: claude-code
+  judge: claude
+  model: claude-sonnet-4-20250514
+
+environment:
+  runner: github-actions
+
+commands:
+  build: make build
+  test: make test
+  lint: make lint
+  e2e: ""
+
+phases:
+  plan:
+    coverage_threshold: 85
+    max_loops: 3
+    severity:
+      block_on: [P0, P1]
+      assume_on: [P2]
+      defer_on: [P3]
+  code:
+    max_loops: 3
+    require_tests: true
+    coverage_minimum: 70
+  quality:
+    max_loops: 3
+    e2e_required: false
+    pr_review_mode: auto
+
+escalation:
+  after_loops: 3
+  notify_via: stdout
+  channel: ""
+
+conventions:
+  language: go
+  formatter: gofmt
+  linter: golangci-lint
