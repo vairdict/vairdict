@@ -120,7 +120,7 @@ reviewed by the agent judge, only then created in GitHub.
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
-| M1        | in progress | 4/8         |
+| M1        | in progress | 5/8         |
 | M2        | not started | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
