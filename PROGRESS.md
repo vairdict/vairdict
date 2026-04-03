@@ -5,12 +5,12 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M0 — Infrastructure
+## Current Milestone: M1 — Foundation
 
 ---
 
 ## Ready to Start
-- #9 chore: repo infrastructure setup
+- #2 config: vairdict.yaml parsing
 
 ## In Progress
 - none
@@ -19,7 +19,6 @@ Update this file when opening, completing, or blocking an issue.
 
 | Issue | Title                          | Waiting On     |
 |-------|--------------------------------|----------------|
-| #2    | config: yaml parsing           | #9             |
 | #3    | state: task state machine      | #2             |
 | #4    | agents/claude: API client      | #2             |
 | #1    | bootstrap: init flow           | #2             |
@@ -29,7 +28,7 @@ Update this file when opening, completing, or blocking an issue.
 | #8    | dogfood: vairdict init on repo | #7             |
 
 ## Done
-- none
+- #9 chore: repo infrastructure setup
 
 ---
 
@@ -120,8 +119,8 @@ reviewed by the agent judge, only then created in GitHub.
 
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
-| M0        | in progress | 0/1         |
-| M1        | blocked     | 0/8         |
+| M0        | done        | 1/1         |
+| M1        | in progress | 0/8         |
 | M2        | not started | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |

@@ -1,20 +1,21 @@
-# Dependencies
-node_modules/
-.pnpm-store/
+# Binary
+/vairdict
+/dist/
 
-# Build output
-dist/
-.turbo/
-*.tsbuildinfo
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
 
 # Environment
 .env
 .env.local
 .env.*.local
-.dev.vars
-
-# Cloudflare
-.wrangler/
 
 # OS
 .DS_Store
@@ -30,12 +31,6 @@ Thumbs.db
 
 # Testing
 coverage/
-
-# Skills (author in separate repos)
-skills/
-
-# Internal scripts (import, discovery tooling)
-scripts/
 
 # Logs
 *.log
