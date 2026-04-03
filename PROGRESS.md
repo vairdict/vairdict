@@ -12,7 +12,6 @@ Update this file when opening, completing, or blocking an issue.
 ## Ready to Start
 - #3 state: task state machine
 - #4 agents/claude: Anthropic API client
-- #1 bootstrap: init flow
 
 ## In Progress
 - none
@@ -29,6 +28,7 @@ Update this file when opening, completing, or blocking an issue.
 ## Done
 - #9 chore: repo infrastructure setup
 - #2 config: vairdict.yaml parsing
+- #1 bootstrap: init flow
 
 ---
 
@@ -120,7 +120,7 @@ reviewed by the agent judge, only then created in GitHub.
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
-| M1        | in progress | 1/8         |
+| M1        | in progress | 2/8         |
 | M2        | not started | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
