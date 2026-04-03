@@ -10,16 +10,13 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #7 cmd: cobra CLI
+- #8 dogfood: vairdict init on repo
 
 ## In Progress
 - none
 
 ## Blocked
-
-| Issue | Title                          | Waiting On     |
-|-------|--------------------------------|----------------|
-| #8    | dogfood: vairdict init on repo | #7             |
+- none
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -29,6 +26,7 @@ Update this file when opening, completing, or blocking an issue.
 - #3 state: task state machine
 - #5 judges/plan: plan judge
 - #6 phases/plan: plan phase
+- #7 cmd: cobra CLI
 
 ---
 
@@ -120,7 +118,7 @@ reviewed by the agent judge, only then created in GitHub.
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
-| M1        | in progress | 7/8         |
+| M1        | in progress | 8/8         |
 | M2        | not started | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
