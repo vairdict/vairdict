@@ -10,7 +10,7 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #6 phases/plan: plan phase
+- #7 cmd: cobra CLI
 
 ## In Progress
 - none
@@ -19,7 +19,6 @@ Update this file when opening, completing, or blocking an issue.
 
 | Issue | Title                          | Waiting On     |
 |-------|--------------------------------|----------------|
-| #7    | cmd: cobra CLI                 | #1, #2, #3, #6 |
 | #8    | dogfood: vairdict init on repo | #7             |
 
 ## Done
@@ -29,6 +28,7 @@ Update this file when opening, completing, or blocking an issue.
 - #4 agents/claude: Anthropic API client
 - #3 state: task state machine
 - #5 judges/plan: plan judge
+- #6 phases/plan: plan phase
 
 ---
 
@@ -120,7 +120,7 @@ reviewed by the agent judge, only then created in GitHub.
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
-| M1        | in progress | 6/8         |
+| M1        | in progress | 7/8         |
 | M2        | not started | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
