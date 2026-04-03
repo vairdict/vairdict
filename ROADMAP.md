@@ -1,5 +1,16 @@
 # VAIrdict Roadmap
 
+## Milestone 0 — Infrastructure
+> Set up the repo so Claude can start working immediately
+
+- [ ] #9  chore: add .gitignore for Go
+- [ ] #10 chore: go mod init + empty directory scaffold
+- [ ] #11 chore: add Makefile (build, test, lint, install)
+- [ ] #12 chore: add golangci-lint config
+- [ ] #13 chore: add GoReleaser config
+- [ ] spm installed and available in environment
+- [ ] ship skill installed: spm install ship
+
 ## Milestone 1 — Foundation
 > Build the core primitives everything else depends on
 

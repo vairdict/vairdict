@@ -82,3 +82,21 @@ type Gap struct {
 - Do not change vairdict.yaml schema without updating config/ parser
 - Do not write judges that return raw strings — always typed structs
 - Do not skip tests — every judge must have test coverage
+
+
+# How to work on VAIrdict
+
+1. Read CLAUDE.md first — understand the architecture
+2. Read the issue — understand what to build
+3. Check dependencies — make sure they exist before starting
+4. Write the code in the right package
+5. Write tests alongside the code
+6. Open a PR linked to the issue
+7. Do not exceed the issue scope
+```
+
+## skillpkg/spm
+The ship skill (spm exec ship) handles lint, format, 
+tests, and build in the code phase judge.
+Do not reimplement this logic — call spm instead.
+spm must be installed in the environment.
