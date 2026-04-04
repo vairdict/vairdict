@@ -78,8 +78,9 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.
 	duration := time.Since(start)
 
 	result := state.AgentResult{
-		Output: stdout.String(),
-		Stderr: stderr.String(),
+		Output:   stdout.String(),
+		Stderr:   stderr.String(),
+		Duration: duration,
 	}
 
 	if err != nil {
