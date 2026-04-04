@@ -5,18 +5,24 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M1 — Foundation
+## Current Milestone: M2 — Code Phase
 
 ---
 
 ## Ready to Start
-- #8 dogfood: vairdict init on repo
+- #19 agents/claudecode: Claude Code CLI runner
+- #20 judges/code: code judge via spm ship
+- #22 github: PR creation + comments
 
 ## In Progress
 - none
 
 ## Blocked
-- none
+
+| Issue | Title                          | Waiting On     |
+|-------|--------------------------------|----------------|
+| #21   | phases/code: code phase        | #19, #20       |
+| #23   | dogfood: plan + code e2e       | #19, #20, #21, #22 |
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -27,6 +33,7 @@ Update this file when opening, completing, or blocking an issue.
 - #5 judges/plan: plan judge
 - #6 phases/plan: plan phase
 - #7 cmd: cobra CLI
+- #8 dogfood: vairdict init on repo
 
 ---
 
@@ -118,8 +125,8 @@ reviewed by the agent judge, only then created in GitHub.
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
-| M1        | in progress | 8/8         |
-| M2        | not started | 0/5         |
+| M1        | done        | 9/9         |
+| M2        | in progress | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
 | M5+       | not started | —           |

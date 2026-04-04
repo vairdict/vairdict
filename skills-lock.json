@@ -1,0 +1,13 @@
+{
+  "lockfileVersion": 1,
+  "generated_at": "2026-04-03T19:50:04Z",
+  "generated_by": "spm@0.0.1",
+  "skills": {
+    "ship": {
+      "version": "1.0.2",
+      "resolved": "/api/v1/skills/ship/1.0.2/download",
+      "checksum": "2530a7f4a3038189646eeddcba402c3e54cf30290af579dcff4cae9df664be12",
+      "source": "registry"
+    }
+  }
+}
