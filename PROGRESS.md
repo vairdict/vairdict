@@ -5,12 +5,12 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M1 — Foundation
+## Current Milestone: M2 — Code Phase
 
 ---
 
 ## Ready to Start
-- #8 dogfood: vairdict init on repo
+- none (M2 issues not yet opened)
 
 ## In Progress
 - none
@@ -27,6 +27,7 @@ Update this file when opening, completing, or blocking an issue.
 - #5 judges/plan: plan judge
 - #6 phases/plan: plan phase
 - #7 cmd: cobra CLI
+- #8 dogfood: vairdict init on repo
 
 ---
 
@@ -118,7 +119,7 @@ reviewed by the agent judge, only then created in GitHub.
 | Milestone | Status      | Issues Done |
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
-| M1        | in progress | 8/8         |
+| M1        | done        | 9/9         |
 | M2        | not started | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
