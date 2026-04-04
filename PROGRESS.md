@@ -5,7 +5,7 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M2 — Code Phase
+## Current Milestone: M3 — Quality Phase
 
 ---
 
@@ -13,7 +13,7 @@ Update this file when opening, completing, or blocking an issue.
 - none
 
 ## In Progress
-- #29 auth: support ~/.config/vairdict/ for API key configuration
+- none
 
 ## Blocked
 - none
@@ -33,6 +33,7 @@ Update this file when opening, completing, or blocking an issue.
 - #22 github: PR creation + comments
 - #21 phases/code: code phase orchestration
 - #23 dogfood: plan + code phases e2e
+- #29 auth: ~/.config/vairdict/ API key configuration
 
 ---
 
@@ -125,7 +126,7 @@ reviewed by the agent judge, only then created in GitHub.
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
-| M2        | in progress | 5/6         |
+| M2        | done        | 6/6         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
 | M5+       | not started | —           |
