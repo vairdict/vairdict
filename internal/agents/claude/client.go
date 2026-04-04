@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/vairdict/vairdict/internal/config"
@@ -139,13 +138,18 @@ func WithModel(model string) Option {
 	}
 }
 
-// NewClient creates a new Anthropic API client. It reads the API key from the
-// ANTHROPIC_API_KEY environment variable and the model from the provided config.
+// NewClient creates a new Anthropic API client. It resolves the API key from:
+// 1. ANTHROPIC_API_KEY environment variable
+// 2. ~/.config/vairdict/config.yaml
 // Options can override any default.
 func NewClient(cfg *config.Config, opts ...Option) (*Client, error) {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := config.ResolveAPIKey()
 	if apiKey == "" {
-		return nil, &AuthError{Message: "ANTHROPIC_API_KEY environment variable is not set"}
+		path, _ := config.UserConfigPath()
+		return nil, &AuthError{Message: fmt.Sprintf(
+			"Anthropic API key not found. Set it via:\n"+
+				"  1. export ANTHROPIC_API_KEY=sk-...\n"+
+				"  2. vairdict init (writes to %s)", path)}
 	}
 
 	model := defaultModel

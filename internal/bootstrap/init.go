@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"strings"
+
 	"github.com/charmbracelet/huh"
 	"github.com/vairdict/vairdict/internal/config"
 	"gopkg.in/yaml.v3"
@@ -59,7 +61,43 @@ func Run(dir string) error {
 	}
 
 	slog.Info("vairdict.yaml written", "path", outPath)
+
+	// Prompt for API key if not already configured.
+	if err := promptAPIKey(); err != nil {
+		return fmt.Errorf("configuring API key: %w", err)
+	}
+
 	return nil
+}
+
+// promptAPIKey checks whether an API key is already available and, if not,
+// prompts the user to enter one and saves it to the user config.
+func promptAPIKey() error {
+	if config.ResolveAPIKey() != "" {
+		slog.Info("API key already configured")
+		return nil
+	}
+
+	var apiKey string
+	err := huh.NewInput().
+		Title("Anthropic API key").
+		Description("Required for plan + judge phases. Stored in ~/.config/vairdict/config.yaml").
+		Value(&apiKey).
+		Validate(func(s string) error {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				return fmt.Errorf("API key is required")
+			}
+			return nil
+		}).
+		Run()
+	if err != nil {
+		return fmt.Errorf("prompting for API key: %w", err)
+	}
+
+	apiKey = strings.TrimSpace(apiKey)
+
+	return config.SaveUserConfig(&config.UserConfig{APIKey: apiKey})
 }
 
 // promptAnswers collects user responses from the interactive prompt.
