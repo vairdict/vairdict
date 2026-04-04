@@ -79,6 +79,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.
 
 	result := state.AgentResult{
 		Output: stdout.String(),
+		Stderr: stderr.String(),
 	}
 
 	if err != nil {
@@ -95,9 +96,10 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.
 
 		// Check for exit code.
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
 			slog.Warn("claude code exited with error",
-				"exitCode", exitErr.ExitCode(),
-				"stderr", stderr.String(),
+				"exitCode", result.ExitCode,
+				"stderr", result.Stderr,
 				"duration", duration,
 			)
 			return result, nil

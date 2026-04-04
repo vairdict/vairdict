@@ -95,11 +95,13 @@ type Verdict struct {
 	Questions []Question `json:"questions"`
 }
 
-// AgentResult is the shared result type returned by all coding agents.
-// Specific agents may carry extra fields (e.g. duration, exit code) but
-// every consumer can rely on this common shape.
+// AgentResult is the shared result type returned by all agents that
+// execute work (coders, judges, etc). Consumers use Output; Stderr
+// and ExitCode are optional and only populated by CLI-based agents.
 type AgentResult struct {
-	Output string `json:"output"`
+	Output   string `json:"output"`
+	Stderr   string `json:"stderr,omitempty"`
+	ExitCode int    `json:"exit_code,omitempty"`
 }
 
 // Attempt records one execution of a phase.

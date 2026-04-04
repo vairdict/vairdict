@@ -33,8 +33,12 @@ func TestRun_NonZeroExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("non-zero exit should not return error, got: %v", err)
 	}
-	// Non-zero exit still captures stdout output.
-	_ = result
+	if result.ExitCode != 1 {
+		t.Errorf("exit code = %d, want 1", result.ExitCode)
+	}
+	if result.Stderr != "fail\n" {
+		t.Errorf("stderr = %q, want %q", result.Stderr, "fail\n")
+	}
 }
 
 func TestRun_NotInstalled(t *testing.T) {
