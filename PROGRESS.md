@@ -16,7 +16,7 @@ Update this file when opening, completing, or blocking an issue.
 - #23 dogfood: plan + code phases e2e
 
 ## Blocked
-- none
+- #29 auth: support ~/.config/vairdict/ for API key configuration (blocked on #23)
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -124,7 +124,7 @@ reviewed by the agent judge, only then created in GitHub.
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
-| M2        | in progress | 4/5         |
+| M2        | in progress | 4/6         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
 | M5+       | not started | —           |
