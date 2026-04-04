@@ -10,13 +10,19 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- none (M2 issues not yet opened)
+- #19 agents/claudecode: Claude Code CLI runner
+- #20 judges/code: code judge via spm ship
+- #22 github: PR creation + comments
 
 ## In Progress
 - none
 
 ## Blocked
-- none
+
+| Issue | Title                          | Waiting On     |
+|-------|--------------------------------|----------------|
+| #21   | phases/code: code phase        | #19, #20       |
+| #23   | dogfood: plan + code e2e       | #19, #20, #21, #22 |
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -120,7 +126,7 @@ reviewed by the agent judge, only then created in GitHub.
 |-----------|-------------|-------------|
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
-| M2        | not started | 0/5         |
+| M2        | in progress | 0/5         |
 | M3        | not started | 0/5         |
 | M4        | not started | 0/5         |
 | M5+       | not started | —           |
