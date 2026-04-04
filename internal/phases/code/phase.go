@@ -21,12 +21,7 @@ type PhaseResult struct {
 
 // Coder is the interface for the coding agent (Claude Code CLI).
 type Coder interface {
-	Run(ctx context.Context, prompt string, workDir string) (CoderResult, error)
-}
-
-// CoderResult is a simplified result from the coder.
-type CoderResult struct {
-	Output string
+	Run(ctx context.Context, prompt string, workDir string) (state.AgentResult, error)
 }
 
 // Judge is the interface for the code judge (spm exec ship).

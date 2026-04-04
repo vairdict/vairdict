@@ -11,21 +11,21 @@ import (
 
 // fakeCoder returns configurable results.
 type fakeCoder struct {
-	results []CoderResult
+	results []state.AgentResult
 	err     error
 	calls   int
 }
 
-func (f *fakeCoder) Run(_ context.Context, _ string, _ string) (CoderResult, error) {
+func (f *fakeCoder) Run(_ context.Context, _ string, _ string) (state.AgentResult, error) {
 	if f.err != nil {
-		return CoderResult{}, f.err
+		return state.AgentResult{}, f.err
 	}
 	idx := f.calls
 	f.calls++
 	if idx < len(f.results) {
 		return f.results[idx], nil
 	}
-	return CoderResult{Output: "code written"}, nil
+	return state.AgentResult{Output: "code written"}, nil
 }
 
 // fakeJudge returns configurable verdicts.
@@ -65,7 +65,7 @@ func defaultCfg() config.CodePhaseConfig {
 }
 
 func TestRun_PassFirstTry(t *testing.T) {
-	coder := &fakeCoder{results: []CoderResult{{Output: "done"}}}
+	coder := &fakeCoder{results: []state.AgentResult{{Output: "done"}}}
 	judge := &fakeJudge{verdicts: []*state.Verdict{
 		{Score: 100, Pass: true},
 	}}

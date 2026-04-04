@@ -43,19 +43,6 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 }
 
-// coderAdapter bridges claudecode.Runner to the codephase.Coder interface.
-type coderAdapter struct {
-	runner *claudecode.Runner
-}
-
-func (a *coderAdapter) Run(ctx context.Context, prompt string, workDir string) (codephase.CoderResult, error) {
-	result, err := a.runner.Run(ctx, prompt, workDir)
-	if err != nil {
-		return codephase.CoderResult{}, err
-	}
-	return codephase.CoderResult{Output: result.Output}, nil
-}
-
 func runTask(intent string) error {
 	// Load config.
 	cfg, err := config.LoadConfig("vairdict.yaml")
@@ -188,7 +175,7 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, client *claude.Client
 func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, task *state.Task, plan string, workDir string) (*codephase.PhaseResult, error) {
 	fmt.Println("\n-> Code phase starting...")
 
-	coder := &coderAdapter{runner: claudecode.New()}
+	coder := claudecode.New()
 	judge := codejudge.New(&codejudge.ExecExecutor{})
 	phase := codephase.New(coder, judge, cfg.Phases.Code, workDir)
 
