@@ -29,8 +29,8 @@ func Run(dir string) error {
 			return fmt.Errorf("confirming overwrite: %w", err)
 		}
 		if !overwrite {
-			slog.Info("init cancelled, existing vairdict.yaml kept")
-			return nil
+			slog.Info("existing vairdict.yaml kept")
+			return promptAPIKey()
 		}
 	}
 

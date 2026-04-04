@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/vairdict/vairdict/internal/state"
@@ -68,6 +70,10 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.
 	cmd := r.cmdFactory(ctx, "claude", "-p", prompt)
 	cmd.Dir = workDir
 
+	// Clear CLAUDECODE env var to allow nesting when vairdict is
+	// itself running inside a Claude Code session.
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -111,4 +117,16 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.
 
 	slog.Info("claude code completed", "duration", duration)
 	return result, nil
+}
+
+// filterEnv returns a copy of env with entries matching key removed.
+func filterEnv(env []string, key string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
 }
