@@ -31,6 +31,7 @@ func makeMessagesResponse(content string) string {
 
 func TestNewClient_MissingAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	_, err := NewClient(nil)
 	if err == nil {
 		t.Fatal("expected error for missing API key")

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -31,55 +32,73 @@ func (e *ExecExecutor) Run(ctx context.Context, workDir string, name string, arg
 	return out.Bytes(), err
 }
 
-// CodeJudge evaluates code by running spm exec ship.
+// CodeJudge evaluates code by running the project's configured quality commands.
 type CodeJudge struct {
 	executor CommandExecutor
+	cfg      config.Config
 }
 
-// New creates a CodeJudge with the given executor.
-func New(executor CommandExecutor) *CodeJudge {
-	return &CodeJudge{executor: executor}
+// New creates a CodeJudge with the given executor and config.
+func New(executor CommandExecutor, cfg config.Config) *CodeJudge {
+	return &CodeJudge{executor: executor, cfg: cfg}
 }
 
 // check represents a single quality check result.
 type check struct {
 	Name     string
+	Command  string
 	Passed   bool
 	Output   string
 	Severity state.Severity
 }
 
-// Judge runs spm exec ship and returns a Verdict.
+// Judge runs the configured quality commands and returns a Verdict.
 func (j *CodeJudge) Judge(ctx context.Context, workDir string) (*state.Verdict, error) {
-	// Verify spm is installed.
-	if _, err := j.executor.Run(ctx, workDir, "spm", "--version"); err != nil {
-		return nil, fmt.Errorf("spm not installed or not in PATH: %w", err)
+	checks := j.buildChecks()
+
+	for i, c := range checks {
+		if c.Command == "" {
+			// No command configured — skip and count as passed.
+			checks[i].Passed = true
+			continue
+		}
+
+		slog.Debug("running quality check", "name", c.Name, "command", c.Command)
+
+		parts := strings.Fields(c.Command)
+		output, err := j.executor.Run(ctx, workDir, parts[0], parts[1:]...)
+		outStr := string(output)
+
+		if err != nil {
+			checks[i].Passed = false
+			checks[i].Output = outStr
+			slog.Info("quality check failed", "name", c.Name, "output", truncate(outStr, 200))
+		} else {
+			checks[i].Passed = true
+			slog.Debug("quality check passed", "name", c.Name)
+		}
 	}
-
-	// Run spm exec ship.
-	output, err := j.executor.Run(ctx, workDir, "spm", "exec", "ship")
-	outStr := string(output)
-
-	slog.Debug("spm exec ship output", "output", outStr)
-
-	checks := parseShipOutput(outStr, err)
 
 	// Build verdict.
 	var gaps []state.Gap
 	passed := 0
+	total := 0
 	for _, c := range checks {
+		if c.Command == "" {
+			continue
+		}
+		total++
 		if c.Passed {
 			passed++
 			continue
 		}
 		gaps = append(gaps, state.Gap{
 			Severity:    c.Severity,
-			Description: fmt.Sprintf("%s failed: %s", c.Name, strings.TrimSpace(c.Output)),
+			Description: fmt.Sprintf("%s failed: %s", c.Name, truncate(strings.TrimSpace(c.Output), 500)),
 			Blocking:    c.Severity == state.SeverityP0 || c.Severity == state.SeverityP1,
 		})
 	}
 
-	total := len(checks)
 	score := 0.0
 	if total > 0 {
 		score = float64(passed) / float64(total) * 100
@@ -95,67 +114,36 @@ func (j *CodeJudge) Judge(ctx context.Context, workDir string) (*state.Verdict, 
 	return verdict, nil
 }
 
-// parseShipOutput extracts check results from spm exec ship output.
-func parseShipOutput(output string, execErr error) []check {
-	checks := []check{
-		{Name: "format", Passed: true, Severity: state.SeverityP2},
-		{Name: "lint", Passed: true, Severity: state.SeverityP2},
-		{Name: "test", Passed: true, Severity: state.SeverityP1},
-		{Name: "build", Passed: true, Severity: state.SeverityP0},
+// buildChecks creates the check list from config commands.
+// Severity: build=P0, test=P1, lint/format=P2.
+func (j *CodeJudge) buildChecks() []check {
+	return []check{
+		{Name: "format", Command: j.formatCommand(), Severity: state.SeverityP2},
+		{Name: "lint", Command: j.cfg.Commands.Lint, Severity: state.SeverityP2},
+		{Name: "test", Command: j.cfg.Commands.Test, Severity: state.SeverityP1},
+		{Name: "build", Command: j.cfg.Commands.Build, Severity: state.SeverityP0},
 	}
-
-	// If ship failed, parse which checks failed from output.
-	if execErr != nil {
-		lower := strings.ToLower(output)
-		for i := range checks {
-			// Look for failure indicators per check.
-			name := checks[i].Name
-			if strings.Contains(lower, name+" failed") ||
-				strings.Contains(lower, name+": fail") ||
-				strings.Contains(lower, name+" error") ||
-				(strings.Contains(lower, "x "+name) || strings.Contains(lower, "✗ "+name)) {
-				checks[i].Passed = false
-				checks[i].Output = extractSection(output, name)
-			}
-		}
-
-		// If nothing specific matched but we had an error, mark build as failed.
-		allPassed := true
-		for _, c := range checks {
-			if !c.Passed {
-				allPassed = false
-				break
-			}
-		}
-		if allPassed {
-			// Generic failure — assume build failed.
-			checks[3].Passed = false
-			checks[3].Output = output
-		}
-	}
-
-	return checks
 }
 
-// extractSection tries to find output related to a specific check name.
-func extractSection(output string, name string) string {
-	lines := strings.Split(output, "\n")
-	var section []string
-	capturing := false
-	for _, line := range lines {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, name) {
-			capturing = true
-		}
-		if capturing {
-			section = append(section, line)
-			if len(section) > 10 {
-				break
-			}
-		}
+// formatCommand returns the format check command based on conventions.
+func (j *CodeJudge) formatCommand() string {
+	switch j.cfg.Conventions.Formatter {
+	case "gofmt":
+		return "gofmt -l ."
+	case "prettier":
+		return "npx prettier --check ."
+	case "black":
+		return "black --check ."
+	case "rustfmt":
+		return "rustfmt --check"
+	default:
+		return ""
 	}
-	if len(section) > 0 {
-		return strings.Join(section, "\n")
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
 	}
-	return output
+	return s[:max] + "..."
 }
