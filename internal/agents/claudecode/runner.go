@@ -7,15 +7,9 @@ import (
 	"log/slog"
 	"os/exec"
 	"time"
-)
 
-// Result holds the output of a Claude Code CLI invocation.
-type Result struct {
-	Output   string
-	Stderr   string
-	ExitCode int
-	Duration time.Duration
-}
+	"github.com/vairdict/vairdict/internal/state"
+)
 
 // NotInstalledError is returned when the claude CLI is not found.
 type NotInstalledError struct {
@@ -63,7 +57,8 @@ func New(opts ...Option) *Runner {
 }
 
 // Run executes a prompt via claude -p and returns the result.
-func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (*Result, error) {
+// It satisfies the codephase.Coder interface via state.AgentResult.
+func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.AgentResult, error) {
 	start := time.Now()
 
 	// Apply timeout.
@@ -82,7 +77,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (*Resul
 	err := cmd.Run()
 	duration := time.Since(start)
 
-	result := &Result{
+	result := state.AgentResult{
 		Output:   stdout.String(),
 		Stderr:   stderr.String(),
 		Duration: duration,
@@ -91,7 +86,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (*Resul
 	if err != nil {
 		// Check if claude is not installed.
 		if execErr, ok := err.(*exec.Error); ok {
-			return nil, &NotInstalledError{Err: execErr}
+			return state.AgentResult{}, &NotInstalledError{Err: execErr}
 		}
 
 		// Context cancellation or timeout — check before exit error
@@ -103,11 +98,15 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (*Resul
 		// Check for exit code.
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()
-			slog.Warn("claude code exited with error", "exitCode", result.ExitCode, "duration", duration)
+			slog.Warn("claude code exited with error",
+				"exitCode", result.ExitCode,
+				"stderr", result.Stderr,
+				"duration", duration,
+			)
 			return result, nil
 		}
 
-		return nil, fmt.Errorf("running claude code: %w", err)
+		return state.AgentResult{}, fmt.Errorf("running claude code: %w", err)
 	}
 
 	slog.Info("claude code completed", "duration", duration)

@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+// AgentResult is the shared result type returned by all agents that
+// execute work (coders, judges, etc). Consumers use Output; Stderr,
+// ExitCode, and Duration are optional and populated by CLI-based agents.
+type AgentResult struct {
+	Output   string        `json:"output"`
+	Stderr   string        `json:"stderr,omitempty"`
+	ExitCode int           `json:"exit_code,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+}
+
 // Phase represents a development phase in the VAIrdict pipeline.
 type Phase string
 

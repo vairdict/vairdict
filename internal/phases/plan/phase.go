@@ -21,6 +21,7 @@ type PhaseResult struct {
 	Loops     int
 	LastScore float64
 	Feedback  string
+	Plan      string
 }
 
 // plannerResponse is the typed response expected from the planner agent.
@@ -147,6 +148,7 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 				Loops:     loop + 1,
 				LastScore: lastScore,
 				Feedback:  buildFeedbackSummary(verdict),
+				Plan:      fullPlan,
 			}, nil
 		}
 
