@@ -176,7 +176,7 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 	fmt.Println("\n-> Code phase starting...")
 
 	coder := claudecode.New()
-	judge := codejudge.New(&codejudge.ExecExecutor{})
+	judge := codejudge.New(&codejudge.ExecExecutor{}, *cfg)
 	phase := codephase.New(coder, judge, cfg.Phases.Code, workDir)
 
 	result, err := phase.Run(ctx, task, plan)
