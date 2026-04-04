@@ -10,8 +10,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 	"github.com/vairdict/vairdict/internal/agents/claude"
+	"github.com/vairdict/vairdict/internal/agents/claudecode"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/github"
+	codejudge "github.com/vairdict/vairdict/internal/judges/code"
 	planjudge "github.com/vairdict/vairdict/internal/judges/plan"
+	codephase "github.com/vairdict/vairdict/internal/phases/code"
 	planphase "github.com/vairdict/vairdict/internal/phases/plan"
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -25,8 +29,9 @@ var runCmd = &cobra.Command{
 	Use:   "run <intent>",
 	Short: "Create a task and run it through the development phases",
 	Long: `Create a new task with the given intent, then run it through
-the plan phase (and later code and quality phases). Streams
-progress updates as each phase loop executes.`,
+the plan and code phases. On success, creates a GitHub PR with
+the VAIrdict verdict. Streams progress updates as each phase
+loop executes.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		intent := args[0]
@@ -36,6 +41,19 @@ progress updates as each phase loop executes.`,
 
 func init() {
 	rootCmd.AddCommand(runCmd)
+}
+
+// coderAdapter bridges claudecode.Runner to the codephase.Coder interface.
+type coderAdapter struct {
+	runner *claudecode.Runner
+}
+
+func (a *coderAdapter) Run(ctx context.Context, prompt string, workDir string) (codephase.CoderResult, error) {
+	result, err := a.runner.Run(ctx, prompt, workDir)
+	if err != nil {
+		return codephase.CoderResult{}, err
+	}
+	return codephase.CoderResult{Output: result.Output}, nil
 }
 
 func runTask(intent string) error {
@@ -77,18 +95,44 @@ func runTask(intent string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// Run plan phase.
-	result, err := runPlanPhase(ctx, cfg, client, store, task)
+	// Resolve working directory.
+	workDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolving working directory: %w", err)
+	}
+
+	// --- Plan phase ---
+	planResult, err := runPlanPhase(ctx, cfg, client, store, task)
 	if err != nil {
 		return err
 	}
 
-	if result.Escalate {
-		fmt.Fprintf(os.Stderr, "\nEscalation needed: plan phase failed after %d loops (last score: %.0f%%)\n", result.Loops, result.LastScore)
+	if planResult.Escalate {
+		fmt.Fprintf(os.Stderr, "\nEscalation needed: plan phase failed after %d loops (last score: %.0f%%)\n", planResult.Loops, planResult.LastScore)
 		os.Exit(exitEscalation)
 	}
 
-	fmt.Printf("\nTask %s completed plan phase successfully (score: %.0f%%, loops: %d)\n", task.ID, result.LastScore, result.Loops)
+	fmt.Printf("\nTask %s completed plan phase (score: %.0f%%, loops: %d)\n", task.ID, planResult.LastScore, planResult.Loops)
+
+	// --- Code phase ---
+	codeResult, err := runCodePhase(ctx, cfg, store, task, planResult.Plan, workDir)
+	if err != nil {
+		return err
+	}
+
+	if codeResult.Escalate {
+		fmt.Fprintf(os.Stderr, "\nEscalation needed: code phase failed after %d loops (last score: %.0f%%)\n", codeResult.Loops, codeResult.LastScore)
+		os.Exit(exitEscalation)
+	}
+
+	fmt.Printf("\nTask %s completed code phase (score: %.0f%%, loops: %d)\n", task.ID, codeResult.LastScore, codeResult.Loops)
+
+	// --- Create GitHub PR ---
+	if err := createPR(ctx, task, workDir); err != nil {
+		return err
+	}
+
+	fmt.Printf("\nTask %s completed successfully\n", task.ID)
 	return nil
 }
 
@@ -139,4 +183,80 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, client *claude.Client
 	}
 
 	return result, nil
+}
+
+func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, task *state.Task, plan string, workDir string) (*codephase.PhaseResult, error) {
+	fmt.Println("\n-> Code phase starting...")
+
+	coder := &coderAdapter{runner: claudecode.New()}
+	judge := codejudge.New(&codejudge.ExecExecutor{})
+	phase := codephase.New(coder, judge, cfg.Phases.Code, workDir)
+
+	result, err := phase.Run(ctx, task, plan)
+	if err != nil {
+		if updateErr := store.UpdateTask(task); updateErr != nil {
+			slog.Error("failed to persist task state", "error", updateErr)
+		}
+		return nil, fmt.Errorf("running code phase: %w", err)
+	}
+
+	// Persist final task state.
+	if err := store.UpdateTask(task); err != nil {
+		return nil, fmt.Errorf("persisting task state: %w", err)
+	}
+
+	// Print attempt results.
+	for _, attempt := range task.Attempts {
+		if attempt.Phase != state.PhaseCode {
+			continue
+		}
+		maxLoops := cfg.Phases.Code.MaxLoops
+		passStr := "x"
+		if attempt.Verdict != nil && attempt.Verdict.Pass {
+			passStr = "ok"
+		}
+		score := 0.0
+		if attempt.Verdict != nil {
+			score = attempt.Verdict.Score
+		}
+		fmt.Printf("   Loop %d/%d: %.0f%% %s\n", attempt.Loop, maxLoops, score, passStr)
+	}
+
+	if result.Pass {
+		fmt.Println("-> Code phase complete")
+	} else if result.Escalate {
+		fmt.Println("-> Code phase escalated")
+	}
+
+	return result, nil
+}
+
+func createPR(ctx context.Context, task *state.Task, workDir string) error {
+	fmt.Println("\n-> Creating GitHub PR...")
+
+	ghRunner := &github.ExecRunner{Dir: workDir}
+	ghClient := github.New(ghRunner)
+
+	// Create branch.
+	branch, err := ghClient.CreateBranch(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("creating branch: %w", err)
+	}
+
+	// Build PR content.
+	title := github.GeneratePRTitle(task)
+	body := github.FormatPRBody(task, 0, "Implemented via VAIrdict run")
+
+	pr, err := ghClient.CreatePR(ctx, github.CreatePROpts{
+		Title:      title,
+		Body:       body,
+		BaseBranch: "main",
+		HeadBranch: branch,
+	})
+	if err != nil {
+		return fmt.Errorf("creating PR: %w", err)
+	}
+
+	fmt.Printf("-> PR created: %s\n", pr.URL)
+	return nil
 }

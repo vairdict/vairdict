@@ -10,10 +10,10 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #23 dogfood: plan + code phases e2e
+- none
 
 ## In Progress
-- none
+- #23 dogfood: plan + code phases e2e
 
 ## Blocked
 - none
