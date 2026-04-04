@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -19,10 +20,9 @@ type fakeResponse struct {
 }
 
 func (f *FakeExecutor) Run(_ context.Context, _ string, name string, args ...string) ([]byte, error) {
-	// Build a key from the command.
 	key := name
-	if len(args) > 0 {
-		key = name + " " + args[0]
+	for _, a := range args {
+		key += " " + a
 	}
 	if resp, ok := f.Responses[key]; ok {
 		return resp.Output, resp.Err
@@ -30,15 +30,30 @@ func (f *FakeExecutor) Run(_ context.Context, _ string, name string, args ...str
 	return nil, nil
 }
 
+func testConfig() config.Config {
+	return config.Config{
+		Commands: config.CommandsConfig{
+			Build: "make build",
+			Test:  "make test",
+			Lint:  "make lint",
+		},
+		Conventions: config.ConventionsConfig{
+			Formatter: "gofmt",
+		},
+	}
+}
+
 func TestJudge_AllPass(t *testing.T) {
 	executor := &FakeExecutor{
 		Responses: map[string]fakeResponse{
-			"spm --version": {Output: []byte("spm 1.1.3")},
-			"spm exec":      {Output: []byte("✓ format\n✓ lint\n✓ test\n✓ build\n")},
+			"gofmt -l .": {Output: []byte("")},
+			"make lint":  {Output: []byte("ok")},
+			"make test":  {Output: []byte("ok")},
+			"make build": {Output: []byte("ok")},
 		},
 	}
 
-	judge := New(executor)
+	judge := New(executor, testConfig())
 	verdict, err := judge.Judge(context.Background(), "/work")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -57,12 +72,14 @@ func TestJudge_AllPass(t *testing.T) {
 func TestJudge_BuildFailed(t *testing.T) {
 	executor := &FakeExecutor{
 		Responses: map[string]fakeResponse{
-			"spm --version": {Output: []byte("spm 1.1.3")},
-			"spm exec":      {Output: []byte("✓ format\n✓ lint\n✓ test\n✗ build\nbuild error: missing main"), Err: errors.New("exit 1")},
+			"gofmt -l .": {Output: []byte("")},
+			"make lint":  {Output: []byte("ok")},
+			"make test":  {Output: []byte("ok")},
+			"make build": {Output: []byte("build error: missing main"), Err: errors.New("exit 1")},
 		},
 	}
 
-	judge := New(executor)
+	judge := New(executor, testConfig())
 	verdict, err := judge.Judge(context.Background(), "/work")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -87,12 +104,14 @@ func TestJudge_BuildFailed(t *testing.T) {
 func TestJudge_TestFailed(t *testing.T) {
 	executor := &FakeExecutor{
 		Responses: map[string]fakeResponse{
-			"spm --version": {Output: []byte("spm 1.1.3")},
-			"spm exec":      {Output: []byte("✓ format\n✓ lint\n✗ test\ntest failed: 2 failures\n✓ build"), Err: errors.New("exit 1")},
+			"gofmt -l .": {Output: []byte("")},
+			"make lint":  {Output: []byte("ok")},
+			"make test":  {Output: []byte("FAIL: 2 failures"), Err: errors.New("exit 1")},
+			"make build": {Output: []byte("ok")},
 		},
 	}
 
-	judge := New(executor)
+	judge := New(executor, testConfig())
 	verdict, err := judge.Judge(context.Background(), "/work")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -114,12 +133,14 @@ func TestJudge_TestFailed(t *testing.T) {
 func TestJudge_LintFailed(t *testing.T) {
 	executor := &FakeExecutor{
 		Responses: map[string]fakeResponse{
-			"spm --version": {Output: []byte("spm 1.1.3")},
-			"spm exec":      {Output: []byte("✓ format\n✗ lint\nlint error: unused var\n✓ test\n✓ build"), Err: errors.New("exit 1")},
+			"gofmt -l .": {Output: []byte("")},
+			"make lint":  {Output: []byte("unused var"), Err: errors.New("exit 1")},
+			"make test":  {Output: []byte("ok")},
+			"make build": {Output: []byte("ok")},
 		},
 	}
 
-	judge := New(executor)
+	judge := New(executor, testConfig())
 	verdict, err := judge.Judge(context.Background(), "/work")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -138,15 +159,40 @@ func TestJudge_LintFailed(t *testing.T) {
 	}
 }
 
-func TestJudge_AllFailed(t *testing.T) {
+func TestJudge_FormatFailed(t *testing.T) {
 	executor := &FakeExecutor{
 		Responses: map[string]fakeResponse{
-			"spm --version": {Output: []byte("spm 1.1.3")},
-			"spm exec":      {Output: []byte("✗ format\nformat failed\n✗ lint\nlint failed\n✗ test\ntest failed\n✗ build\nbuild failed"), Err: errors.New("exit 1")},
+			"gofmt -l .": {Output: []byte("file.go\n"), Err: errors.New("exit 1")},
+			"make lint":  {Output: []byte("ok")},
+			"make test":  {Output: []byte("ok")},
+			"make build": {Output: []byte("ok")},
 		},
 	}
 
-	judge := New(executor)
+	judge := New(executor, testConfig())
+	verdict, err := judge.Judge(context.Background(), "/work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Pass {
+		t.Error("expected fail")
+	}
+	if verdict.Gaps[0].Severity != state.SeverityP2 {
+		t.Errorf("severity = %v, want P2", verdict.Gaps[0].Severity)
+	}
+}
+
+func TestJudge_AllFailed(t *testing.T) {
+	executor := &FakeExecutor{
+		Responses: map[string]fakeResponse{
+			"gofmt -l .": {Output: []byte("file.go"), Err: errors.New("exit 1")},
+			"make lint":  {Output: []byte("lint error"), Err: errors.New("exit 1")},
+			"make test":  {Output: []byte("test error"), Err: errors.New("exit 1")},
+			"make build": {Output: []byte("build error"), Err: errors.New("exit 1")},
+		},
+	}
+
+	judge := New(executor, testConfig())
 	verdict, err := judge.Judge(context.Background(), "/work")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -162,42 +208,27 @@ func TestJudge_AllFailed(t *testing.T) {
 	}
 }
 
-func TestJudge_SpmNotInstalled(t *testing.T) {
+func TestJudge_NoFormatter(t *testing.T) {
+	cfg := testConfig()
+	cfg.Conventions.Formatter = ""
+
 	executor := &FakeExecutor{
 		Responses: map[string]fakeResponse{
-			"spm --version": {Err: errors.New("executable not found")},
+			"make lint":  {Output: []byte("ok")},
+			"make test":  {Output: []byte("ok")},
+			"make build": {Output: []byte("ok")},
 		},
 	}
 
-	judge := New(executor)
-	_, err := judge.Judge(context.Background(), "/work")
-	if err == nil {
-		t.Fatal("expected error for missing spm")
-	}
-	if !errors.Is(err, err) {
-		t.Errorf("unexpected error type: %v", err)
-	}
-}
-
-func TestJudge_GenericFailure(t *testing.T) {
-	// When ship fails but no specific check is identifiable.
-	executor := &FakeExecutor{
-		Responses: map[string]fakeResponse{
-			"spm --version": {Output: []byte("spm 1.1.3")},
-			"spm exec":      {Output: []byte("unknown error occurred"), Err: errors.New("exit 1")},
-		},
-	}
-
-	judge := New(executor)
+	judge := New(executor, cfg)
 	verdict, err := judge.Judge(context.Background(), "/work")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if verdict.Pass {
-		t.Error("expected fail")
+	if !verdict.Pass {
+		t.Error("expected pass")
 	}
-	// Should have at least one gap (build assumed failed).
-	if len(verdict.Gaps) == 0 {
-		t.Error("expected at least one gap for generic failure")
+	if verdict.Score != 100 {
+		t.Errorf("score = %v, want 100", verdict.Score)
 	}
 }
