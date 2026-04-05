@@ -67,7 +67,7 @@ func (r *Runner) Run(ctx context.Context, prompt string, workDir string) (state.
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	cmd := r.cmdFactory(ctx, "claude", "-p", prompt)
+	cmd := r.cmdFactory(ctx, "claude", "-p", "--dangerously-skip-permissions", prompt)
 	cmd.Dir = workDir
 
 	// Clear CLAUDECODE env var to allow nesting when vairdict is
