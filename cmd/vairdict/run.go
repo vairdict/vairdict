@@ -157,6 +157,11 @@ func runTask(intent string) error {
 
 	fmt.Printf("\nTask %s completed code phase (score: %.0f%%, loops: %d)\n", task.ID, codeResult.LastScore, codeResult.Loops)
 
+	// --- Commit any changes the coder made ---
+	if err := commitChanges(ctx, task, workDir); err != nil {
+		return err
+	}
+
 	// --- Create GitHub PR ---
 	if err := createPR(ctx, task, workDir, branch); err != nil {
 		return err
@@ -259,6 +264,37 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 	}
 
 	return result, nil
+}
+
+func commitChanges(_ context.Context, task *state.Task, workDir string) error {
+	// Stage all new and modified files.
+	if out, err := execCommandInDir(workDir, "git", "add", "-A"); err != nil {
+		return fmt.Errorf("staging changes: %s: %w", out, err)
+	}
+
+	// Check if there's anything to commit.
+	out, err := execCommandInDir(workDir, "git", "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("checking git status: %w", err)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		slog.Warn("no changes to commit after code phase")
+		return nil
+	}
+
+	msg := fmt.Sprintf("feat: %s\n\nImplemented by VAIrdict task %s", task.Intent, task.ID)
+	if _, err := execCommandInDir(workDir, "git", "commit", "-m", msg); err != nil {
+		return fmt.Errorf("committing changes: %w", err)
+	}
+
+	fmt.Println("-> Changes committed")
+	return nil
+}
+
+func execCommandInDir(dir string, name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	return cmd.CombinedOutput()
 }
 
 func createPR(ctx context.Context, task *state.Task, workDir string, branch string) error {
