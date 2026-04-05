@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -25,22 +27,54 @@ const (
 	exitEscalation = 2
 )
 
+var issueFlag int
+
 var runCmd = &cobra.Command{
-	Use:   "run <intent>",
+	Use:   "run [intent]",
 	Short: "Create a task and run it through the development phases",
 	Long: `Create a new task with the given intent, then run it through
 the plan and code phases. On success, creates a GitHub PR with
 the VAIrdict verdict. Streams progress updates as each phase
-loop executes.`,
-	Args: cobra.ExactArgs(1),
+loop executes.
+
+Use --issue to fetch the intent from a GitHub issue:
+  vairdict run --issue 32`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		intent := args[0]
+		var intent string
+		if issueFlag > 0 {
+			var err error
+			intent, err = fetchIssueIntent(issueFlag)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Issue #%d: %s\n", issueFlag, intent)
+		} else if len(args) == 1 {
+			intent = args[0]
+		} else {
+			return fmt.Errorf("provide an intent argument or use --issue")
+		}
 		return runTask(intent)
 	},
 }
 
 func init() {
+	runCmd.Flags().IntVar(&issueFlag, "issue", 0, "GitHub issue number to use as intent")
 	rootCmd.AddCommand(runCmd)
+}
+
+// fetchIssueIntent reads the title and body of a GitHub issue via gh CLI.
+func fetchIssueIntent(number int) (string, error) {
+	out, err := execCommand("gh", "issue", "view", fmt.Sprintf("%d", number), "--json", "title,body", "--jq", ".title + \"\\n\\n\" + .body")
+	if err != nil {
+		return "", fmt.Errorf("fetching issue #%d: %w", number, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func execCommand(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	return cmd.Output()
 }
 
 func runTask(intent string) error {
@@ -101,6 +135,15 @@ func runTask(intent string) error {
 
 	fmt.Printf("\nTask %s completed plan phase (score: %.0f%%, loops: %d)\n", task.ID, planResult.LastScore, planResult.Loops)
 
+	// --- Create branch before code phase so commits land on it ---
+	ghRunner := &github.ExecRunner{Dir: workDir}
+	ghClient := github.New(ghRunner)
+	branch, err := ghClient.CreateBranch(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("creating branch: %w", err)
+	}
+	fmt.Printf("-> Branch created: %s\n", branch)
+
 	// --- Code phase ---
 	codeResult, err := runCodePhase(ctx, cfg, store, task, planResult.Plan, workDir)
 	if err != nil {
@@ -115,7 +158,7 @@ func runTask(intent string) error {
 	fmt.Printf("\nTask %s completed code phase (score: %.0f%%, loops: %d)\n", task.ID, codeResult.LastScore, codeResult.Loops)
 
 	// --- Create GitHub PR ---
-	if err := createPR(ctx, task, workDir); err != nil {
+	if err := createPR(ctx, task, workDir, branch); err != nil {
 		return err
 	}
 
@@ -218,17 +261,11 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 	return result, nil
 }
 
-func createPR(ctx context.Context, task *state.Task, workDir string) error {
+func createPR(ctx context.Context, task *state.Task, workDir string, branch string) error {
 	fmt.Println("\n-> Creating GitHub PR...")
 
 	ghRunner := &github.ExecRunner{Dir: workDir}
 	ghClient := github.New(ghRunner)
-
-	// Create branch.
-	branch, err := ghClient.CreateBranch(ctx, task.ID)
-	if err != nil {
-		return fmt.Errorf("creating branch: %w", err)
-	}
 
 	// Build PR content.
 	title := github.GeneratePRTitle(task)
