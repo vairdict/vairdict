@@ -10,13 +10,16 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- none
+- #32 judges/quality: e2e + intent check vs original task
+- #34 escalation: loop limit + human notification
 
 ## In Progress
 - none
 
 ## Blocked
-- none
+- #33 phases/quality: quality phase orchestration (blocked on #32)
+- #35 cmd: wire quality phase + escalation into vairdict run (blocked on #33, #34)
+- #36 dogfood: first full three-phase task on vairdict (blocked on #35)
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -127,6 +130,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | not started | 0/5         |
+| M3        | in progress | 0/5         |
 | M4        | not started | 0/5         |
 | M5+       | not started | —           |
