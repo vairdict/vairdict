@@ -18,6 +18,7 @@ func successRunner() *FakeRunner {
 			"git checkout":  {Output: []byte("ok")},
 			"gh pr create":  {Output: []byte("https://github.com/foo/bar/pull/1\n")},
 			"gh pr comment": {Output: []byte("ok")},
+			"gh pr review":  {Output: []byte("ok")},
 		},
 	}
 }
@@ -105,6 +106,248 @@ func TestAddComment(t *testing.T) {
 	err := client.AddComment(context.Background(), 1, "test comment")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestApprovePR(t *testing.T) {
+	runner := successRunner()
+	client := New(runner)
+
+	err := client.ApprovePR(context.Background(), 42, "Looks good!")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the gh pr review command was called.
+	found := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 3 && call.Args[0] == "pr" && call.Args[1] == "review" {
+			found = true
+			if call.Args[3] != "--approve" {
+				t.Errorf("expected --approve flag, got %q", call.Args[3])
+			}
+		}
+	}
+	if !found {
+		t.Error("gh pr review was not called")
+	}
+}
+
+func TestApprovePR_Error(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr review": {Err: errors.New("review failed")},
+		},
+	}
+	client := New(runner)
+
+	err := client.ApprovePR(context.Background(), 42, "body")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestPostVerdict_Pass_ApprovesAndComments(t *testing.T) {
+	runner := successRunner()
+	runner.Responses["gh pr review"] = fakeResponse{Output: []byte("ok")}
+	client := New(runner)
+
+	verdict := &state.Verdict{
+		Score: 95,
+		Pass:  true,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP3, Description: "minor style", Blocking: false},
+		},
+	}
+
+	err := client.PostVerdict(context.Background(), 7, verdict, state.PhaseQuality, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have called gh pr review (approve), not gh pr comment.
+	foundReview := false
+	foundComment := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 {
+			if call.Args[0] == "pr" && call.Args[1] == "review" {
+				foundReview = true
+			}
+			if call.Args[0] == "pr" && call.Args[1] == "comment" {
+				foundComment = true
+			}
+		}
+	}
+	if !foundReview {
+		t.Error("expected gh pr review to be called for passing verdict")
+	}
+	if foundComment {
+		t.Error("did not expect gh pr comment for passing verdict")
+	}
+}
+
+func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
+	runner := successRunner()
+	client := New(runner)
+
+	verdict := &state.Verdict{
+		Score: 40,
+		Pass:  false,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP0, Description: "build fails", Blocking: true},
+			{Severity: state.SeverityP1, Description: "tests fail", Blocking: true},
+		},
+	}
+
+	err := client.PostVerdict(context.Background(), 7, verdict, state.PhaseCode, 2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have called gh pr comment, not gh pr review.
+	foundReview := false
+	foundComment := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 {
+			if call.Args[0] == "pr" && call.Args[1] == "review" {
+				foundReview = true
+			}
+			if call.Args[0] == "pr" && call.Args[1] == "comment" {
+				foundComment = true
+			}
+		}
+	}
+	if foundReview {
+		t.Error("did not expect gh pr review for failing verdict")
+	}
+	if !foundComment {
+		t.Error("expected gh pr comment to be called for failing verdict")
+	}
+}
+
+func TestFormatVerdictComment_Pass(t *testing.T) {
+	verdict := &state.Verdict{
+		Score: 95,
+		Pass:  true,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP3, Description: "minor style nit", Blocking: false},
+		},
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"header", "## VAIrdict Verdict: PASS"},
+		{"score", "**Score:** 95%"},
+		{"phase", "**Phase:** quality"},
+		{"loop", "**Loop:** 1"},
+		{"gap severity", "| P3 |"},
+		{"gap description", "minor style nit"},
+		{"footer", "@vairdict-judge"},
+	}
+
+	for _, c := range checks {
+		if !contains(comment, c.want) {
+			t.Errorf("comment missing %s (%q)", c.name, c.want)
+		}
+	}
+
+	// Pass verdict should NOT have blocking gaps section.
+	if contains(comment, "### Blocking Gaps") {
+		t.Error("pass verdict should not have blocking gaps section")
+	}
+}
+
+func TestFormatVerdictComment_Fail(t *testing.T) {
+	verdict := &state.Verdict{
+		Score: 40,
+		Pass:  false,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP0, Description: "build broken", Blocking: true},
+			{Severity: state.SeverityP1, Description: "tests fail", Blocking: true},
+			{Severity: state.SeverityP3, Description: "docs missing", Blocking: false},
+		},
+		Questions: []state.Question{
+			{Text: "Is the API stable?", Priority: "high"},
+		},
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseCode, 2)
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"header", "## VAIrdict Verdict: FAIL"},
+		{"score", "**Score:** 40%"},
+		{"loop", "**Loop:** 2"},
+		{"blocking section", "### Blocking Gaps"},
+		{"P0 gap", "**[P0]** build broken"},
+		{"P1 gap", "**[P1]** tests fail"},
+		{"question", "Is the API stable?"},
+		{"criteria table", "| Severity | Status | Description |"},
+	}
+
+	for _, c := range checks {
+		if !contains(comment, c.want) {
+			t.Errorf("comment missing %s (%q)", c.name, c.want)
+		}
+	}
+}
+
+func TestFormatVerdictComment_NoGaps(t *testing.T) {
+	verdict := &state.Verdict{
+		Score: 100,
+		Pass:  true,
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhasePlan, 1)
+
+	if contains(comment, "### Criteria") {
+		t.Error("should not have criteria table when no gaps")
+	}
+	if !contains(comment, "PASS") {
+		t.Error("should contain PASS")
+	}
+}
+
+func TestParsePRNumber(t *testing.T) {
+	tests := []struct {
+		url  string
+		want int
+	}{
+		{"https://github.com/foo/bar/pull/123", 123},
+		{"https://github.com/foo/bar/pull/1", 1},
+		{"", 0},
+		{"not-a-url", 0},
+		{"https://github.com/foo/bar/pull/abc", 0},
+	}
+	for _, tt := range tests {
+		got := parsePRNumber(tt.url)
+		if got != tt.want {
+			t.Errorf("parsePRNumber(%q) = %d, want %d", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestCreatePR_ParsesNumber(t *testing.T) {
+	runner := successRunner()
+	client := New(runner)
+
+	pr, err := client.CreatePR(context.Background(), CreatePROpts{
+		Title:      "test",
+		Body:       "body",
+		BaseBranch: "main",
+		HeadBranch: "vairdict/abc",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pr.Number != 1 {
+		t.Errorf("pr.Number = %d, want 1", pr.Number)
 	}
 }
 
