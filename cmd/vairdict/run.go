@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -217,10 +218,29 @@ func runTask(intent string) error {
 	return nil
 }
 
-// escalateAndExit routes a phase failure through the escalation module and
-// exits the process with the escalation exit code. Replaces the previous
-// inline os.Exit(exitEscalation) calls so that escalation channel routing
-// (stdout / github) is honored consistently across phases.
+// dispatchEscalation routes a phase failure through the escalation module
+// without touching the process exit code. Pure-ish wrapper that exists
+// purely so escalateAndExit's behavior can be unit-tested in isolation
+// from os.Exit.
+func dispatchEscalation(
+	ctx context.Context,
+	task *state.Task,
+	result escalation.Result,
+	cfg config.EscalationConfig,
+	out io.Writer,
+	gh escalation.PRCommenter,
+) error {
+	if err := escalation.Escalate(ctx, task, result, cfg, out, gh); err != nil {
+		return fmt.Errorf("escalating task: %w", err)
+	}
+	return nil
+}
+
+// escalateAndExit dispatches escalation and then exits the process with the
+// escalation exit code. Replaces the previous inline os.Exit(exitEscalation)
+// calls so that escalation channel routing (stdout / github) is honored
+// consistently across phases. The os.Exit makes this function itself
+// untestable; all real logic lives in dispatchEscalation.
 func escalateAndExit(
 	ctx context.Context,
 	task *state.Task,
@@ -228,8 +248,8 @@ func escalateAndExit(
 	cfg config.EscalationConfig,
 	gh escalation.PRCommenter,
 ) error {
-	if err := escalation.Escalate(ctx, task, result, cfg, os.Stderr, gh); err != nil {
-		return fmt.Errorf("escalating task: %w", err)
+	if err := dispatchEscalation(ctx, task, result, cfg, os.Stderr, gh); err != nil {
+		return err
 	}
 	os.Exit(exitEscalation)
 	return nil
