@@ -14,11 +14,14 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecode"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/escalation"
 	"github.com/vairdict/vairdict/internal/github"
 	codejudge "github.com/vairdict/vairdict/internal/judges/code"
 	planjudge "github.com/vairdict/vairdict/internal/judges/plan"
+	qualityjudge "github.com/vairdict/vairdict/internal/judges/quality"
 	codephase "github.com/vairdict/vairdict/internal/phases/code"
 	planphase "github.com/vairdict/vairdict/internal/phases/plan"
+	qualityphase "github.com/vairdict/vairdict/internal/phases/quality"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -122,6 +125,9 @@ func runTask(intent string) error {
 		return fmt.Errorf("resolving working directory: %w", err)
 	}
 
+	ghRunner := &github.ExecRunner{Dir: workDir}
+	ghClient := github.New(ghRunner)
+
 	// --- Plan phase ---
 	planResult, err := runPlanPhase(ctx, cfg, client, store, task)
 	if err != nil {
@@ -129,15 +135,17 @@ func runTask(intent string) error {
 	}
 
 	if planResult.Escalate {
-		fmt.Fprintf(os.Stderr, "\nEscalation needed: plan phase failed after %d loops (last score: %.0f%%)\n", planResult.Loops, planResult.LastScore)
-		os.Exit(exitEscalation)
+		return escalateAndExit(ctx, task, escalation.Result{
+			Phase:     state.PhasePlan,
+			Loops:     planResult.Loops,
+			LastScore: planResult.LastScore,
+			Gaps:      lastGapsForPhase(task, state.PhasePlan),
+		}, cfg.Escalation, ghClient)
 	}
 
 	fmt.Printf("\nTask %s completed plan phase (score: %.0f%%, loops: %d)\n", task.ID, planResult.LastScore, planResult.Loops)
 
 	// --- Create branch before code phase so commits land on it ---
-	ghRunner := &github.ExecRunner{Dir: workDir}
-	ghClient := github.New(ghRunner)
 	branch, err := ghClient.CreateBranch(ctx, task.ID)
 	if err != nil {
 		return fmt.Errorf("creating branch: %w", err)
@@ -151,8 +159,12 @@ func runTask(intent string) error {
 	}
 
 	if codeResult.Escalate {
-		fmt.Fprintf(os.Stderr, "\nEscalation needed: code phase failed after %d loops (last score: %.0f%%)\n", codeResult.Loops, codeResult.LastScore)
-		os.Exit(exitEscalation)
+		return escalateAndExit(ctx, task, escalation.Result{
+			Phase:     state.PhaseCode,
+			Loops:     codeResult.Loops,
+			LastScore: codeResult.LastScore,
+			Gaps:      lastGapsForPhase(task, state.PhaseCode),
+		}, cfg.Escalation, ghClient)
 	}
 
 	fmt.Printf("\nTask %s completed code phase (score: %.0f%%, loops: %d)\n", task.ID, codeResult.LastScore, codeResult.Loops)
@@ -162,17 +174,39 @@ func runTask(intent string) error {
 		return err
 	}
 
-	// --- Create GitHub PR ---
+	// --- Quality phase (gates the PR) ---
+	qualityResult, err := runQualityPhase(ctx, cfg, client, store, task, planResult.Plan, workDir)
+	if err != nil {
+		return err
+	}
+
+	if qualityResult.Escalate || qualityResult.RequeueToCode {
+		// RequeueToCode is currently treated as escalation: cross-phase
+		// routing back into the code phase is intentionally deferred to
+		// a follow-up issue (see PROGRESS.md). The escalation summary
+		// includes the blocking gaps so the human knows code rework is
+		// needed.
+		return escalateAndExit(ctx, task, escalation.Result{
+			Phase:     state.PhaseQuality,
+			Loops:     qualityResult.Loops,
+			LastScore: qualityResult.LastScore,
+			Gaps:      lastGapsForPhase(task, state.PhaseQuality),
+		}, cfg.Escalation, ghClient)
+	}
+
+	fmt.Printf("\nTask %s completed quality phase (score: %.0f%%, loops: %d)\n", task.ID, qualityResult.LastScore, qualityResult.Loops)
+
+	// --- Create GitHub PR (only after quality passes) ---
 	pr, err := createPR(ctx, task, workDir, branch)
 	if err != nil {
 		return err
 	}
 
-	// --- Post verdict comment on PR ---
+	// --- Post quality verdict comment on PR ---
 	if pr.Number > 0 {
-		lastVerdict := lastVerdictForPhase(task, state.PhaseCode)
+		lastVerdict := lastVerdictForPhase(task, state.PhaseQuality)
 		if lastVerdict != nil {
-			if err := postVerdict(ctx, workDir, pr.Number, lastVerdict, state.PhaseCode, task.LoopCount[state.PhaseCode]+1); err != nil {
+			if err := ghClient.PostVerdict(ctx, pr.Number, lastVerdict, state.PhaseQuality, qualityResult.Loops); err != nil {
 				// Log but don't fail the whole run for a comment posting failure.
 				slog.Warn("failed to post verdict comment", "error", err)
 			}
@@ -180,6 +214,33 @@ func runTask(intent string) error {
 	}
 
 	fmt.Printf("\nTask %s completed successfully\n", task.ID)
+	return nil
+}
+
+// escalateAndExit routes a phase failure through the escalation module and
+// exits the process with the escalation exit code. Replaces the previous
+// inline os.Exit(exitEscalation) calls so that escalation channel routing
+// (stdout / github) is honored consistently across phases.
+func escalateAndExit(
+	ctx context.Context,
+	task *state.Task,
+	result escalation.Result,
+	cfg config.EscalationConfig,
+	gh escalation.PRCommenter,
+) error {
+	if err := escalation.Escalate(ctx, task, result, cfg, os.Stderr, gh); err != nil {
+		return fmt.Errorf("escalating task: %w", err)
+	}
+	os.Exit(exitEscalation)
+	return nil
+}
+
+// lastGapsForPhase returns the gaps from the last verdict of the given phase,
+// used to enrich escalation summaries.
+func lastGapsForPhase(task *state.Task, phase state.Phase) []state.Gap {
+	if v := lastVerdictForPhase(task, phase); v != nil {
+		return v.Gaps
+	}
 	return nil
 }
 
@@ -344,9 +405,58 @@ func lastVerdictForPhase(task *state.Task, phase state.Phase) *state.Verdict {
 	return nil
 }
 
-// postVerdict posts a structured verdict comment on a PR.
-func postVerdict(ctx context.Context, workDir string, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
-	ghRunner := &github.ExecRunner{Dir: workDir}
-	ghClient := github.New(ghRunner)
-	return ghClient.PostVerdict(ctx, prNumber, verdict, phase, loop)
+// runQualityPhase runs the quality phase orchestration and prints
+// per-loop progress similar to runPlanPhase / runCodePhase.
+func runQualityPhase(
+	ctx context.Context,
+	cfg *config.Config,
+	client *claude.Client,
+	store *state.Store,
+	task *state.Task,
+	plan string,
+	workDir string,
+) (*qualityphase.PhaseResult, error) {
+	fmt.Println("\n-> Quality phase starting...")
+
+	judge := qualityjudge.New(client, &qualityjudge.ExecRunner{}, *cfg)
+	phase := qualityphase.New(judge, cfg.Phases.Quality, workDir)
+
+	result, err := phase.Run(ctx, task, plan)
+	if err != nil {
+		if updateErr := store.UpdateTask(task); updateErr != nil {
+			slog.Error("failed to persist task state", "error", updateErr)
+		}
+		return nil, fmt.Errorf("running quality phase: %w", err)
+	}
+
+	if err := store.UpdateTask(task); err != nil {
+		return nil, fmt.Errorf("persisting task state: %w", err)
+	}
+
+	for _, attempt := range task.Attempts {
+		if attempt.Phase != state.PhaseQuality {
+			continue
+		}
+		maxLoops := cfg.Phases.Quality.MaxLoops
+		passStr := "x"
+		if attempt.Verdict != nil && attempt.Verdict.Pass {
+			passStr = "ok"
+		}
+		score := 0.0
+		if attempt.Verdict != nil {
+			score = attempt.Verdict.Score
+		}
+		fmt.Printf("   Loop %d/%d: %.0f%% %s\n", attempt.Loop, maxLoops, score, passStr)
+	}
+
+	switch {
+	case result.Pass:
+		fmt.Println("-> Quality phase complete")
+	case result.RequeueToCode:
+		fmt.Println("-> Quality phase failed: code rework required (escalating)")
+	case result.Escalate:
+		fmt.Println("-> Quality phase escalated")
+	}
+
+	return result, nil
 }
