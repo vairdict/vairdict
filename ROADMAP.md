@@ -76,6 +76,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - [ ] phases/quality: quality phase orchestration
 - [ ] escalation: loop limit + human notification
 - [ ] requeue: cross-phase routing logic
+- [ ] github/verdict: post structured judge verdict as PR comment
 - [ ] dogfood: first full three-phase task on vairdict
 
 ---
@@ -91,6 +92,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - First external person has run VAIrdict successfully
 
 **Issues:**
+- [ ] cmd/auto-vairdict: auto-merge on passing verdict
 - [ ] action: GitHub Action wrapper published to marketplace
 - [ ] release: GoReleaser + brew tap + install script
 - [ ] web: vairdict.com landing page + email signup

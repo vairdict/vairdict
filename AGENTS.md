@@ -25,11 +25,37 @@ Every issue goes through: Planner → Coder → Judge.
 ### Judge (@vairdict-judge)
 - Reads: original issue + plan + PR diff
 - Scores against acceptance criteria
-- Posts structured verdict as PR review
-- Pass → approves PR
+- Posts structured verdict as PR comment on every verdict (pass and fail)
+- Pass → approves PR via GitHub review API
+- If auto_vairdict is enabled → triggers merge after approval
 - Fail → requests changes with specific gaps
 - After 3 loops → escalates to @almog (human)
 - From M6+: also judges new issues written by Planner
+
+---
+
+## Verdict Format (M3+)
+
+Judge posts this comment on every PR:
+
+```
+## VAIrdict Verdict — ✅ PASS / ❌ FAIL (Loop N)
+
+| Criteria | Status |
+|---|---|
+| <criterion 1> | ✅ / ❌ |
+| <criterion 2> | ✅ / ❌ |
+
+Score: X%
+Loops used: N / 3
+
+<!-- on fail only -->
+### Gaps
+- <criterion>: <specific gap>
+
+---
+Reviewed by VAIrdict ⚖️
+```
 
 ---
 

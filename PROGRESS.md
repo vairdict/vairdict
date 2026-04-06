@@ -20,6 +20,8 @@ Update this file when opening, completing, or blocking an issue.
 - #33 phases/quality: quality phase orchestration (blocked on #32)
 - #35 cmd: wire quality phase + escalation into vairdict run (blocked on #33, #34)
 - #36 dogfood: first full three-phase task on vairdict (blocked on #35)
+- github/verdict: post structured judge verdict as PR comment (blocked on #22 github PR — M2 done)
+- cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -130,6 +132,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 0/5         |
-| M4        | not started | 0/5         |
+| M3        | in progress | 0/6         |
+| M4        | not started | 0/6         |
 | M5+       | not started | —           |
