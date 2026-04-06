@@ -17,9 +17,7 @@ Update this file when opening, completing, or blocking an issue.
 - #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ## In Progress
-- #43 ui: human-readable cli output mode + --output flag
-- #44 cmd: capture gh CLI stderr in error messages
-- #45 logs: write run logs to ~/.vairdict/logs/<task>.log
+- none
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
@@ -45,6 +43,9 @@ Update this file when opening, completing, or blocking an issue.
 - #38 github/verdict: post structured judge verdict as PR comment
 - #33 phases/quality: quality phase orchestration
 - #35 cmd: wire quality phase + escalation into vairdict run
+- #43 ui: human-readable cli output mode + --output flag
+- #44 cmd: capture gh CLI stderr in error messages
+- #45 logs: write run logs to ~/.vairdict/logs/<task>.log
 
 ---
 
