@@ -103,6 +103,10 @@ type Verdict struct {
 	Pass      bool       `json:"pass"`
 	Gaps      []Gap      `json:"gaps"`
 	Questions []Question `json:"questions"`
+	// Summary is an optional human-readable narrative the judge produces
+	// alongside the structured verdict (decisions, reviewed items, etc).
+	// It is rendered in cli mode under the phase header. May be empty.
+	Summary string `json:"summary,omitempty"`
 }
 
 // Attempt records one execution of a phase.

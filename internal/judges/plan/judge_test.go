@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
@@ -262,5 +263,40 @@ func TestJudge_EmptyGapsAndQuestions(t *testing.T) {
 	}
 	if verdict.Questions != nil {
 		t.Errorf("expected nil questions, got %v", verdict.Questions)
+	}
+}
+
+func TestJudge_SummaryRoundTrip(t *testing.T) {
+	// The judge must preserve the narrative summary the LLM emits so the
+	// CLI renderer can show decisions/risks/files under the phase header.
+	want := "## Decided\n- Use cobra for CLI\n\n## Risks\n- dependency on gh CLI"
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Score:   90,
+			Pass:    true,
+			Summary: want,
+		},
+	}
+
+	judge := New(fake, defaultCfg())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Summary != want {
+		t.Errorf("summary lost in round-trip\n got: %q\nwant: %q", verdict.Summary, want)
+	}
+}
+
+func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
+	// Regression guard: if the summary instructions get stripped from the
+	// system prompt, the renderer silently loses its narrative block.
+	if !strings.Contains(systemPrompt, "summary") {
+		t.Error("system prompt no longer instructs the LLM to emit a summary field")
+	}
+	for _, section := range []string{"## Decided", "## Risks", "## Files to touch"} {
+		if !strings.Contains(systemPrompt, section) {
+			t.Errorf("system prompt missing summary sub-section %q", section)
+		}
 	}
 }

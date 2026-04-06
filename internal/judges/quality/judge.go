@@ -78,10 +78,23 @@ For each gap, set "blocking" to true only for P0 and P1 severity.
 Score is a float from 0 to 100 representing how well the implementation fulfills the intent.
 Set pass to true if the implementation adequately fulfills the intent (score >= 70).
 
+The "summary" field is a short human-readable narrative in markdown-ish form
+that will be rendered under the quality phase header in the CLI. Use these
+exact sub-section headers (omit a section if empty), with "- " bullet items:
+
+## Reviewed
+- <what you checked against the intent/plan>
+
+## Notes
+- <observation, caveat, or follow-up worth surfacing>
+
+Keep each bullet to one line. Do not include any other sections or prose.
+
 Respond with this exact JSON structure:
 {
   "score": <float 0-100>,
   "pass": <bool>,
+  "summary": "<markdown-ish narrative as described above>",
   "gaps": [
     {
       "severity": "<P0|P1|P2|P3>",

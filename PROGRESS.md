@@ -10,9 +10,6 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #43 ui: human-readable cli output mode + --output flag
-- #44 cmd: capture gh CLI stderr in error messages
-- #45 logs: write run logs to ~/.vairdict/logs/<task>.log
 - #47 agents/claudecli: completer that wraps `claude -p` (no API key needed locally)
 - #48 cmd: `vairdict review <pr>` — judge an existing PR
 - #49 config: ci-specific overlay (vairdict.ci.yaml)
@@ -20,7 +17,9 @@ Update this file when opening, completing, or blocking an issue.
 - #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ## In Progress
-- none
+- #43 ui: human-readable cli output mode + --output flag
+- #44 cmd: capture gh CLI stderr in error messages
+- #45 logs: write run logs to ~/.vairdict/logs/<task>.log
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
