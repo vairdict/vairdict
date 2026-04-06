@@ -12,6 +12,7 @@ Update this file when opening, completing, or blocking an issue.
 ## Ready to Start
 - #32 judges/quality: e2e + intent check vs original task
 - #34 escalation: loop limit + human notification
+- #38 github/verdict: post structured judge verdict as PR comment
 
 ## In Progress
 - none
@@ -20,8 +21,7 @@ Update this file when opening, completing, or blocking an issue.
 - #33 phases/quality: quality phase orchestration (blocked on #32)
 - #35 cmd: wire quality phase + escalation into vairdict run (blocked on #33, #34)
 - #36 dogfood: first full three-phase task on vairdict (blocked on #35)
-- github/verdict: post structured judge verdict as PR comment (blocked on #22 github PR — M2 done)
-- cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
+- #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
 
 ## Done
 - #9 chore: repo infrastructure setup
