@@ -10,13 +10,12 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #33 phases/quality: quality phase orchestration
 - #43 ui: human-readable cli output mode + --output flag
 - #44 cmd: capture gh CLI stderr in error messages
 - #45 logs: write run logs to ~/.vairdict/logs/<task>.log
 
 ## In Progress
-- none
+- #33 phases/quality: quality phase orchestration
 
 ## Blocked
 - #35 cmd: wire quality phase + escalation into vairdict run (blocked on #33)
