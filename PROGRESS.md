@@ -10,7 +10,6 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #38 github/verdict: post structured judge verdict as PR comment
 - #33 phases/quality: quality phase orchestration
 
 ## In Progress
@@ -39,6 +38,7 @@ Update this file when opening, completing, or blocking an issue.
 - #29 auth: ~/.config/vairdict/ API key configuration
 - #32 judges/quality: e2e + intent check vs original task
 - #34 escalation: loop limit + human notification
+- #38 github/verdict: post structured judge verdict as PR comment
 
 ---
 
@@ -132,6 +132,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 2/6         |
+| M3        | in progress | 3/6         |
 | M4        | not started | 0/6         |
 | M5+       | not started | —           |

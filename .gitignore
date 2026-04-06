@@ -34,3 +34,6 @@ coverage/
 
 # Logs
 *.log
+
+# Local notes / open discussion items (not for commit)
+open_issues.md

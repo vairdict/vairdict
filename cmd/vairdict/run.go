@@ -163,8 +163,20 @@ func runTask(intent string) error {
 	}
 
 	// --- Create GitHub PR ---
-	if err := createPR(ctx, task, workDir, branch); err != nil {
+	pr, err := createPR(ctx, task, workDir, branch)
+	if err != nil {
 		return err
+	}
+
+	// --- Post verdict comment on PR ---
+	if pr.Number > 0 {
+		lastVerdict := lastVerdictForPhase(task, state.PhaseCode)
+		if lastVerdict != nil {
+			if err := postVerdict(ctx, workDir, pr.Number, lastVerdict, state.PhaseCode, task.LoopCount[state.PhaseCode]+1); err != nil {
+				// Log but don't fail the whole run for a comment posting failure.
+				slog.Warn("failed to post verdict comment", "error", err)
+			}
+		}
 	}
 
 	fmt.Printf("\nTask %s completed successfully\n", task.ID)
@@ -297,7 +309,7 @@ func execCommandInDir(dir string, name string, args ...string) ([]byte, error) {
 	return cmd.CombinedOutput()
 }
 
-func createPR(ctx context.Context, task *state.Task, workDir string, branch string) error {
+func createPR(ctx context.Context, task *state.Task, workDir string, branch string) (*github.PR, error) {
 	fmt.Println("\n-> Creating GitHub PR...")
 
 	ghRunner := &github.ExecRunner{Dir: workDir}
@@ -305,18 +317,36 @@ func createPR(ctx context.Context, task *state.Task, workDir string, branch stri
 
 	// Build PR content.
 	title := github.GeneratePRTitle(task)
-	body := github.FormatPRBody(task, 0, "Implemented via VAIrdict run")
+	body := github.FormatPRBody(task, issueFlag, "Implemented via VAIrdict run")
 
 	pr, err := ghClient.CreatePR(ctx, github.CreatePROpts{
-		Title:      title,
-		Body:       body,
-		BaseBranch: "main",
-		HeadBranch: branch,
+		Title:       title,
+		Body:        body,
+		BaseBranch:  "main",
+		HeadBranch:  branch,
+		IssueNumber: issueFlag,
 	})
 	if err != nil {
-		return fmt.Errorf("creating PR: %w", err)
+		return nil, fmt.Errorf("creating PR: %w", err)
 	}
 
 	fmt.Printf("-> PR created: %s\n", pr.URL)
+	return pr, nil
+}
+
+// lastVerdictForPhase returns the verdict from the last attempt of the given phase.
+func lastVerdictForPhase(task *state.Task, phase state.Phase) *state.Verdict {
+	for i := len(task.Attempts) - 1; i >= 0; i-- {
+		if task.Attempts[i].Phase == phase && task.Attempts[i].Verdict != nil {
+			return task.Attempts[i].Verdict
+		}
+	}
 	return nil
+}
+
+// postVerdict posts a structured verdict comment on a PR.
+func postVerdict(ctx context.Context, workDir string, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
+	ghRunner := &github.ExecRunner{Dir: workDir}
+	ghClient := github.New(ghRunner)
+	return ghClient.PostVerdict(ctx, prNumber, verdict, phase, loop)
 }

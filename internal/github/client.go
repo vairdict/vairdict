@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/vairdict/vairdict/internal/state"
@@ -112,7 +113,25 @@ func (c *Client) CreatePR(ctx context.Context, opts CreatePROpts) (*PR, error) {
 	url := strings.TrimSpace(string(output))
 	slog.Info("PR created", "url", url)
 
-	return &PR{URL: url}, nil
+	number := parsePRNumber(url)
+
+	return &PR{URL: url, Number: number}, nil
+}
+
+// parsePRNumber extracts the PR number from a GitHub PR URL.
+// Returns 0 if the URL doesn't match the expected format.
+func parsePRNumber(url string) int {
+	// URL format: https://github.com/owner/repo/pull/123
+	parts := strings.Split(url, "/")
+	if len(parts) < 2 {
+		return 0
+	}
+	last := parts[len(parts)-1]
+	n, err := strconv.Atoi(last)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // AddComment adds a comment to a PR.
@@ -121,6 +140,41 @@ func (c *Client) AddComment(ctx context.Context, prNumber int, body string) erro
 	if err != nil {
 		return fmt.Errorf("adding comment to PR #%d: %w", prNumber, err)
 	}
+	return nil
+}
+
+// ApprovePR approves a PR via the GitHub review API using gh pr review.
+func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error {
+	args := []string{"pr", "review", fmt.Sprintf("%d", prNumber), "--approve"}
+	if body != "" {
+		args = append(args, "--body", body)
+	}
+	_, err := c.runner.Run(ctx, "gh", args...)
+	if err != nil {
+		return fmt.Errorf("approving PR #%d: %w", prNumber, err)
+	}
+	slog.Info("PR approved", "pr", prNumber)
+	return nil
+}
+
+// PostVerdict posts a structured verdict comment on a PR. On pass, it also
+// approves the PR via the review API.
+func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
+	comment := FormatVerdictComment(verdict, phase, loop)
+
+	if verdict.Pass {
+		// Approve with the verdict as the review body.
+		if err := c.ApprovePR(ctx, prNumber, comment); err != nil {
+			return fmt.Errorf("posting verdict approval: %w", err)
+		}
+	} else {
+		// Post as a regular comment on failure.
+		if err := c.AddComment(ctx, prNumber, comment); err != nil {
+			return fmt.Errorf("posting verdict comment: %w", err)
+		}
+	}
+
+	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score)
 	return nil
 }
 
@@ -150,6 +204,66 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 			fmt.Fprintf(&b, "## VAIrdict verdict\nScore: %.0f%%\nLoops: %d\n", last.Verdict.Score, last.Loop)
 		}
 	}
+
+	return b.String()
+}
+
+// FormatVerdictComment builds a structured markdown comment from a Verdict.
+func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) string {
+	var b strings.Builder
+
+	// Header with pass/fail status.
+	if verdict.Pass {
+		b.WriteString("## VAIrdict Verdict: PASS\n\n")
+	} else {
+		b.WriteString("## VAIrdict Verdict: FAIL\n\n")
+	}
+
+	// Summary line.
+	fmt.Fprintf(&b, "**Score:** %.0f%% | **Phase:** %s | **Loop:** %d\n\n", verdict.Score, phase, loop)
+
+	// Criteria table — build from gaps.
+	if len(verdict.Gaps) > 0 {
+		b.WriteString("### Criteria\n\n")
+		b.WriteString("| Severity | Status | Description |\n")
+		b.WriteString("|----------|--------|-------------|\n")
+		for _, g := range verdict.Gaps {
+			status := "pass"
+			if g.Blocking {
+				status = "BLOCKING"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity, status, g.Description)
+		}
+		b.WriteString("\n")
+	}
+
+	// Gaps section for failures.
+	if !verdict.Pass {
+		blocking := make([]state.Gap, 0)
+		for _, g := range verdict.Gaps {
+			if g.Blocking {
+				blocking = append(blocking, g)
+			}
+		}
+		if len(blocking) > 0 {
+			b.WriteString("### Blocking Gaps\n\n")
+			for _, g := range blocking {
+				fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity, g.Description)
+			}
+			b.WriteString("\n")
+		}
+	}
+
+	// Questions if any.
+	if len(verdict.Questions) > 0 {
+		b.WriteString("### Questions\n\n")
+		for _, q := range verdict.Questions {
+			fmt.Fprintf(&b, "- [%s] %s\n", q.Priority, q.Text)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("---\n*Posted by @vairdict-judge*\n")
 
 	return b.String()
 }
