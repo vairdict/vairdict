@@ -22,17 +22,52 @@ type ExecRunner struct {
 	Dir string
 }
 
-// Run executes a command.
+// ExecError wraps exec.Cmd failures with captured stderr so callers (and
+// the user) see *why* a gh / git shellout failed instead of a bare
+// "exit status 1". Returned by ExecRunner.Run when the command exits
+// with a non-zero status.
+type ExecError struct {
+	Cmd    string
+	Stderr string
+	Err    error
+}
+
+// Error renders the underlying error along with any captured stderr. The
+// stderr is trimmed of a trailing newline but otherwise printed verbatim
+// so the user gets the original gh / git message.
+func (e *ExecError) Error() string {
+	stderr := strings.TrimRight(e.Stderr, "\n")
+	if stderr == "" {
+		return fmt.Sprintf("%s: %v", e.Cmd, e.Err)
+	}
+	return fmt.Sprintf("%s: %v: %s", e.Cmd, e.Err, stderr)
+}
+
+// Unwrap exposes the underlying exec error for errors.Is / errors.As.
+func (e *ExecError) Unwrap() error { return e.Err }
+
+// Run executes a command, capturing stdout and stderr into separate
+// buffers. On success the stdout bytes are returned. On failure an
+// *ExecError is returned that carries the captured stderr so the caller
+// can surface a useful diagnostic. The returned byte slice still
+// contains stdout in both cases so existing callers that read Run's
+// output on error continue to work.
 func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if e.Dir != "" {
 		cmd.Dir = e.Dir
 	}
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	err := cmd.Run()
-	return out.Bytes(), err
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return stdout.Bytes(), &ExecError{
+			Cmd:    name + " " + strings.Join(args, " "),
+			Stderr: stderr.String(),
+			Err:    err,
+		}
+	}
+	return stdout.Bytes(), nil
 }
 
 // PR represents a created pull request.

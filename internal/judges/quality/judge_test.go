@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
@@ -452,4 +453,41 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestJudge_SummaryRoundTrip(t *testing.T) {
+	// The quality judge must preserve the narrative summary the LLM emits
+	// so the CLI renderer can show reviewed/notes under the phase header.
+	want := "## Reviewed\n- Intent matches implementation\n\n## Notes\n- e2e tests still green"
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Score:   85,
+			Pass:    true,
+			Summary: want,
+		},
+	}
+
+	cfg := config.Config{}
+	cfg.Phases.Quality.E2ERequired = false
+	judge := New(fake, &FakeRunner{}, cfg)
+	verdict, err := judge.Judge(context.Background(), "build it", "the plan", "/tmp/work")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Summary != want {
+		t.Errorf("summary lost in round-trip\n got: %q\nwant: %q", verdict.Summary, want)
+	}
+}
+
+func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
+	// Regression guard: if the summary instructions get stripped from the
+	// system prompt, the renderer silently loses its narrative block.
+	if !strings.Contains(systemPrompt, "summary") {
+		t.Error("system prompt no longer instructs the LLM to emit a summary field")
+	}
+	for _, section := range []string{"## Reviewed", "## Notes"} {
+		if !strings.Contains(systemPrompt, section) {
+			t.Errorf("system prompt missing summary sub-section %q", section)
+		}
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/escalation"
 	"github.com/vairdict/vairdict/internal/state"
+	"github.com/vairdict/vairdict/internal/ui"
 )
 
 // helper: make a task that has been advanced through the state machine
@@ -265,6 +266,153 @@ func TestDispatchEscalation_DefaultsToStdoutWhenChannelEmpty(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Escalation") {
 		t.Errorf("expected default-stdout output, got %q", out.String())
+	}
+}
+
+// fakeRenderer records every renderer method call so emit* helper tests
+// can assert on the sequence of events without coupling to specific text.
+type fakeRenderer struct {
+	loops []fakeLoopCall
+	dones []fakeDoneCall
+}
+
+type fakeLoopCall struct {
+	phase state.Phase
+	loop  int
+	max   int
+	score float64
+	pass  bool
+}
+
+type fakeDoneCall struct {
+	phase   state.Phase
+	outcome ui.PhaseOutcome
+	score   float64
+	loops   int
+	summary string
+	gaps    []state.Gap
+}
+
+func (f *fakeRenderer) RunStart(string, string, string) {}
+func (f *fakeRenderer) Note(string, string)             {}
+func (f *fakeRenderer) PhaseStart(state.Phase)          {}
+func (f *fakeRenderer) PRCreated(string)                {}
+func (f *fakeRenderer) VerdictPosted(float64, bool)     {}
+func (f *fakeRenderer) RunComplete(string)              {}
+func (f *fakeRenderer) Error(error)                     {}
+func (f *fakeRenderer) Close() error                    { return nil }
+func (f *fakeRenderer) Escalation(string, state.Phase, int, float64, []state.Gap) {
+}
+
+func (f *fakeRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool) {
+	f.loops = append(f.loops, fakeLoopCall{phase, loop, max, score, pass})
+}
+
+func (f *fakeRenderer) PhaseDone(phase state.Phase, outcome ui.PhaseOutcome, score float64, loops int, summary string, gaps []state.Gap) {
+	f.dones = append(f.dones, fakeDoneCall{phase, outcome, score, loops, summary, gaps})
+}
+
+func TestEmitPhaseAttempts_FiltersByPhase(t *testing.T) {
+	task := state.NewTask("t-1", "intent")
+	task.Attempts = []state.Attempt{
+		{Phase: state.PhasePlan, Loop: 1, Verdict: &state.Verdict{Score: 90, Pass: true}},
+		{Phase: state.PhaseCode, Loop: 1, Verdict: &state.Verdict{Score: 60, Pass: false}},
+		{Phase: state.PhaseCode, Loop: 2, Verdict: &state.Verdict{Score: 85, Pass: true}},
+	}
+	r := &fakeRenderer{}
+
+	emitPhaseAttempts(r, task, state.PhaseCode, 3)
+
+	if len(r.loops) != 2 {
+		t.Fatalf("expected 2 loop events, got %d", len(r.loops))
+	}
+	if r.loops[0].loop != 1 || r.loops[0].score != 60 || r.loops[0].pass {
+		t.Errorf("first code loop wrong: %+v", r.loops[0])
+	}
+	if r.loops[1].loop != 2 || r.loops[1].score != 85 || !r.loops[1].pass {
+		t.Errorf("second code loop wrong: %+v", r.loops[1])
+	}
+	if r.loops[1].max != 3 {
+		t.Errorf("max loops not threaded, got %d", r.loops[1].max)
+	}
+}
+
+func TestEmitPhaseAttempts_NilVerdictUsesZero(t *testing.T) {
+	task := state.NewTask("t-1", "intent")
+	task.Attempts = []state.Attempt{
+		{Phase: state.PhasePlan, Loop: 1, Verdict: nil},
+	}
+	r := &fakeRenderer{}
+
+	emitPhaseAttempts(r, task, state.PhasePlan, 3)
+
+	if len(r.loops) != 1 {
+		t.Fatalf("expected 1 loop event, got %d", len(r.loops))
+	}
+	if r.loops[0].score != 0 || r.loops[0].pass {
+		t.Errorf("nil verdict should render as score=0 pass=false, got %+v", r.loops[0])
+	}
+}
+
+func TestEmitPhaseDone_OutcomeMapping(t *testing.T) {
+	task := state.NewTask("t-1", "intent")
+	task.Attempts = []state.Attempt{
+		{Phase: state.PhasePlan, Loop: 1, Verdict: &state.Verdict{
+			Score:   92,
+			Pass:    true,
+			Summary: "## Decided\n- thing",
+			Gaps:    []state.Gap{{Severity: state.SeverityP2, Description: "note"}},
+		}},
+	}
+
+	cases := []struct {
+		name          string
+		pass          bool
+		escalate      bool
+		requeueToCode bool
+		want          ui.PhaseOutcome
+	}{
+		{"pass", true, false, false, ui.OutcomePass},
+		{"fail", false, false, false, ui.OutcomeFail},
+		{"escalate", false, true, false, ui.OutcomeEscalate},
+		{"requeue_to_code", false, false, true, ui.OutcomeRequeueToCode},
+		// requeue_to_code wins over escalate when both are set
+		{"requeue_before_escalate", false, true, true, ui.OutcomeRequeueToCode},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &fakeRenderer{}
+			emitPhaseDone(r, task, state.PhasePlan, tc.pass, tc.escalate, tc.requeueToCode, 92, 1)
+			if len(r.dones) != 1 {
+				t.Fatalf("expected 1 done event, got %d", len(r.dones))
+			}
+			if r.dones[0].outcome != tc.want {
+				t.Errorf("outcome = %v, want %v", r.dones[0].outcome, tc.want)
+			}
+			if r.dones[0].summary != "## Decided\n- thing" {
+				t.Errorf("summary not threaded from verdict: %q", r.dones[0].summary)
+			}
+			if len(r.dones[0].gaps) != 1 {
+				t.Errorf("gaps not threaded from verdict: %+v", r.dones[0].gaps)
+			}
+		})
+	}
+}
+
+func TestEmitPhaseDone_NoVerdictEmitsEmpty(t *testing.T) {
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	emitPhaseDone(r, task, state.PhasePlan, false, true, false, 0, 3)
+
+	if len(r.dones) != 1 {
+		t.Fatalf("expected 1 done event, got %d", len(r.dones))
+	}
+	if r.dones[0].summary != "" || r.dones[0].gaps != nil {
+		t.Errorf("expected empty summary/gaps when no verdict, got %+v", r.dones[0])
+	}
+	if r.dones[0].outcome != ui.OutcomeEscalate {
+		t.Errorf("outcome = %v, want escalate", r.dones[0].outcome)
 	}
 }
 
