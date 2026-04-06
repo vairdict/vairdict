@@ -108,8 +108,8 @@ project:
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.Agents.Planner != "claude" {
-		t.Errorf("default agents.planner = %q, want %q", cfg.Agents.Planner, "claude")
+	if cfg.Agents.Planner != "auto" {
+		t.Errorf("default agents.planner = %q, want %q", cfg.Agents.Planner, "auto")
 	}
 	if cfg.Agents.Coder != "claude-code" {
 		t.Errorf("default agents.coder = %q, want %q", cfg.Agents.Coder, "claude-code")
