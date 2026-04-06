@@ -11,6 +11,9 @@ Update this file when opening, completing, or blocking an issue.
 
 ## Ready to Start
 - #33 phases/quality: quality phase orchestration
+- #43 ui: human-readable cli output mode + --output flag
+- #44 cmd: capture gh CLI stderr in error messages
+- #45 logs: write run logs to ~/.vairdict/logs/<task>.log
 
 ## In Progress
 - none
@@ -132,6 +135,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 3/6         |
+| M3        | in progress | 3/9         |
 | M4        | not started | 0/6         |
 | M5+       | not started | —           |
