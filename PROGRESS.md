@@ -16,12 +16,13 @@ Update this file when opening, completing, or blocking an issue.
 - #47 agents/claudecli: completer that wraps `claude -p` (no API key needed locally)
 - #48 cmd: `vairdict review <pr>` — judge an existing PR
 - #49 config: ci-specific overlay (vairdict.ci.yaml)
+- #36 dogfood: first full three-phase task on vairdict
+- #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ## In Progress
-- #35 cmd: wire quality phase + escalation into vairdict run
+- none
 
 ## Blocked
-- #36 dogfood: first full three-phase task on vairdict (blocked on #35)
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
 
 ## Done
@@ -44,6 +45,7 @@ Update this file when opening, completing, or blocking an issue.
 - #34 escalation: loop limit + human notification
 - #38 github/verdict: post structured judge verdict as PR comment
 - #33 phases/quality: quality phase orchestration
+- #35 cmd: wire quality phase + escalation into vairdict run
 
 ---
 
@@ -137,6 +139,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 4/12        |
+| M3        | in progress | 5/13        |
 | M4        | not started | 0/6         |
 | M5+       | not started | —           |
