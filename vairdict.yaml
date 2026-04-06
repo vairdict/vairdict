@@ -5,9 +5,9 @@ project:
   risk_tolerance: medium
 
 agents:
-  planner: claude
+  planner: auto
   coder: claude-code
-  judge: claude
+  judge: auto
   model: claude-sonnet-4-20250514
 
 environment:
