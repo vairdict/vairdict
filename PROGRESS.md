@@ -10,16 +10,14 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #32 judges/quality: e2e + intent check vs original task
-- #34 escalation: loop limit + human notification
 - #38 github/verdict: post structured judge verdict as PR comment
+- #33 phases/quality: quality phase orchestration
 
 ## In Progress
 - none
 
 ## Blocked
-- #33 phases/quality: quality phase orchestration (blocked on #32)
-- #35 cmd: wire quality phase + escalation into vairdict run (blocked on #33, #34)
+- #35 cmd: wire quality phase + escalation into vairdict run (blocked on #33)
 - #36 dogfood: first full three-phase task on vairdict (blocked on #35)
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
 
@@ -39,6 +37,8 @@ Update this file when opening, completing, or blocking an issue.
 - #21 phases/code: code phase orchestration
 - #23 dogfood: plan + code phases e2e
 - #29 auth: ~/.config/vairdict/ API key configuration
+- #32 judges/quality: e2e + intent check vs original task
+- #34 escalation: loop limit + human notification
 
 ---
 
@@ -132,6 +132,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 0/6         |
+| M3        | in progress | 2/6         |
 | M4        | not started | 0/6         |
 | M5+       | not started | —           |
