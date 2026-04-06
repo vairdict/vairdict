@@ -16,7 +16,7 @@ Update this file when opening, completing, or blocking an issue.
 - #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ## In Progress
-- #47 agents/claudecli: completer that wraps `claude -p` (no API key needed locally)
+- none
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
@@ -45,6 +45,7 @@ Update this file when opening, completing, or blocking an issue.
 - #43 ui: human-readable cli output mode + --output flag
 - #44 cmd: capture gh CLI stderr in error messages
 - #45 logs: write run logs to ~/.vairdict/logs/<task>.log
+- #47 agents/claudecli: completer wrapping `claude -p` + auto backend resolver
 
 ---
 
@@ -138,6 +139,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 5/13        |
+| M3        | in progress | 6/13        |
 | M4        | not started | 0/6         |
 | M5+       | not started | —           |
