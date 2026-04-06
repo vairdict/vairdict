@@ -89,9 +89,13 @@ type ConventionsConfig struct {
 func Defaults() Config {
 	return Config{
 		Agents: AgentsConfig{
-			Planner: "claude",
+			// "auto" lets the runtime pick between the HTTP claude.Client
+			// and the local `claude` CLI wrapper based on what's available
+			// (see cmd/vairdict/completer.go). Explicit "claude" or
+			// "claude-cli" still work.
+			Planner: "auto",
 			Coder:   "claude-code",
-			Judge:   "claude",
+			Judge:   "auto",
 			Model:   "claude-sonnet-4-20250514",
 		},
 		Environment: EnvironmentConfig{

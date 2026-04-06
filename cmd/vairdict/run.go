@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecode"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/escalation"
@@ -116,10 +115,11 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	}
 	defer func() { _ = store.Close() }()
 
-	// Create Claude client.
-	client, err := claude.NewClient(cfg)
+	// Resolve the completer backend — HTTP claude.Client or local
+	// claude CLI wrapper — based on agents.judge and the environment.
+	client, backend, err := resolveCompleter(cfg)
 	if err != nil {
-		return fmt.Errorf("creating claude client: %w", err)
+		return err
 	}
 
 	// Create task.
@@ -156,6 +156,7 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	defer func() { _ = r.Close() }()
 
 	r.RunStart(task.ID, intent, logPath)
+	r.Note("completer", string(backend))
 	if issueFlag > 0 {
 		r.Note("issue", fmt.Sprintf("#%d", issueFlag))
 	}
@@ -318,7 +319,7 @@ func lastGapsForPhase(task *state.Task, phase state.Phase) []state.Gap {
 	return nil
 }
 
-func runPlanPhase(ctx context.Context, cfg *config.Config, client *claude.Client, store *state.Store, task *state.Task, r ui.Renderer) (*planphase.PhaseResult, error) {
+func runPlanPhase(ctx context.Context, cfg *config.Config, client completer, store *state.Store, task *state.Task, r ui.Renderer) (*planphase.PhaseResult, error) {
 	r.PhaseStart(state.PhasePlan)
 
 	judge := planjudge.New(client, cfg.Phases.Plan)
@@ -523,7 +524,7 @@ func lastVerdictForPhase(task *state.Task, phase state.Phase) *state.Verdict {
 func runQualityPhase(
 	ctx context.Context,
 	cfg *config.Config,
-	client *claude.Client,
+	client completer,
 	store *state.Store,
 	task *state.Task,
 	plan string,

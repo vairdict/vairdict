@@ -10,14 +10,13 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #47 agents/claudecli: completer that wraps `claude -p` (no API key needed locally)
 - #48 cmd: `vairdict review <pr>` — judge an existing PR
 - #49 config: ci-specific overlay (vairdict.ci.yaml)
 - #36 dogfood: first full three-phase task on vairdict
 - #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ## In Progress
-- none
+- #47 agents/claudecli: completer that wraps `claude -p` (no API key needed locally)
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
