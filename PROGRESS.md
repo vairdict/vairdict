@@ -14,6 +14,9 @@ Update this file when opening, completing, or blocking an issue.
 - #43 ui: human-readable cli output mode + --output flag
 - #44 cmd: capture gh CLI stderr in error messages
 - #45 logs: write run logs to ~/.vairdict/logs/<task>.log
+- #47 agents/claudecli: completer that wraps `claude -p` (no API key needed locally)
+- #48 cmd: `vairdict review <pr>` — judge an existing PR
+- #49 config: ci-specific overlay (vairdict.ci.yaml)
 
 ## In Progress
 - none
@@ -135,6 +138,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 3/9         |
+| M3        | in progress | 3/12        |
 | M4        | not started | 0/6         |
 | M5+       | not started | —           |
