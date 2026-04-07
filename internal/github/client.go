@@ -393,17 +393,21 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 	return b.String()
 }
 
+// logoURL is the raw GitHub URL for the VAIrdict logo asset. Must be a
+// PNG, not SVG: GitHub's camo image proxy strips SVGs from user content
+// (XSS hardening) so an <img> pointing at a .svg renders as a broken
+// image in PR comments. PNG renders fine.
+const logoURL = "https://raw.githubusercontent.com/vairdict/vairdict/main/assets/logo.png"
+
 // FormatVerdictComment builds a structured markdown comment from a Verdict.
 func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) string {
 	var b strings.Builder
 
-	// Header with pass/fail status. The icon sits next to the status
-	// word so it reads as a single unit ("✅ PASS") rather than a
-	// floating glyph at the start of the line.
+	// Header with logo and pass/fail status.
 	if verdict.Pass {
-		b.WriteString("## VAIrdict Verdict: ✅ PASS\n\n")
+		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ✅ PASS</h2>\n\n", logoURL)
 	} else {
-		b.WriteString("## VAIrdict Verdict: ❌ FAIL\n\n")
+		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ❌ FAIL</h2>\n\n", logoURL)
 	}
 
 	// Summary line.
