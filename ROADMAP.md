@@ -17,7 +17,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - spm installed, ship skill available
 
 **Issues:**
-- [ ] #9 chore: repo infrastructure setup
+- [x] #9 chore: repo infrastructure setup
 
 ---
 
@@ -32,14 +32,14 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - `vairdict version` prints version string
 
 **Issues (in dependency order):**
-- [ ] #2 config: vairdict.yaml parsing + typed Config struct
-- [ ] #3 state: task state machine + SQLite persistence
-- [ ] #4 agents/claude: Anthropic API client + structured output
-- [ ] #1 bootstrap: init flow + vairdict.yaml generation
-- [ ] #5 judges/plan: plan judge + severity scoring
-- [ ] #6 phases/plan: plan phase orchestration
-- [ ] #7 cmd: cobra CLI (init, run, status, version)
-- [ ] #8 dogfood: run vairdict init on vairdict repo itself
+- [x] #2 config: vairdict.yaml parsing + typed Config struct
+- [x] #3 state: task state machine + SQLite persistence
+- [x] #4 agents/claude: Anthropic API client + structured output
+- [x] #1 bootstrap: init flow + vairdict.yaml generation
+- [x] #5 judges/plan: plan judge + severity scoring
+- [x] #6 phases/plan: plan phase orchestration
+- [x] #7 cmd: cobra CLI (init, run, status, version)
+- [x] #8 dogfood: run vairdict init on vairdict repo itself
 
 ---
 
@@ -53,11 +53,11 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - PR opened automatically on passing code phase
 
 **Issues:**
-- [ ] agents/claudecode: Claude Code CLI runner
-- [ ] judges/code: calls spm ship, parses output, returns verdict
-- [ ] phases/code: code phase orchestration
-- [ ] github: PR creation + comments via GitHub API
-- [ ] dogfood: plan + code phases end to end on one vairdict task
+- [x] #19 agents/claudecode: Claude Code CLI runner
+- [x] #20 judges/code: calls spm ship, parses output, returns verdict
+- [x] #21 phases/code: code phase orchestration
+- [x] #22 github: PR creation + comments via GitHub API
+- [x] #23 dogfood: plan + code phases end to end on one vairdict task
 
 ---
 
@@ -72,64 +72,53 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - Dogfood: first complete task run on vairdict itself
 
 **Issues:**
-- [ ] judges/quality: e2e + intent check vs original task
-- [ ] phases/quality: quality phase orchestration
-- [ ] escalation: loop limit + human notification
-- [ ] requeue: cross-phase routing logic
-- [ ] github/verdict: post structured judge verdict as PR comment
-- [ ] dogfood: first full three-phase task on vairdict
+- [x] #32 judges/quality: e2e + intent check vs original task
+- [x] #33 phases/quality: quality phase orchestration
+- [x] #34 escalation: loop limit + human notification
+- [x] #38 github/verdict: post structured judge verdict as PR comment
+- [ ] #48 cmd: `vairdict review <pr>` — judge an existing PR
+- [ ] #51 test: orchestration coverage for runTask + runQualityPhase
+- [ ] #36 dogfood: first full three-phase task on vairdict
 
 ---
 
 ## Milestone 4 — Distribution
-> Get VAIrdict in front of developers with zero friction.
+> Ship VAIrdict so it can run on every commit, in any repo, without hand-holding.
 
 **Definition of done:**
-- GitHub Action published and installable
-- `curl -fsSL vairdict.dev/install | sh` works on Mac + Linux
-- `brew install vairdict` works
-- vairdict.com live with email signup
-- First external person has run VAIrdict successfully
+- Tagged releases (`v0.0.x`) built by GoReleaser for Mac + Linux
+- `curl -fsSL <install-url> | sh` works on Mac + Linux
+- GitHub Action published and installable from the marketplace
+- Auto-review runs the judge on every PR push and posts the verdict as a comment
+- Auto-merge gates merges on a passing verdict
+- README documents quickstart + dogfooding story
+
+**Out of scope (deferred to Early Users):**
+- brew tap / `brew install vairdict`
+- vairdict.com landing page + email signup
+- Show HN / dev.to / ProductHunt launch posts
 
 **Issues:**
-- [ ] cmd/auto-vairdict: auto-merge on passing verdict
+- [ ] #39 cmd/auto-vairdict: auto-merge on passing verdict
+- [ ] release: GoReleaser + signed `v0.0.x` artifacts + install script
 - [ ] action: GitHub Action wrapper published to marketplace
-- [ ] release: GoReleaser + brew tap + install script
-- [ ] web: vairdict.com landing page + email signup
-- [ ] docs: README with quickstart + dogfooding story
-- [ ] launch: Show HN post + dev.to article
+- [ ] action/auto-review: run quality judge on every PR push, post verdict comment
+- [ ] docs: README quickstart + dogfooding story
 
 ---
 
-## Milestone 5 — Early Users
-> Validate with real teams outside your own repo.
-
-**Definition of done:**
-- 5 external repos running VAIrdict
-- Feedback collected from each
-- At least one skill published to skillpkg registry
-- ProductHunt launched
-
-**Issues:**
-- [ ] feedback: outreach to 5 teams, collect structured feedback
-- [ ] skills: judge-plan published to skillpkg registry
-- [ ] skills: judge-code published to skillpkg registry
-- [ ] skills: judge-quality published to skillpkg registry
-- [ ] slack: basic escalation notifications only
-- [ ] launch: ProductHunt + "Built with VAIrdict" badge
-
----
-
-## Milestone 6 — Parallelism
-> Multiple agents per phase, multiple tasks simultaneously.
+## Milestone 5 — Parallelism
+> Multiple agents per phase, multiple tasks simultaneously, isolated workspaces.
 
 **Definition of done:**
 - 3+ tasks running in parallel without interference
+- Each task runs in its own isolated workspace (git worktree or equivalent)
 - Dependency graph respected (task B waits for task A)
 - Merge conflicts detected and handled
 - No performance degradation at 5 concurrent tasks
 
 **Issues:**
+- [ ] workspace: isolated workspace per task (git worktree)
 - [ ] parallel: agent spawning per phase
 - [ ] deps: task dependency graph
 - [ ] queue: priority ordering + dependency resolution
@@ -138,81 +127,25 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 7 — Slack App (full)
-> Slack as the primary entry point for engineering teams.
+## Milestone 6 — Pluggable Agents
+> Claude Code is the default. Any CLI agent can replace it.
 
 **Definition of done:**
-- Task submitted via @vairdict in Slack
-- Phase updates posted to Slack automatically
-- Escalations sent to configured channel with context
-- Slack app listed in directory
+- Codex CLI usable as a completer backend
+- Gemini CLI usable as a completer backend
+- Backend selectable per phase in vairdict.yaml
+- Auto-resolver picks the best available backend like the existing claude resolver
 
 **Issues:**
-- [ ] slack/intake: task submission via @vairdict
-- [ ] slack/updates: phase status updates
-- [ ] slack/escalation: escalation with approve/reject
-- [ ] slack/status: vairdict status command in Slack
-- [ ] slack/publish: submit to Slack app directory
+- [ ] agents/codex: Codex CLI completer
+- [ ] agents/gemini: Gemini CLI completer
+- [ ] config: per-phase backend selection in vairdict.yaml
+- [ ] resolver: extend auto backend resolver to all agents
+- [ ] docs: agent backend selection guide
 
 ---
 
-## Milestone 8 — Web UI
-> Visibility into what agents are doing without reading logs.
-
-**Definition of done:**
-- Board view shows tasks flowing through phases
-- Judge scores visible per phase per task
-- Loop history readable for any task
-- Escalation manageable from web UI
-- vairdict.com/dashboard live
-
-**Issues:**
-- [ ] ui/board: kanban-style task board
-- [ ] ui/scores: judge scores + verdict details
-- [ ] ui/history: loop history + assumption log
-- [ ] ui/escalation: escalation management
-- [ ] ui/deploy: vairdict.com/dashboard live
-
----
-
-## Milestone 9 — Team Features
-> Multiple users, roles, and projects.
-
-**Definition of done:**
-- Multiple users can belong to one organization
-- Escalations route to correct person by role
-- Org-level vairdict.yaml + project overrides working
-- Audit log captures every agent action
-
-**Issues:**
-- [ ] teams/users: multi-user organizations
-- [ ] teams/roles: role-based access control
-- [ ] teams/config: org-level + project-level yaml merge
-- [ ] teams/routing: escalation routing by role
-- [ ] teams/audit: full audit log of agent activity
-- [ ] teams/analytics: tasks, loop rates, escalation rates
-
----
-
-## Milestone 10 — Coder Integration
-> Isolated cloud environments per agent.
-
-**Definition of done:**
-- Coder selectable as environment in vairdict.yaml
-- Each agent gets isolated workspace per task
-- Coder registry module published
-- local | github-actions | coder all working
-
-**Issues:**
-- [ ] coder/env: Coder as environment option
-- [ ] coder/workspace: isolated workspace per agent
-- [ ] coder/permissions: scoped permissions per workspace
-- [ ] coder/registry: module published to Coder registry
-- [ ] coder/docs: setup guide for Coder users
-
----
-
-## Milestone 11 — skillpkg Deep Integration
+## Milestone 7 — skillpkg Deep Integration
 > VAIrdict as a first-class skillpkg consumer and contributor.
 
 **Definition of done:**
@@ -225,15 +158,14 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - [ ] spm/runtime: pull skills via spm at runtime
 - [ ] spm/versioning: skill versions in vairdict.yaml
 - [ ] spm/community: custom judge skill interface
+- [ ] skills/judge-plan: standalone plan judge skill
+- [ ] skills/judge-code: standalone code judge skill
+- [ ] skills/judge-quality: standalone quality judge skill
 - [ ] skills/judge-pr: standalone PR judge skill
-- [ ] skills/severity-score: severity scoring skill
-- [ ] skills/requeue: requeue-on-failure skill
-- [ ] skills/plan-writer: plan writer skill
-- [ ] skills/assumption-logger: assumption logger skill
 
 ---
 
-## Milestone 12 — Advanced Judging
+## Milestone 8 — Advanced Judging
 > Judges that learn and improve over time.
 
 **Definition of done:**
@@ -253,7 +185,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 13 — Monetization
+## Milestone 9 — Monetization
 > Sustainable business model.
 
 **Definition of done:**
@@ -271,44 +203,118 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 14 — Platform
+## Milestone 10 — Platform
 > VAIrdict as an ecosystem.
 
 **Definition of done:**
 - Public API live and documented
 - Linear + Jira integrations working
 - Community judge marketplace live
-- Third-party agent plugins (Codex, Gemini) working
+- "Built with VAIrdict" public dashboard
 
 **Issues:**
 - [ ] platform/api: public REST API
 - [ ] platform/linear: trigger from Linear issue
 - [ ] platform/jira: trigger from Jira ticket
 - [ ] platform/marketplace: community judge marketplace
-- [ ] platform/agents: Codex + Gemini CLI plugins
 - [ ] platform/badge: "Built with VAIrdict" public dashboard
 
 ---
 
-## Timeline
+## Milestone 11 — Early Users
+> Validate with real teams outside your own repo.
 
-| Milestone | Period       | Theme                   |
-|-----------|--------------|-------------------------|
-| M0        | Week 1       | Infrastructure          |
-| M1        | Week 1-2     | Foundation              |
-| M2        | Week 3-4     | Code phase              |
-| M3        | Week 5-6     | Full loop               |
-| M4        | Week 7-8     | Distribution            |
-| M5        | Week 9-10    | Early users             |
-| M6        | Month 4-5    | Parallelism             |
-| M7        | Month 5-6    | Slack                   |
-| M8        | Month 6      | Web UI                  |
-| M9        | Month 7      | Teams                   |
-| M10       | Month 8      | Coder                   |
-| M11       | Month 8-9    | skillpkg                |
-| M12       | Month 9-10   | Advanced judging        |
-| M13       | Month 10-11  | Monetization            |
-| M14       | Month 11-12  | Platform                |
+**Definition of done:**
+- brew tap live, `brew install vairdict` works
+- vairdict.com landing page + email signup live
+- 5 external repos running VAIrdict
+- Structured feedback collected from each
+- ProductHunt + Show HN launched
+
+**Issues:**
+- [ ] release/brew: brew tap + formula automation
+- [ ] web: vairdict.com landing page + email signup
+- [ ] feedback: outreach to 5 teams, collect structured feedback
+- [ ] launch: Show HN + dev.to article
+- [ ] launch: ProductHunt + "Built with VAIrdict" badge
+
+---
+
+## Milestone 12 — Slack App
+> Slack as the primary entry point for engineering teams.
+
+**Definition of done:**
+- Task submitted via @vairdict in Slack
+- Phase updates posted to Slack automatically
+- Escalations sent to configured channel with context
+- Slack app listed in directory
+
+**Issues:**
+- [ ] slack/intake: task submission via @vairdict
+- [ ] slack/updates: phase status updates
+- [ ] slack/escalation: escalation with approve/reject
+- [ ] slack/status: vairdict status command in Slack
+- [ ] slack/publish: submit to Slack app directory
+
+---
+
+## Milestone 13 — Team Features
+> Multiple users, roles, and projects.
+
+**Definition of done:**
+- Multiple users can belong to one organization
+- Escalations route to correct person by role
+- Org-level vairdict.yaml + project overrides working
+- Audit log captures every agent action
+
+**Issues:**
+- [ ] teams/users: multi-user organizations
+- [ ] teams/roles: role-based access control
+- [ ] teams/config: org-level + project-level yaml merge
+- [ ] teams/routing: escalation routing by role
+- [ ] teams/audit: full audit log of agent activity
+- [ ] teams/analytics: tasks, loop rates, escalation rates
+
+---
+
+## Milestone 14 — Coder Integration
+> Isolated cloud environments per agent.
+
+**Definition of done:**
+- Coder selectable as environment in vairdict.yaml
+- Each agent gets isolated cloud workspace per task
+- Coder registry module published
+- local | github-actions | coder all working
+
+**Issues:**
+- [ ] coder/env: Coder as environment option
+- [ ] coder/workspace: isolated cloud workspace per agent
+- [ ] coder/permissions: scoped permissions per workspace
+- [ ] coder/registry: module published to Coder registry
+- [ ] coder/docs: setup guide for Coder users
+
+---
+
+## Web UI
+> Visibility into what agents are doing without reading logs.
+
+Not scheduled. Slot in once early users ask for it (likely between M11 and M12).
+
+**Likely scope:**
+- Kanban-style task board
+- Judge scores + verdict details per phase per task
+- Loop history + assumption log per task
+- Escalation management from the UI
+- vairdict.com/dashboard live
+
+---
+
+## Open-Issue Backlog
+> Drained continuously between milestones — not its own milestone.
+
+Open GitHub issues that don't belong to a specific milestone are picked up
+opportunistically between milestone work. Bugs and small papercuts found
+during dogfooding land here.
 
 ---
 

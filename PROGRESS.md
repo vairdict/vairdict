@@ -138,6 +138,8 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 7/13        |
-| M4        | not started | 0/6         |
-| M5+       | not started | —           |
+| M3        | in progress | 11/14       |
+| M4        | not started | 0/5         |
+| M5        | not started | 0/6         |
+| M6        | not started | 0/5         |
+| M7+       | not started | —           |
