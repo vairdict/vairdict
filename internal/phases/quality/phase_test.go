@@ -60,7 +60,7 @@ func TestRun_PassFirstTry(t *testing.T) {
 	}}
 
 	task := qualityTask(t)
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	result, err := phase.Run(context.Background(), task, "the plan")
 	if err != nil {
@@ -98,7 +98,7 @@ func TestRun_PassOnRetry_NonBlockingGaps(t *testing.T) {
 	}}
 
 	task := qualityTask(t)
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	result, err := phase.Run(context.Background(), task, "the plan")
 	if err != nil {
@@ -130,7 +130,7 @@ func TestRun_RequeueToCode_OnP0Gap(t *testing.T) {
 	}}
 
 	task := qualityTask(t)
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	result, err := phase.Run(context.Background(), task, "the plan")
 	if err != nil {
@@ -165,7 +165,7 @@ func TestRun_RequeueToCode_OnP1Gap(t *testing.T) {
 	}}
 
 	task := qualityTask(t)
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	result, err := phase.Run(context.Background(), task, "the plan")
 	if err != nil {
@@ -190,7 +190,7 @@ func TestRun_Escalation_NonBlockingLoopOut(t *testing.T) {
 	task := qualityTask(t)
 	cfg := defaultCfg()
 	cfg.MaxLoops = 2
-	phase := New(judge, cfg, "/work")
+	phase := New(judge, cfg, "fake-diff")
 
 	result, err := phase.Run(context.Background(), task, "the plan")
 	if err != nil {
@@ -211,7 +211,7 @@ func TestRun_JudgeError(t *testing.T) {
 	judge := &fakeJudge{err: errors.New("claude crashed")}
 
 	task := qualityTask(t)
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	_, err := phase.Run(context.Background(), task, "the plan")
 	if err == nil {
@@ -226,7 +226,7 @@ func TestRun_WrongState(t *testing.T) {
 	judge := &fakeJudge{verdicts: []*state.Verdict{{Score: 100, Pass: true}}}
 
 	task := state.NewTask("test-1", "intent")
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	_, err := phase.Run(context.Background(), task, "plan")
 	if err == nil {
@@ -245,7 +245,7 @@ func TestRun_AttemptsStored(t *testing.T) {
 	}}
 
 	task := qualityTask(t)
-	phase := New(judge, defaultCfg(), "/work")
+	phase := New(judge, defaultCfg(), "fake-diff")
 
 	result, err := phase.Run(context.Background(), task, "the plan")
 	if err != nil {

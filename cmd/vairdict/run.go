@@ -392,15 +392,32 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 	return result, nil
 }
 
+// codeDiffBase returns the git base ref to diff against — origin/main when
+// it exists, otherwise local main. Hoisted out of codeDiffSummary so the
+// quality-phase diff helper uses the same base.
+func codeDiffBase(workDir string) string {
+	if _, err := execCommandInDir(workDir, "git", "rev-parse", "--verify", "origin/main"); err == nil {
+		return "origin/main"
+	}
+	return "main"
+}
+
+// codeDiffFull returns the full unified diff of HEAD against the diff base
+// (origin/main or main). Used to feed the quality judge concrete code
+// content rather than a directory path. Empty on error.
+func codeDiffFull(workDir string) string {
+	out, err := execCommandInDir(workDir, "git", "diff", codeDiffBase(workDir)+"...HEAD")
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // codeDiffSummary builds a `## Files touched` section from `git diff --stat`
 // against origin/main (or main if origin is not present). Empty on error so
 // the caller gracefully falls back to no summary.
 func codeDiffSummary(workDir string) string {
-	base := "main"
-	if _, err := execCommandInDir(workDir, "git", "rev-parse", "--verify", "origin/main"); err == nil {
-		base = "origin/main"
-	}
-	out, err := execCommandInDir(workDir, "git", "diff", "--stat", base+"...HEAD")
+	out, err := execCommandInDir(workDir, "git", "diff", "--stat", codeDiffBase(workDir)+"...HEAD")
 	if err != nil {
 		return ""
 	}
@@ -550,7 +567,12 @@ func runQualityPhase(
 	r.PhaseStart(state.PhaseQuality)
 
 	judge := qualityjudge.New(client, &qualityjudge.ExecRunner{}, *cfg)
-	phase := qualityphase.New(judge, cfg.Phases.Quality, workDir)
+	// Compute the unified diff once, here, so the judge gets concrete
+	// code content rather than just a working-directory path. The diff
+	// is stable across requeue loops because the quality phase never
+	// rewrites code.
+	diff := codeDiffFull(workDir)
+	phase := qualityphase.New(judge, cfg.Phases.Quality, diff)
 
 	result, err := phase.Run(ctx, task, plan)
 	if err != nil {

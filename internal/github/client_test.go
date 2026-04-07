@@ -186,6 +186,45 @@ func TestPostVerdict_Pass_ApprovesAndComments(t *testing.T) {
 	}
 }
 
+func TestPostVerdict_Pass_SelfAuthored_FallsBackToComment(t *testing.T) {
+	// gh returns this exact error message when the authenticated user
+	// tries to approve their own PR. PostVerdict should swallow it and
+	// fall back to a plain comment so review-mode dogfooding works.
+	runner := successRunner()
+	runner.Responses["gh pr review"] = fakeResponse{
+		Err: errors.New("failed to create review: GraphQL: Review Can not approve your own pull request (addPullRequestReview)"),
+	}
+	client := New(runner)
+
+	verdict := &state.Verdict{Score: 92, Pass: true}
+	err := client.PostVerdict(context.Background(), 59, verdict, state.PhaseQuality, 1)
+	if err != nil {
+		t.Fatalf("expected fallback to comment, got error: %v", err)
+	}
+
+	foundComment := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "pr" && call.Args[1] == "comment" {
+			foundComment = true
+		}
+	}
+	if !foundComment {
+		t.Error("expected fallback to gh pr comment after approval rejection")
+	}
+}
+
+func TestPostVerdict_Pass_OtherApprovalError_Propagates(t *testing.T) {
+	runner := successRunner()
+	runner.Responses["gh pr review"] = fakeResponse{Err: errors.New("network error")}
+	client := New(runner)
+
+	verdict := &state.Verdict{Score: 92, Pass: true}
+	err := client.PostVerdict(context.Background(), 7, verdict, state.PhaseQuality, 1)
+	if err == nil {
+		t.Fatal("expected non-self-PR approval errors to propagate")
+	}
+}
+
 func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
 	runner := successRunner()
 	client := New(runner)
@@ -240,7 +279,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		name string
 		want string
 	}{
-		{"header", "## VAIrdict Verdict: PASS"},
+		{"header", "## VAIrdict Verdict: ✅ PASS"},
 		{"score", "**Score:** 95%"},
 		{"phase", "**Phase:** quality"},
 		{"loop", "**Loop:** 1"},
@@ -281,7 +320,7 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		name string
 		want string
 	}{
-		{"header", "## VAIrdict Verdict: FAIL"},
+		{"header", "## VAIrdict Verdict: ❌ FAIL"},
 		{"score", "**Score:** 40%"},
 		{"loop", "**Loop:** 2"},
 		{"blocking section", "### Blocking Gaps"},
@@ -399,6 +438,100 @@ func TestGeneratePRTitle_Long(t *testing.T) {
 	title := GeneratePRTitle(task)
 	if len(title) > 70 {
 		t.Errorf("title length = %d, want <= 70", len(title))
+	}
+}
+
+func TestFetchPR(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr view": {Output: []byte(`{"number":46,"title":"add review cmd","body":"Closes #48","headRefName":"feat/x","baseRefName":"main"}`)},
+		},
+	}
+	client := New(runner)
+
+	pr, err := client.FetchPR(context.Background(), 46)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pr.Number != 46 || pr.Title != "add review cmd" || pr.HeadRefName != "feat/x" || pr.BaseRefName != "main" {
+		t.Errorf("unexpected pr: %+v", pr)
+	}
+}
+
+func TestFetchPR_RunError(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr view": {Err: errors.New("not found")},
+		},
+	}
+	if _, err := New(runner).FetchPR(context.Background(), 9); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestFetchPR_InvalidJSON(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr view": {Output: []byte("not json")},
+		},
+	}
+	if _, err := New(runner).FetchPR(context.Background(), 9); err == nil {
+		t.Fatal("expected json parse error")
+	}
+}
+
+func TestFetchIssue(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh issue view": {Output: []byte(`{"number":48,"title":"review cmd","body":"intent here"}`)},
+		},
+	}
+	iss, err := New(runner).FetchIssue(context.Background(), 48)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if iss.Number != 48 || iss.Title != "review cmd" || iss.Body != "intent here" {
+		t.Errorf("unexpected issue: %+v", iss)
+	}
+}
+
+func TestFetchPRDiff(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr diff": {Output: []byte("diff --git a/x b/x\n+hello\n")},
+		},
+	}
+	diff, err := New(runner).FetchPRDiff(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !contains(diff, "+hello") {
+		t.Errorf("unexpected diff: %q", diff)
+	}
+}
+
+func TestParseLinkedIssue(t *testing.T) {
+	cases := []struct {
+		body string
+		want int
+	}{
+		{"Closes #42", 42},
+		{"closes #42", 42},
+		{"Fixes #7\n\nlots of context", 7},
+		{"Resolves #123 — done", 123},
+		{"fixed #5", 5},
+		{"resolved #5", 5},
+		{"some text Closes: #99", 99},
+		{"## Issue\nCloses #48\n", 48},
+		{"no linked issue here", 0},
+		{"#42 alone is not enough", 0},
+		{"see #42 for context", 0},
+		{"", 0},
+	}
+	for _, tc := range cases {
+		if got := ParseLinkedIssue(tc.body); got != tc.want {
+			t.Errorf("ParseLinkedIssue(%q) = %d, want %d", tc.body, got, tc.want)
+		}
 	}
 }
 

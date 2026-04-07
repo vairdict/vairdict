@@ -3,9 +3,11 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -74,6 +76,25 @@ func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]by
 type PR struct {
 	URL    string
 	Number int
+}
+
+// PRDetails carries the fields needed to review an existing PR. It is the
+// minimal projection of `gh pr view --json` that the review command needs;
+// extending it is cheap if more fields are needed later.
+type PRDetails struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	HeadRefName string `json:"headRefName"`
+	BaseRefName string `json:"baseRefName"`
+}
+
+// IssueDetails is the minimal projection of `gh issue view --json` that the
+// review command uses to derive an intent string from a linked issue.
+type IssueDetails struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 }
 
 // CreatePROpts holds options for creating a pull request.
@@ -169,6 +190,69 @@ func parsePRNumber(url string) int {
 	return n
 }
 
+// FetchPR loads the metadata for an existing PR via `gh pr view --json`.
+// Returns a PRDetails populated from the gh JSON output. The fields fetched
+// are deliberately limited to those needed by the review command.
+func (c *Client) FetchPR(ctx context.Context, number int) (*PRDetails, error) {
+	out, err := c.runner.Run(ctx, "gh", "pr", "view", strconv.Itoa(number),
+		"--json", "number,title,body,headRefName,baseRefName")
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR #%d: %w", number, err)
+	}
+	var pr PRDetails
+	if err := json.Unmarshal(out, &pr); err != nil {
+		return nil, fmt.Errorf("parsing gh pr view output: %w", err)
+	}
+	return &pr, nil
+}
+
+// FetchIssue loads the metadata for an existing issue via `gh issue view`.
+// Used by the review command to derive an intent string from the issue
+// linked in the PR body.
+func (c *Client) FetchIssue(ctx context.Context, number int) (*IssueDetails, error) {
+	out, err := c.runner.Run(ctx, "gh", "issue", "view", strconv.Itoa(number),
+		"--json", "number,title,body")
+	if err != nil {
+		return nil, fmt.Errorf("fetching issue #%d: %w", number, err)
+	}
+	var iss IssueDetails
+	if err := json.Unmarshal(out, &iss); err != nil {
+		return nil, fmt.Errorf("parsing gh issue view output: %w", err)
+	}
+	return &iss, nil
+}
+
+// FetchPRDiff returns the unified diff of the PR via `gh pr diff <n>`.
+// Used by the review command to give the quality judge enough context
+// without actually checking the branch out.
+func (c *Client) FetchPRDiff(ctx context.Context, number int) (string, error) {
+	out, err := c.runner.Run(ctx, "gh", "pr", "diff", strconv.Itoa(number))
+	if err != nil {
+		return "", fmt.Errorf("fetching diff for PR #%d: %w", number, err)
+	}
+	return string(out), nil
+}
+
+// linkedIssueRe matches GitHub's PR-closes-issue keywords. Case-insensitive,
+// matches `Closes #12`, `fixes #34`, `Resolves: #56`, etc. Captures the
+// issue number into group 1.
+var linkedIssueRe = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[^\n#]*#(\d+)`)
+
+// ParseLinkedIssue scans a PR body for the first GitHub closing-keyword
+// reference (Closes/Fixes/Resolves) and returns the linked issue number,
+// or 0 if no such reference is found.
+func ParseLinkedIssue(body string) int {
+	m := linkedIssueRe.FindStringSubmatch(body)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
 // AddComment adds a comment to a PR.
 func (c *Client) AddComment(ctx context.Context, prNumber int, body string) error {
 	_, err := c.runner.Run(ctx, "gh", "pr", "comment", fmt.Sprintf("%d", prNumber), "--body", body)
@@ -192,24 +276,38 @@ func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error
 	return nil
 }
 
-// PostVerdict posts a structured verdict comment on a PR. On pass, it also
-// approves the PR via the review API.
+// cannotApproveOwnPRRe matches the GitHub API error returned when the
+// authenticated user tries to approve a PR they authored. We detect this
+// (rather than failing the run) so PostVerdict can gracefully fall back
+// to a regular comment — discovered via dogfooding `vairdict review` on
+// a self-authored PR.
+var cannotApproveOwnPRRe = regexp.MustCompile(`(?i)can ?not approve your own pull request`)
+
+// PostVerdict posts a structured verdict comment on a PR. On pass, it
+// tries to approve via the review API; if GitHub refuses because the PR
+// is self-authored, it falls back to a plain comment so the verdict still
+// lands. On fail, it posts a plain comment directly.
 func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
 	comment := FormatVerdictComment(verdict, phase, loop)
 
 	if verdict.Pass {
-		// Approve with the verdict as the review body.
-		if err := c.ApprovePR(ctx, prNumber, comment); err != nil {
+		err := c.ApprovePR(ctx, prNumber, comment)
+		if err == nil {
+			slog.Info("verdict posted", "pr", prNumber, "pass", true, "score", verdict.Score, "mode", "approval")
+			return nil
+		}
+		if !cannotApproveOwnPRRe.MatchString(err.Error()) {
 			return fmt.Errorf("posting verdict approval: %w", err)
 		}
-	} else {
-		// Post as a regular comment on failure.
-		if err := c.AddComment(ctx, prNumber, comment); err != nil {
-			return fmt.Errorf("posting verdict comment: %w", err)
-		}
+		// Self-authored PR — gh refuses approval. Fall through to a
+		// plain comment so the verdict still gets posted.
+		slog.Info("approval rejected (self-authored PR), falling back to comment", "pr", prNumber)
 	}
 
-	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score)
+	if err := c.AddComment(ctx, prNumber, comment); err != nil {
+		return fmt.Errorf("posting verdict comment: %w", err)
+	}
+	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "comment")
 	return nil
 }
 
@@ -247,11 +345,13 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) string {
 	var b strings.Builder
 
-	// Header with pass/fail status.
+	// Header with pass/fail status. The icon sits next to the status
+	// word so it reads as a single unit ("✅ PASS") rather than a
+	// floating glyph at the start of the line.
 	if verdict.Pass {
-		b.WriteString("## VAIrdict Verdict: PASS\n\n")
+		b.WriteString("## VAIrdict Verdict: ✅ PASS\n\n")
 	} else {
-		b.WriteString("## VAIrdict Verdict: FAIL\n\n")
+		b.WriteString("## VAIrdict Verdict: ❌ FAIL\n\n")
 	}
 
 	// Summary line.

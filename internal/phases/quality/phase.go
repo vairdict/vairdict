@@ -29,26 +29,32 @@ type PhaseResult struct {
 }
 
 // Judge is the interface for the quality judge. The real implementation lives
-// in internal/judges/quality.
+// in internal/judges/quality. The third argument is the unified diff of the
+// code under review — the judge no longer reads the working directory itself.
 type Judge interface {
-	Judge(ctx context.Context, intent, plan, workDir string) (*state.Verdict, error)
+	Judge(ctx context.Context, intent, plan, diff string) (*state.Verdict, error)
 }
 
 // QualityPhase orchestrates the quality phase: judge loop on already-coded work.
 // Unlike plan and code phases, there is no producer agent — the code is
-// already written by the time this phase runs.
+// already written by the time this phase runs. The diff is computed by the
+// orchestrator (cmd/vairdict/run.go) before constructing the phase, so the
+// same content is judged on every requeue loop.
 type QualityPhase struct {
-	judge   Judge
-	cfg     config.QualityPhaseConfig
-	workDir string
+	judge Judge
+	cfg   config.QualityPhaseConfig
+	diff  string
 }
 
-// New creates a QualityPhase with the given judge, config, and work directory.
-func New(judge Judge, cfg config.QualityPhaseConfig, workDir string) *QualityPhase {
+// New creates a QualityPhase with the given judge, config, and diff. The
+// diff should be the full unified diff of the code under review (e.g.
+// `git diff origin/main...HEAD`). An empty diff is allowed but will
+// produce a low-confidence verdict.
+func New(judge Judge, cfg config.QualityPhaseConfig, diff string) *QualityPhase {
 	return &QualityPhase{
-		judge:   judge,
-		cfg:     cfg,
-		workDir: workDir,
+		judge: judge,
+		cfg:   cfg,
+		diff:  diff,
 	}
 }
 
@@ -74,7 +80,7 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 			return nil, fmt.Errorf("transitioning to quality review: %w", err)
 		}
 
-		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.workDir)
+		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff)
 		if err != nil {
 			return nil, fmt.Errorf("running quality judge: %w", err)
 		}
