@@ -341,8 +341,11 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 	return b.String()
 }
 
-// logoURL is the raw GitHub URL for the VAIrdict logo asset.
-const logoURL = "https://raw.githubusercontent.com/vairdict/vairdict/main/assets/logo.svg"
+// logoURL is the raw GitHub URL for the VAIrdict logo asset. Must be a
+// PNG, not SVG: GitHub's camo image proxy strips SVGs from user content
+// (XSS hardening) so an <img> pointing at a .svg renders as a broken
+// image in PR comments. PNG renders fine.
+const logoURL = "https://raw.githubusercontent.com/vairdict/vairdict/main/assets/logo.png"
 
 // FormatVerdictComment builds a structured markdown comment from a Verdict.
 func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) string {
