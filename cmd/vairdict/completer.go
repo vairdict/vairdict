@@ -1,11 +1,17 @@
 // Package main — completer.go resolves which LLM backend to use for the
-// planner and judges. Both the HTTP claude.Client and the local claudecli
-// wrapper satisfy the same structural interface (CompleteWithSystem); the
-// call-sites in run.go are typed against `completer` so either can be
-// injected. The resolver prefers the local `claude` CLI when it is on PATH
-// and no API key is configured — this is the zero-auth local-dev path.
-// In CI, or when a user explicitly sets agents.judge, the resolver honors
-// that choice.
+// planner and judges (the "completer" roles, distinct from the "coder" role
+// in internal/agents/claudecode which uses tools and edits the filesystem).
+//
+// Three values are accepted in vairdict.yaml under agents.planner /
+// agents.judge:
+//
+//	claude      — smart default: try claude-cli, fall back to claude-api
+//	claude-cli  — strict local subprocess (errors if `claude` not on PATH)
+//	claude-api  — strict HTTP API client (errors if no API key configured)
+//
+// The bare value `claude` exists so future families (gpt, gemini, …) can
+// follow the same convention: bare = smart default for the family, suffixed
+// = explicit transport.
 package main
 
 import (
@@ -25,38 +31,37 @@ type completer interface {
 }
 
 // backendKind is the resolved backend identifier returned alongside the
-// completer instance so it can be surfaced in CLI output and logs.
+// completer instance so it can be surfaced in CLI output and logs. Note
+// this is the *resolved* kind — `claude` (smart) is never returned here;
+// it has already collapsed to claude-cli or claude-api.
 type backendKind string
 
 const (
-	backendClaude    backendKind = "claude"     // HTTP API
 	backendClaudeCLI backendKind = "claude-cli" // local `claude -p`
+	backendClaudeAPI backendKind = "claude-api" // HTTP API
 )
 
-// chooseBackend returns the backend that should be used given the user's
-// agents.judge setting and the local environment. It does not construct any
-// client; it only decides which one to build.
+// chooseBackend returns the resolved backend for the given config setting.
+// `cliAvailable` is injected (via claudecli.IsAvailable in production) so
+// the resolver is deterministic and unit-testable without touching PATH.
 //
-//	"", "auto"    → claude-cli if available and no API key set, else claude
-//	"claude"      → claude (HTTP)
-//	"claude-cli"  → claude-cli (local)
-//	anything else → error
-//
-// The `cliAvailable` and `haveAPIKey` parameters are injected so the choice
-// is deterministic and unit-testable without touching PATH or env.
-func chooseBackend(setting string, cliAvailable bool, haveAPIKey bool) (backendKind, error) {
+//	"", "claude" → claude-cli if PATH has it, else claude-api
+//	"claude-cli" → claude-cli (caller errors later if PATH lookup fails)
+//	"claude-api" → claude-api (caller errors later if no API key)
+//	"auto"       → deprecated alias for "claude" — accepted with no warn
+func chooseBackend(setting string, cliAvailable bool) (backendKind, error) {
 	switch setting {
-	case "", "auto":
-		if cliAvailable && !haveAPIKey {
+	case "", "claude", "auto":
+		if cliAvailable {
 			return backendClaudeCLI, nil
 		}
-		return backendClaude, nil
-	case "claude":
-		return backendClaude, nil
+		return backendClaudeAPI, nil
 	case "claude-cli":
 		return backendClaudeCLI, nil
+	case "claude-api":
+		return backendClaudeAPI, nil
 	default:
-		return "", fmt.Errorf("unknown agents.judge backend %q (want auto|claude|claude-cli)", setting)
+		return "", fmt.Errorf("unknown agents.judge backend %q (want claude|claude-cli|claude-api)", setting)
 	}
 }
 
@@ -64,11 +69,7 @@ func chooseBackend(setting string, cliAvailable bool, haveAPIKey bool) (backendK
 // matching client. The returned backendKind is informational (rendered as
 // a `completer:` note in CLI mode).
 func resolveCompleter(cfg *config.Config) (completer, backendKind, error) {
-	kind, err := chooseBackend(
-		cfg.Agents.Judge,
-		claudecli.IsAvailable(),
-		config.ResolveAPIKey() != "",
-	)
+	kind, err := chooseBackend(cfg.Agents.Judge, claudecli.IsAvailable())
 	if err != nil {
 		return nil, "", err
 	}
@@ -80,7 +81,7 @@ func resolveCompleter(cfg *config.Config) (completer, backendKind, error) {
 		return claudecli.New(
 			claudecli.WithExtraArgs("--dangerously-skip-permissions"),
 		), kind, nil
-	case backendClaude:
+	case backendClaudeAPI:
 		c, err := claude.NewClient(cfg)
 		if err != nil {
 			return nil, "", fmt.Errorf("creating claude client: %w", err)
