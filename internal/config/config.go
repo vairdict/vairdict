@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -138,6 +139,125 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return ParseConfig(data)
+}
+
+// LoadConfigWithOverlay loads the base config from basePath and, if
+// overlayPath is non-empty, parses that file as a partial config and
+// merges it on top using the same field-by-field semantics as Merge.
+//
+// Behavior:
+//
+//   - overlayPath == ""              → returns the base config unchanged
+//   - overlayPath set, file missing  → error (an explicitly named overlay
+//     that does not exist is a configuration mistake, not a no-op)
+//   - overlay present but malformed  → error (no silent fallback — CI must
+//     fail loudly so misconfiguration is visible)
+//   - overlay present and well-formed → parse, merge over base, re-validate
+//     the merged result
+//
+// The overlay file is intentionally allowed to omit any field; only
+// non-zero overlay values override the base. This mirrors config.Merge.
+func LoadConfigWithOverlay(basePath, overlayPath string) (*Config, error) {
+	base, err := LoadConfig(basePath)
+	if err != nil {
+		return nil, err
+	}
+	if overlayPath == "" {
+		return base, nil
+	}
+
+	data, err := os.ReadFile(overlayPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading overlay %s: %w", overlayPath, err)
+	}
+
+	overlay, err := parseOverlay(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing overlay %s: %w", overlayPath, err)
+	}
+
+	merged := Merge(base, overlay)
+	if err := validate(merged); err != nil {
+		return nil, fmt.Errorf("validating merged config: %w", err)
+	}
+
+	slog.Info("loaded config overlay", "path", overlayPath)
+	return merged, nil
+}
+
+// parseOverlay decodes overlay YAML into a zero-valued Config without
+// applying defaults or running validation. Defaults would defeat the
+// "only non-zero overrides" merge semantics — every field would look set
+// — and validation would reject perfectly fine partial files (no
+// project.name, etc.). The merged result is validated by the caller.
+func parseOverlay(data []byte) (Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, err
+	}
+	warnUnknownFields(data)
+	return cfg, nil
+}
+
+// ResolveOverlayPath picks which overlay file (if any) to load.
+//
+// Precedence:
+//
+//  1. envName non-empty (from --env flag): use vairdict.<envName>.yaml.
+//     The file MUST exist — LoadConfigWithOverlay errors otherwise.
+//     Explicit means the user wanted it.
+//  2. ci=true AND vairdict.ci.yaml exists alongside the base config:
+//     auto-pick it. Silent no-op if the file is missing — CI without an
+//     overlay file is a perfectly normal setup.
+//  3. neither → empty string (no overlay).
+//
+// envName must be a simple identifier — no slashes, no `..`, no leading
+// `.`. This prevents `--env ../../etc/passwd` style path traversal.
+//
+// fileExists is injected so tests can avoid touching the filesystem;
+// nil is treated as "always false".
+func ResolveOverlayPath(envName string, ci bool, baseDir string, fileExists func(string) bool) (string, error) {
+	if envName != "" {
+		if err := validateEnvName(envName); err != nil {
+			return "", err
+		}
+		return filepath.Join(baseDir, "vairdict."+envName+".yaml"), nil
+	}
+	if !ci {
+		return "", nil
+	}
+	candidate := filepath.Join(baseDir, "vairdict.ci.yaml")
+	if fileExists != nil && fileExists(candidate) {
+		return candidate, nil
+	}
+	return "", nil
+}
+
+// validateEnvName rejects values that could escape the base directory or
+// produce surprising filenames. Allowed: [A-Za-z0-9_-]+.
+func validateEnvName(name string) error {
+	if name == "" {
+		return fmt.Errorf("env name must not be empty")
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return fmt.Errorf("invalid env name %q: only letters, digits, '_' and '-' are allowed", name)
+		}
+	}
+	return nil
+}
+
+// IsCI reports whether the process is running in a CI environment.
+// Honors the de-facto standard CI env var (set by GitHub Actions,
+// GitLab, CircleCI, Travis, Buildkite, Drone, etc.).
+func IsCI() bool {
+	v := os.Getenv("CI")
+	return v == "true" || v == "1"
 }
 
 // ParseConfig parses raw YAML bytes into a validated Config.

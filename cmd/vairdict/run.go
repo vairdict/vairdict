@@ -36,6 +36,7 @@ var (
 	outputFlag string
 	colorsFlag string
 	asciiFlag  bool
+	envFlag    string
 )
 
 var runCmd = &cobra.Command{
@@ -79,6 +80,7 @@ func init() {
 	runCmd.Flags().StringVar(&outputFlag, "output", "", "output mode: cli|ci|json (default: auto-detect)")
 	runCmd.Flags().StringVar(&colorsFlag, "colors", "", "color scheme: default|accessible|no-color (default: auto-detect)")
 	runCmd.Flags().BoolVar(&asciiFlag, "ascii", false, "use ASCII glyphs instead of unicode emoji")
+	runCmd.Flags().StringVar(&envFlag, "env", "", "config environment to load (e.g. dev, test, ci) — loads vairdict.<env>.yaml on top of vairdict.yaml. Defaults to ci when CI=true and vairdict.ci.yaml exists.")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -96,9 +98,23 @@ func execCommand(name string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
+// fileExistsFunc reports whether path exists and is not a directory.
+// Hoisted out of runTask so config.ResolveOverlayPath can stay
+// filesystem-agnostic for unit tests.
+func fileExistsFunc(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
-	// Load config.
-	cfg, err := config.LoadConfig("vairdict.yaml")
+	// Resolve overlay path from --env / CI auto-detect.
+	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
+	if err != nil {
+		return fmt.Errorf("resolving env: %w", err)
+	}
+
+	// Load config (with overlay merged on top, if any).
+	cfg, err := config.LoadConfigWithOverlay("vairdict.yaml", overlayPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
