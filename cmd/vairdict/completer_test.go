@@ -7,30 +7,32 @@ func TestChooseBackend(t *testing.T) {
 		name         string
 		setting      string
 		cliAvailable bool
-		haveAPIKey   bool
 		want         backendKind
 		wantErr      bool
 	}{
-		// Auto: prefer CLI when available and no API key.
-		{"auto cli only", "", true, false, backendClaudeCLI, false},
-		{"auto alias cli only", "auto", true, false, backendClaudeCLI, false},
-		// Auto: if API key is present, prefer HTTP even if CLI is there,
-		// so CI runs are deterministic and scripted usage is unchanged.
-		{"auto with api key", "", true, true, backendClaude, false},
-		// Auto: no CLI → fall back to HTTP even without an API key.
-		// claude.NewClient will then fail with a clear AuthError.
-		{"auto no cli no key", "", false, false, backendClaude, false},
-		{"auto no cli with key", "", false, true, backendClaude, false},
-		// Explicit overrides.
-		{"explicit claude", "claude", true, false, backendClaude, false},
-		{"explicit claude-cli", "claude-cli", false, true, backendClaudeCLI, false},
-		// Unknown value is a hard error so typos don't silently pick the
+		// Default (empty / "claude"): try cli, fall back to api.
+		{"default cli available", "", true, backendClaudeCLI, false},
+		{"default no cli", "", false, backendClaudeAPI, false},
+		{"claude cli available", "claude", true, backendClaudeCLI, false},
+		{"claude no cli", "claude", false, backendClaudeAPI, false},
+		// "auto" is a deprecated alias for "claude" — accepted silently.
+		{"auto cli available", "auto", true, backendClaudeCLI, false},
+		{"auto no cli", "auto", false, backendClaudeAPI, false},
+		// Strict modes — chooseBackend itself doesn't gate on availability.
+		// claude-cli failing on a host without claude is reported by the
+		// callsite when the subprocess actually runs.
+		{"strict cli", "claude-cli", false, backendClaudeCLI, false},
+		{"strict cli with cli", "claude-cli", true, backendClaudeCLI, false},
+		{"strict api", "claude-api", true, backendClaudeAPI, false},
+		{"strict api no cli", "claude-api", false, backendClaudeAPI, false},
+		// Typos surface as a hard error so users don't silently get the
 		// wrong backend.
-		{"unknown", "openai", true, false, "", true},
+		{"unknown value", "openai", true, "", true},
+		{"old http alias rejected", "claude-http", true, "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := chooseBackend(tc.setting, tc.cliAvailable, tc.haveAPIKey)
+			got, err := chooseBackend(tc.setting, tc.cliAvailable)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
 			}
