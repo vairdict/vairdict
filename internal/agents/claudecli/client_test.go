@@ -246,17 +246,49 @@ func TestIsAvailable_SmokeTest(t *testing.T) {
 
 func TestExtractJSON(t *testing.T) {
 	cases := []struct {
-		in, want string
+		name, in, want string
 	}{
-		{`{"x":1}`, `{"x":1}`},
-		{"```json\n{\"x\":1}\n```", `{"x":1}` + "\n"},
-		{"```\n{\"x\":2}\n```", `{"x":2}` + "\n"},
-		{"   {\"x\":3}   ", `{"x":3}`},
+		{"bare", `{"x":1}`, `{"x":1}`},
+		{"fenced_json", "```json\n{\"x\":1}\n```", `{"x":1}`},
+		{"fenced_plain", "```\n{\"x\":2}\n```", `{"x":2}`},
+		{"padded", "   {\"x\":3}   ", `{"x":3}`},
+		{
+			"preamble_then_fence",
+			"Now I have everything I need. Let me produce the plan.\n\n```json\n{\"x\":4}\n```",
+			`{"x":4}`,
+		},
+		{
+			"preamble_then_fence_no_close",
+			"Let me produce the plan.\n\n```json\n{\"x\":5}\n",
+			`{"x":5}`,
+		},
+		{
+			"prose_then_bare_object",
+			"Here is the plan: {\"x\":6} done.",
+			`{"x":6}`,
+		},
+		{
+			"string_with_braces",
+			`{"msg":"a{b}c","n":7}`,
+			`{"msg":"a{b}c","n":7}`,
+		},
+		{
+			"escaped_quote_in_string",
+			`{"msg":"he said \"hi\"","n":8}`,
+			`{"msg":"he said \"hi\"","n":8}`,
+		},
+		{
+			"nested_object",
+			`prefix {"a":{"b":{"c":9}}} suffix`,
+			`{"a":{"b":{"c":9}}}`,
+		},
 	}
 	for _, tc := range cases {
-		got := extractJSON(tc.in)
-		if got != tc.want {
-			t.Errorf("extractJSON(%q) = %q, want %q", tc.in, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractJSON(tc.in)
+			if got != tc.want {
+				t.Errorf("extractJSON(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }

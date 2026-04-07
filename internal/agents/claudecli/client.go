@@ -207,31 +207,122 @@ func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, 
 
 	cleaned := extractJSON(env.Result)
 	if err := json.Unmarshal([]byte(cleaned), target); err != nil {
+		// Log the raw output so operators can diagnose what Claude
+		// actually said when the extract+parse path fails. Slog debug
+		// only — the ParseError itself truncates to 200 chars for
+		// display, which isn't enough to see what went wrong.
+		slog.Debug("claude cli parse failed",
+			"err", err,
+			"raw_len", len(env.Result),
+			"cleaned_len", len(cleaned),
+			"raw_head", truncate(env.Result, 500),
+			"cleaned_head", truncate(cleaned, 500),
+		)
 		return &ParseError{Raw: env.Result, Err: fmt.Errorf("decoding result into target: %w", err)}
 	}
 	return nil
 }
 
-// extractJSON strips a leading ```json / ``` code fence if present and
-// returns the content between the fences. Claude sometimes wraps structured
-// output in markdown even when the system prompt says not to; this mirrors
-// the tolerance built into internal/agents/claude.parseResponse.
+// truncate returns the first n characters of s (never panics on short
+// strings). Used purely for bounded debug logging of raw Claude output.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// extractJSON pulls a JSON object out of Claude's result string, tolerating
+// two common ways the CLI wraps structured output even when told not to:
+//
+//  1. Fenced markdown block (```json ... ``` or ``` ... ```), possibly
+//     preceded by prose like "Let me produce the plan."
+//  2. A plain top-level { ... } object embedded in prose, with or without
+//     fences, possibly with a missing closing fence (streamed output that
+//     got truncated near the end).
+//
+// Strategy: prefer a fenced block when present, else fall back to
+// brace-matching from the first `{` to its balanced `}` (string-aware so
+// `{` / `}` inside JSON string values don't throw off the count). The
+// JSON parser is the ultimate validator — extractJSON just produces the
+// best candidate slice it can.
 func extractJSON(text string) string {
+	if fenced := extractFencedBlock(text); fenced != "" {
+		// A fenced block might itself contain prose before the actual
+		// JSON object (rare but seen). Run the brace extractor over it
+		// as a second pass so we return just the object.
+		if obj := extractBraceObject(fenced); obj != "" {
+			return obj
+		}
+		return fenced
+	}
+	if obj := extractBraceObject(text); obj != "" {
+		return obj
+	}
+	return strings.TrimSpace(text)
+}
+
+// extractFencedBlock returns the content between the first pair of ```
+// fences, or empty string if no complete pair is found. A missing closing
+// fence (truncated output) returns empty so callers fall back to other
+// extraction strategies.
+func extractFencedBlock(text string) string {
 	const fence = "```"
-	start := -1
-	for i := 0; i <= len(text)-len(fence); i++ {
-		if text[i:i+len(fence)] == fence {
-			if start == -1 {
-				for j := i + len(fence); j < len(text); j++ {
-					if text[j] == '\n' {
-						start = j + 1
-						break
-					}
-				}
-			} else {
-				return text[start:i]
+	open := strings.Index(text, fence)
+	if open == -1 {
+		return ""
+	}
+	// Skip the opening fence and any language tag on the same line.
+	bodyStart := open + len(fence)
+	if nl := strings.IndexByte(text[bodyStart:], '\n'); nl != -1 {
+		bodyStart += nl + 1
+	}
+	close := strings.Index(text[bodyStart:], fence)
+	if close == -1 {
+		return ""
+	}
+	return text[bodyStart : bodyStart+close]
+}
+
+// extractBraceObject scans for the first `{` and walks forward counting
+// braces (respecting JSON string literals) until it finds the matching
+// closing `}`. Returns the balanced slice, or empty string if no match.
+// This is the fallback when fenced extraction doesn't apply — e.g. Claude
+// returned `Here is the plan: {...}` with no markdown at all.
+func extractBraceObject(text string) string {
+	start := strings.IndexByte(text, '{')
+	if start == -1 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(text); i++ {
+		c := text[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch c {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
 			}
 		}
 	}
-	return strings.TrimSpace(text)
+	return ""
 }
