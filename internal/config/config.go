@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -138,6 +139,98 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return ParseConfig(data)
+}
+
+// LoadConfigWithOverlay loads the base config from basePath and, if
+// overlayPath is non-empty, parses that file as a partial config and
+// merges it on top using the same field-by-field semantics as Merge.
+//
+// Behavior:
+//
+//   - overlayPath == ""              → returns the base config unchanged
+//   - overlayPath set, file missing  → error (an explicitly named overlay
+//     that does not exist is a configuration mistake, not a no-op)
+//   - overlay present but malformed  → error (no silent fallback — CI must
+//     fail loudly so misconfiguration is visible)
+//   - overlay present and well-formed → parse, merge over base, re-validate
+//     the merged result
+//
+// The overlay file is intentionally allowed to omit any field; only
+// non-zero overlay values override the base. This mirrors config.Merge.
+func LoadConfigWithOverlay(basePath, overlayPath string) (*Config, error) {
+	base, err := LoadConfig(basePath)
+	if err != nil {
+		return nil, err
+	}
+	if overlayPath == "" {
+		return base, nil
+	}
+
+	data, err := os.ReadFile(overlayPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading overlay %s: %w", overlayPath, err)
+	}
+
+	overlay, err := parseOverlay(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing overlay %s: %w", overlayPath, err)
+	}
+
+	merged := Merge(base, overlay)
+	if err := validate(merged); err != nil {
+		return nil, fmt.Errorf("validating merged config: %w", err)
+	}
+
+	slog.Info("loaded config overlay", "path", overlayPath)
+	return merged, nil
+}
+
+// parseOverlay decodes overlay YAML into a zero-valued Config without
+// applying defaults or running validation. Defaults would defeat the
+// "only non-zero overrides" merge semantics — every field would look set
+// — and validation would reject perfectly fine partial files (no
+// project.name, etc.). The merged result is validated by the caller.
+func parseOverlay(data []byte) (Config, error) {
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, err
+	}
+	warnUnknownFields(data)
+	return cfg, nil
+}
+
+// ResolveOverlayPath picks which overlay file (if any) to load. Precedence:
+//
+//  1. explicit non-empty path (from --config-overlay flag) — always wins
+//  2. CI=true env var AND vairdict.ci.yaml exists alongside the base
+//  3. neither → empty string (no overlay)
+//
+// Detection 2 is the convenient zero-config CI path: drop a
+// vairdict.ci.yaml in the repo and any CI provider that sets CI=true
+// (GitHub Actions, GitLab, CircleCI, Travis) picks it up automatically.
+//
+// fileExists is injected so callers can avoid touching the filesystem in
+// tests; nil is treated as "always false".
+func ResolveOverlayPath(explicit string, ci bool, baseDir string, fileExists func(string) bool) string {
+	if explicit != "" {
+		return explicit
+	}
+	if !ci {
+		return ""
+	}
+	candidate := filepath.Join(baseDir, "vairdict.ci.yaml")
+	if fileExists != nil && fileExists(candidate) {
+		return candidate
+	}
+	return ""
+}
+
+// IsCI reports whether the process is running in a CI environment.
+// Honors the de-facto standard CI env var (set by GitHub Actions,
+// GitLab, CircleCI, Travis, Buildkite, Drone, etc.).
+func IsCI() bool {
+	v := os.Getenv("CI")
+	return v == "true" || v == "1"
 }
 
 // ParseConfig parses raw YAML bytes into a validated Config.

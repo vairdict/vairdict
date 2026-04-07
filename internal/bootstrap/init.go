@@ -55,6 +55,21 @@ func Run(dir string) error {
 		return fmt.Errorf("validating generated config: %w", err)
 	}
 
+	// Prepend a header comment so users discover the overlay
+	// convention without having to read the docs. yaml.Marshal does not
+	// emit comments, so we splice it in textually.
+	header := []byte(`# vairdict.yaml — base config used in every environment.
+#
+# For environment-specific overrides, drop a vairdict.ci.yaml next
+# to this file. When CI=true (set automatically by GitHub Actions,
+# GitLab, CircleCI, …) it is merged on top of this file. Only the
+# fields you set in the overlay are overridden.
+#
+# Force a specific overlay with: vairdict run --config-overlay <path>
+
+`)
+	yamlBytes = append(header, yamlBytes...)
+
 	// Write the file.
 	if err := os.WriteFile(outPath, yamlBytes, 0644); err != nil {
 		return fmt.Errorf("writing vairdict.yaml: %w", err)

@@ -52,6 +52,19 @@ make install  — go install
 - Judge output is always typed structs, never parsed strings
 - Every phase returns a typed Result with Score, Pass bool, Feedback
 
+### Config overlays
+
+`vairdict.yaml` is the base config used in every environment. To override
+fields per-environment, drop a `vairdict.ci.yaml` next to it: when
+`CI=true` (set by GitHub Actions, GitLab, CircleCI, …) it is merged on
+top of the base via `config.LoadConfigWithOverlay`. Only fields actually
+set in the overlay override the base — everything else is preserved.
+
+Typical use: local dev runs `agents.judge: claude` (CLI fallback to API);
+CI overlay sets `agents.judge: claude-api` and `escalation.notify_via:
+github`. Override the auto-detected overlay with
+`vairdict run --config-overlay <path>`.
+
 ## Key types to know
 
 ```go
