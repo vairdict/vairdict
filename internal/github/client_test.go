@@ -279,7 +279,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		name string
 		want string
 	}{
-		{"header", "## ✅ VAIrdict Verdict: PASS"},
+		{"header", "## VAIrdict Verdict: ✅ PASS"},
 		{"score", "**Score:** 95%"},
 		{"phase", "**Phase:** quality"},
 		{"loop", "**Loop:** 1"},
@@ -320,7 +320,7 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		name string
 		want string
 	}{
-		{"header", "## ❌ VAIrdict Verdict: FAIL"},
+		{"header", "## VAIrdict Verdict: ❌ FAIL"},
 		{"score", "**Score:** 40%"},
 		{"loop", "**Loop:** 2"},
 		{"blocking section", "### Blocking Gaps"},

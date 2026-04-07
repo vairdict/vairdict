@@ -345,13 +345,13 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) string {
 	var b strings.Builder
 
-	// Header with pass/fail status. The icon goes first so the outcome
-	// is visible at a glance in GitHub's PR feed (where comments are
-	// often skimmed without expanding).
+	// Header with pass/fail status. The icon sits next to the status
+	// word so it reads as a single unit ("✅ PASS") rather than a
+	// floating glyph at the start of the line.
 	if verdict.Pass {
-		b.WriteString("## ✅ VAIrdict Verdict: PASS\n\n")
+		b.WriteString("## VAIrdict Verdict: ✅ PASS\n\n")
 	} else {
-		b.WriteString("## ❌ VAIrdict Verdict: FAIL\n\n")
+		b.WriteString("## VAIrdict Verdict: ❌ FAIL\n\n")
 	}
 
 	// Summary line.
