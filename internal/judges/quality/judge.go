@@ -62,8 +62,10 @@ func New(client Completer, runner CommandRunner, cfg config.Config) *QualityJudg
 const systemPrompt = `You are a quality judge for a software development process engine.
 Your job is to evaluate whether implemented code fulfills the original task intent.
 
-You are given the original intent, the approved plan, and a summary of the work directory.
-Evaluate whether the implementation matches the intent and plan.
+You are given the original intent, the approved plan, and the unified diff
+of the changes that were made. Evaluate whether the diff actually
+implements the intent and plan. Base every observation on what the diff
+shows — never invent file contents that are not in the diff.
 
 You MUST respond with valid JSON only — no markdown, no explanation outside the JSON.
 

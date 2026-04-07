@@ -276,24 +276,38 @@ func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error
 	return nil
 }
 
-// PostVerdict posts a structured verdict comment on a PR. On pass, it also
-// approves the PR via the review API.
+// cannotApproveOwnPRRe matches the GitHub API error returned when the
+// authenticated user tries to approve a PR they authored. We detect this
+// (rather than failing the run) so PostVerdict can gracefully fall back
+// to a regular comment — discovered via dogfooding `vairdict review` on
+// a self-authored PR.
+var cannotApproveOwnPRRe = regexp.MustCompile(`(?i)can ?not approve your own pull request`)
+
+// PostVerdict posts a structured verdict comment on a PR. On pass, it
+// tries to approve via the review API; if GitHub refuses because the PR
+// is self-authored, it falls back to a plain comment so the verdict still
+// lands. On fail, it posts a plain comment directly.
 func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
 	comment := FormatVerdictComment(verdict, phase, loop)
 
 	if verdict.Pass {
-		// Approve with the verdict as the review body.
-		if err := c.ApprovePR(ctx, prNumber, comment); err != nil {
+		err := c.ApprovePR(ctx, prNumber, comment)
+		if err == nil {
+			slog.Info("verdict posted", "pr", prNumber, "pass", true, "score", verdict.Score, "mode", "approval")
+			return nil
+		}
+		if !cannotApproveOwnPRRe.MatchString(err.Error()) {
 			return fmt.Errorf("posting verdict approval: %w", err)
 		}
-	} else {
-		// Post as a regular comment on failure.
-		if err := c.AddComment(ctx, prNumber, comment); err != nil {
-			return fmt.Errorf("posting verdict comment: %w", err)
-		}
+		// Self-authored PR — gh refuses approval. Fall through to a
+		// plain comment so the verdict still gets posted.
+		slog.Info("approval rejected (self-authored PR), falling back to comment", "pr", prNumber)
 	}
 
-	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score)
+	if err := c.AddComment(ctx, prNumber, comment); err != nil {
+		return fmt.Errorf("posting verdict comment: %w", err)
+	}
+	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "comment")
 	return nil
 }
 

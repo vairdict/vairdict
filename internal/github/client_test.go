@@ -186,6 +186,45 @@ func TestPostVerdict_Pass_ApprovesAndComments(t *testing.T) {
 	}
 }
 
+func TestPostVerdict_Pass_SelfAuthored_FallsBackToComment(t *testing.T) {
+	// gh returns this exact error message when the authenticated user
+	// tries to approve their own PR. PostVerdict should swallow it and
+	// fall back to a plain comment so review-mode dogfooding works.
+	runner := successRunner()
+	runner.Responses["gh pr review"] = fakeResponse{
+		Err: errors.New("failed to create review: GraphQL: Review Can not approve your own pull request (addPullRequestReview)"),
+	}
+	client := New(runner)
+
+	verdict := &state.Verdict{Score: 92, Pass: true}
+	err := client.PostVerdict(context.Background(), 59, verdict, state.PhaseQuality, 1)
+	if err != nil {
+		t.Fatalf("expected fallback to comment, got error: %v", err)
+	}
+
+	foundComment := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "pr" && call.Args[1] == "comment" {
+			foundComment = true
+		}
+	}
+	if !foundComment {
+		t.Error("expected fallback to gh pr comment after approval rejection")
+	}
+}
+
+func TestPostVerdict_Pass_OtherApprovalError_Propagates(t *testing.T) {
+	runner := successRunner()
+	runner.Responses["gh pr review"] = fakeResponse{Err: errors.New("network error")}
+	client := New(runner)
+
+	verdict := &state.Verdict{Score: 92, Pass: true}
+	err := client.PostVerdict(context.Background(), 7, verdict, state.PhaseQuality, 1)
+	if err == nil {
+		t.Fatal("expected non-self-PR approval errors to propagate")
+	}
+}
+
 func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
 	runner := successRunner()
 	client := New(runner)

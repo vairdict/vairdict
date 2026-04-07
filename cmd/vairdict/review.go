@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -61,14 +62,18 @@ func init() {
 	rootCmd.AddCommand(reviewCmd)
 }
 
-// reviewDeps bundles the collaborators that runReviewWith needs so the
-// command body can be exercised in tests with fakes (no exec, no real
-// completer, no PROGRESS-changing side effects).
+// reviewDeps bundles the collaborators and resolved options that
+// runReviewWith needs so the command body can be exercised in tests with
+// fakes (no exec, no real completer, no package-global flag state).
+// Flags are snapshotted into this struct at the cobra layer so the
+// orchestration core has no hidden inputs and is safe to run in parallel.
 type reviewDeps struct {
-	gh     reviewGH
-	judge  reviewJudge
-	cfg    *config.Config
-	stdout *os.File
+	gh        reviewGH
+	judge     reviewJudge
+	cfg       *config.Config
+	stdout    io.Writer
+	intent    string // resolved value of --intent (empty = derive from linked issue)
+	noComment bool   // resolved value of --no-comment
 }
 
 // reviewGH is the narrow GitHub surface the review command depends on.
@@ -115,10 +120,12 @@ func runReview(prNumber int) error {
 	defer cancel()
 
 	return runReviewWith(ctx, prNumber, reviewDeps{
-		gh:     ghClient,
-		judge:  judge,
-		cfg:    cfg,
-		stdout: os.Stdout,
+		gh:        ghClient,
+		judge:     judge,
+		cfg:       cfg,
+		stdout:    os.Stdout,
+		intent:    reviewIntentFlag,
+		noComment: reviewNoCommentFlag,
 	})
 }
 
@@ -132,7 +139,7 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 		return err
 	}
 
-	intent, err := resolveReviewIntent(ctx, deps.gh, pr)
+	intent, err := resolveReviewIntent(ctx, deps.gh, pr, deps.intent)
 	if err != nil {
 		return err
 	}
@@ -155,7 +162,7 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 		return fmt.Errorf("running quality judge: %w", err)
 	}
 
-	if reviewNoCommentFlag {
+	if deps.noComment {
 		_, _ = fmt.Fprintln(deps.stdout, github.FormatVerdictComment(verdict, state.PhaseQuality, 1))
 	} else {
 		if err := deps.gh.PostVerdict(ctx, prNumber, verdict, state.PhaseQuality, 1); err != nil {
@@ -169,13 +176,15 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	return nil
 }
 
-// resolveReviewIntent picks the intent for the judge: explicit --intent
-// flag wins; otherwise the first linked issue in the PR body is fetched
-// and rendered as "title\n\nbody". Errors out cleanly when neither
-// source is available so the user gets a clear next step.
-func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails) (string, error) {
-	if reviewIntentFlag != "" {
-		return reviewIntentFlag, nil
+// resolveReviewIntent picks the intent for the judge: an explicit
+// override (from --intent) wins; otherwise the first linked issue in the
+// PR body is fetched and rendered as "title\n\nbody". Errors out cleanly
+// when neither source is available so the user gets a clear next step.
+// The override is passed in (not read from package state) so the core is
+// parallel-test-safe.
+func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails, override string) (string, error) {
+	if override != "" {
+		return override, nil
 	}
 	issueNum := github.ParseLinkedIssue(pr.Body)
 	if issueNum == 0 {

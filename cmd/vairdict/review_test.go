@@ -1,9 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"os"
+	"io"
 	"strings"
 	"testing"
 
@@ -58,13 +59,6 @@ func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, _ string) (*sta
 	return f.verdict, f.err
 }
 
-// resetReviewFlags clears package-level flag state between tests so they
-// don't bleed into each other (cobra parses flags into globals).
-func resetReviewFlags() {
-	reviewIntentFlag = ""
-	reviewNoCommentFlag = false
-}
-
 func passingVerdict() *state.Verdict {
 	return &state.Verdict{Score: 90, Pass: true}
 }
@@ -75,8 +69,15 @@ func failingVerdict() *state.Verdict {
 	}}
 }
 
+// baseDeps builds a reviewDeps with sensible defaults; tests override
+// the fields they care about. Stdout defaults to io.Discard so tests
+// don't accidentally pollute the test runner's output.
+func baseDeps(gh reviewGH, judge reviewJudge) reviewDeps {
+	return reviewDeps{gh: gh, judge: judge, stdout: io.Discard}
+}
+
 func TestRunReview_HappyPath_LinkedIssue(t *testing.T) {
-	resetReviewFlags()
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:    &github.PRDetails{Number: 46, Title: "feat: foo", Body: "Closes #48"},
 		issue: &github.IssueDetails{Number: 48, Title: "review cmd", Body: "build it"},
@@ -84,12 +85,7 @@ func TestRunReview_HappyPath_LinkedIssue(t *testing.T) {
 	}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
-	err := runReviewWith(context.Background(), 46, reviewDeps{
-		gh:     gh,
-		judge:  judge,
-		stdout: os.Stdout,
-	})
-	if err != nil {
+	if err := runReviewWith(context.Background(), 46, baseDeps(gh, judge)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !gh.postCalled {
@@ -110,35 +106,35 @@ func TestRunReview_HappyPath_LinkedIssue(t *testing.T) {
 }
 
 func TestRunReview_ExplicitIntentOverridesLinkedIssue(t *testing.T) {
-	resetReviewFlags()
-	reviewIntentFlag = "do exactly this"
-	defer resetReviewFlags()
-
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:   &github.PRDetails{Number: 5, Body: "Closes #1"},
 		diff: "+x",
 	}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
-	if err := runReviewWith(context.Background(), 5, reviewDeps{gh: gh, judge: judge, stdout: os.Stdout}); err != nil {
+	deps := baseDeps(gh, judge)
+	deps.intent = "do exactly this"
+
+	if err := runReviewWith(context.Background(), 5, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(judge.intent, "do exactly this") {
 		t.Errorf("expected explicit intent in judge call, got %q", judge.intent)
 	}
 	if gh.issue != nil && strings.Contains(judge.intent, "review cmd") {
-		t.Error("issue should not have been fetched when --intent set")
+		t.Error("issue should not have been fetched when intent override set")
 	}
 }
 
 func TestRunReview_NoLinkedIssue_NoIntentFlag_Errors(t *testing.T) {
-	resetReviewFlags()
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr: &github.PRDetails{Number: 9, Body: "no closing keyword here"},
 	}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
-	err := runReviewWith(context.Background(), 9, reviewDeps{gh: gh, judge: judge, stdout: os.Stdout})
+	err := runReviewWith(context.Background(), 9, baseDeps(gh, judge))
 	if err == nil {
 		t.Fatal("expected error for missing intent")
 	}
@@ -151,7 +147,7 @@ func TestRunReview_NoLinkedIssue_NoIntentFlag_Errors(t *testing.T) {
 }
 
 func TestRunReview_JudgeError_Propagates(t *testing.T) {
-	resetReviewFlags()
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:    &github.PRDetails{Number: 1, Body: "Closes #2"},
 		issue: &github.IssueDetails{Number: 2, Title: "t", Body: "b"},
@@ -159,7 +155,7 @@ func TestRunReview_JudgeError_Propagates(t *testing.T) {
 	}
 	judge := &fakeReviewJudge{err: errors.New("boom")}
 
-	err := runReviewWith(context.Background(), 1, reviewDeps{gh: gh, judge: judge, stdout: os.Stdout})
+	err := runReviewWith(context.Background(), 1, baseDeps(gh, judge))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -172,7 +168,7 @@ func TestRunReview_JudgeError_Propagates(t *testing.T) {
 }
 
 func TestRunReview_FailingVerdict_PostsAndExitsNonZero(t *testing.T) {
-	resetReviewFlags()
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:    &github.PRDetails{Number: 1, Body: "Closes #2"},
 		issue: &github.IssueDetails{Number: 2, Title: "t", Body: "b"},
@@ -180,7 +176,7 @@ func TestRunReview_FailingVerdict_PostsAndExitsNonZero(t *testing.T) {
 	}
 	judge := &fakeReviewJudge{verdict: failingVerdict()}
 
-	err := runReviewWith(context.Background(), 1, reviewDeps{gh: gh, judge: judge, stdout: os.Stdout})
+	err := runReviewWith(context.Background(), 1, baseDeps(gh, judge))
 	if err == nil {
 		t.Fatal("expected non-nil error to gate CI on failing verdict")
 	}
@@ -190,10 +186,7 @@ func TestRunReview_FailingVerdict_PostsAndExitsNonZero(t *testing.T) {
 }
 
 func TestRunReview_NoComment_PrintsToStdout(t *testing.T) {
-	resetReviewFlags()
-	reviewNoCommentFlag = true
-	defer resetReviewFlags()
-
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:    &github.PRDetails{Number: 1, Body: "Closes #2"},
 		issue: &github.IssueDetails{Number: 2, Title: "t", Body: "b"},
@@ -201,45 +194,35 @@ func TestRunReview_NoComment_PrintsToStdout(t *testing.T) {
 	}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
-	// Pipe stdout to a temp file we can read back.
-	tmp, err := os.CreateTemp("", "review-stdout-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	defer func() { _ = tmp.Close() }()
+	var buf bytes.Buffer
+	deps := baseDeps(gh, judge)
+	deps.noComment = true
+	deps.stdout = &buf
 
-	if err := runReviewWith(context.Background(), 1, reviewDeps{gh: gh, judge: judge, stdout: tmp}); err != nil {
+	if err := runReviewWith(context.Background(), 1, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gh.postCalled {
-		t.Error("PostVerdict should not be called when --no-comment is set")
+		t.Error("PostVerdict should not be called when noComment is set")
 	}
-	if _, err := tmp.Seek(0, 0); err != nil {
-		t.Fatal(err)
-	}
-	out, err := os.ReadFile(tmp.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(out), "VAIrdict Verdict") {
-		t.Errorf("expected verdict in stdout, got: %q", string(out))
+	if !strings.Contains(buf.String(), "VAIrdict Verdict") {
+		t.Errorf("expected verdict in stdout, got: %q", buf.String())
 	}
 }
 
 func TestRunReview_FetchPRError(t *testing.T) {
-	resetReviewFlags()
+	t.Parallel()
 	gh := &fakeReviewGH{prErr: errors.New("not found")}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
-	err := runReviewWith(context.Background(), 99, reviewDeps{gh: gh, judge: judge, stdout: os.Stdout})
+	err := runReviewWith(context.Background(), 99, baseDeps(gh, judge))
 	if err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestRunReview_FetchDiffError(t *testing.T) {
-	resetReviewFlags()
+	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:      &github.PRDetails{Number: 1, Body: "Closes #2"},
 		issue:   &github.IssueDetails{Number: 2, Title: "t", Body: "b"},
@@ -247,8 +230,27 @@ func TestRunReview_FetchDiffError(t *testing.T) {
 	}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
-	err := runReviewWith(context.Background(), 1, reviewDeps{gh: gh, judge: judge, stdout: os.Stdout})
+	err := runReviewWith(context.Background(), 1, baseDeps(gh, judge))
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRunReview_PostVerdictError_Propagates(t *testing.T) {
+	t.Parallel()
+	gh := &fakeReviewGH{
+		pr:      &github.PRDetails{Number: 1, Body: "Closes #2"},
+		issue:   &github.IssueDetails{Number: 2, Title: "t", Body: "b"},
+		diff:    "diff",
+		postErr: errors.New("api down"),
+	}
+	judge := &fakeReviewJudge{verdict: passingVerdict()}
+
+	err := runReviewWith(context.Background(), 1, baseDeps(gh, judge))
+	if err == nil {
+		t.Fatal("expected post error to propagate")
+	}
+	if !strings.Contains(err.Error(), "posting verdict") {
+		t.Errorf("error should mention posting, got: %v", err)
 	}
 }
