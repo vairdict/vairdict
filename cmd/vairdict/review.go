@@ -9,7 +9,7 @@
 //  2. Resolve the linked issue from the body (Closes/Fixes/Resolves #N)
 //     and use its title+body as the intent — or fall back to --intent.
 //  3. Fetch the PR diff via gh (no checkout — keeps the user's tree clean)
-//  4. Run the quality judge with the diff stuffed into the prompt context
+//  4. Run the quality judge with the diff passed as the diff argument
 //  5. Post the verdict via github.PostVerdict (or print to stdout when
 //     --no-comment is set).
 //

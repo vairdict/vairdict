@@ -63,7 +63,7 @@ func TestJudge_Pass(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes", "/work")
+	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes", "diff --git a/x.go b/x.go\n+func H() {}")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestJudge_IntentMismatch(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "build auth system", "1. Implement auth", "/work")
+	verdict, err := judge.Judge(context.Background(), "build auth system", "1. Implement auth", "diff --git a/x.go b/x.go\n+func crud() {}")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestJudge_E2EPass(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestJudge_E2EFail(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestJudge_E2EFailHighScore(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestJudge_E2ENotRequired(t *testing.T) {
 	// E2ERequired is false by default.
 
 	judge := New(fake, nil, cfg)
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestJudge_E2ERequiredNoCommand(t *testing.T) {
 	// Commands.E2E is empty.
 
 	judge := New(fake, nil, cfg)
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestJudge_PassThresholdEnforced(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestJudge_PassAtExactThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestJudge_ClientError(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	_, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err == nil {
 		t.Fatal("expected error when client fails")
 	}
@@ -360,7 +360,7 @@ func TestJudge_MixedGapsWithE2E(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestJudge_ScoreFloorAtZero(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "/work")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -423,13 +423,14 @@ func TestJudge_ScoreFloorAtZero(t *testing.T) {
 	}
 }
 
-func TestJudge_PromptContainsWorkDir(t *testing.T) {
+func TestJudge_PromptContainsDiff(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{Score: 80, Pass: true},
 	}
 
 	judge := New(fake, nil, testConfig())
-	_, err := judge.Judge(context.Background(), "intent", "plan", "/my/project/dir")
+	const diff = "diff --git a/foo.go b/foo.go\n+++ b/foo.go\n+func Foo() {}"
+	_, err := judge.Judge(context.Background(), "intent", "plan", diff)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -437,8 +438,33 @@ func TestJudge_PromptContainsWorkDir(t *testing.T) {
 	if len(fake.Calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
 	}
-	if !contains(fake.Calls[0].Prompt, "/my/project/dir") {
-		t.Error("expected prompt to contain work directory path")
+	if !contains(fake.Calls[0].Prompt, "func Foo() {}") {
+		t.Error("expected prompt to contain diff content")
+	}
+	if !contains(fake.Calls[0].Prompt, "## Diff") {
+		t.Error("expected prompt to contain diff section header")
+	}
+}
+
+func TestJudge_EmptyDiffPlaceholder(t *testing.T) {
+	// Empty diff should still produce a prompt — with a placeholder line
+	// — so the LLM gets a clear signal there is nothing to evaluate
+	// instead of an empty code block.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{Score: 10, Pass: false},
+	}
+
+	judge := New(fake, nil, testConfig())
+	_, err := judge.Judge(context.Background(), "intent", "plan", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
+	}
+	if !contains(fake.Calls[0].Prompt, "no diff provided") {
+		t.Error("expected empty-diff placeholder in prompt")
 	}
 }
 
@@ -470,7 +496,7 @@ func TestJudge_SummaryRoundTrip(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Phases.Quality.E2ERequired = false
 	judge := New(fake, &FakeRunner{}, cfg)
-	verdict, err := judge.Judge(context.Background(), "build it", "the plan", "/tmp/work")
+	verdict, err := judge.Judge(context.Background(), "build it", "the plan", "fake-diff")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
