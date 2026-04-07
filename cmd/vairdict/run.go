@@ -211,7 +211,7 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	}
 
 	// --- Create branch before code phase so commits land on it ---
-	branch, err := ghClient.CreateBranch(ctx, task.ID)
+	branch, err := ghClient.CreateBranch(ctx, task.ID, task.Intent)
 	if err != nil {
 		r.Error(err)
 		return fmt.Errorf("creating branch: %w", err)

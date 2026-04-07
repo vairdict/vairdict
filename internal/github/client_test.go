@@ -24,15 +24,28 @@ func successRunner() *FakeRunner {
 }
 
 func TestCreateBranch(t *testing.T) {
-	runner := successRunner()
-	client := New(runner)
-
-	branch, err := client.CreateBranch(context.Background(), "abc123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	cases := []struct {
+		name, taskID, intent, want string
+	}{
+		{"empty_intent", "abc123", "", "vairdict/abc123"},
+		{"simple_intent", "abc123", "add logo to verdict", "vairdict/add-logo-to-verdict-abc123"},
+		{"conventional_prefix", "abc123", "ui: VAIrdict logo in PR header", "vairdict/vairdict-logo-in-pr-header-abc123"},
+		{"multiline_takes_first_line", "abc123", "fix: parse error\n\nmore details here", "vairdict/parse-error-abc123"},
+		{"truncates_long_intent", "abc123", "this is a very long intent that should get cut off well before forty characters of slug", "vairdict/this-is-a-very-long-intent-that-should-g-abc123"},
+		{"unsluggable_falls_back", "abc123", "!!! ???", "vairdict/abc123"},
 	}
-	if branch != "vairdict/abc123" {
-		t.Errorf("branch = %q, want %q", branch, "vairdict/abc123")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := successRunner()
+			client := New(runner)
+			branch, err := client.CreateBranch(context.Background(), tc.taskID, tc.intent)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if branch != tc.want {
+				t.Errorf("branch = %q, want %q", branch, tc.want)
+			}
+		})
 	}
 }
 

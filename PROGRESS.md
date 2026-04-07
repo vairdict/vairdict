@@ -10,12 +10,11 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #36 dogfood: first full three-phase task on vairdict
 - #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
-- #63 ui: VAIrdict logo in PR verdict comment header
 
 ## In Progress
-- none
+- #36 dogfood: first full three-phase task on vairdict (PR #64 awaiting merge — implements #63)
+- #63 ui: VAIrdict logo in PR verdict comment header (PR #64 open, verdict 96% pass)
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)

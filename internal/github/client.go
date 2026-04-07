@@ -116,9 +116,16 @@ func New(runner CommandRunner) *Client {
 	return &Client{runner: runner}
 }
 
-// CreateBranch creates a new branch named vairdict/<taskID> and checks it out.
-func (c *Client) CreateBranch(ctx context.Context, taskID string) (string, error) {
+// CreateBranch creates a new branch named vairdict/<slug>-<taskID> and
+// checks it out. The slug is derived from intent so a glance at `git
+// branch` or the PR head ref tells you what each branch is for; the
+// taskID suffix keeps branches unique even when intents collide. Empty
+// or unsluggable intents fall back to the legacy vairdict/<taskID>.
+func (c *Client) CreateBranch(ctx context.Context, taskID, intent string) (string, error) {
 	branch := "vairdict/" + taskID
+	if slug := slugifyIntent(intent); slug != "" {
+		branch = "vairdict/" + slug + "-" + taskID
+	}
 
 	if _, err := c.runner.Run(ctx, "git", "checkout", "-b", branch); err != nil {
 		return "", fmt.Errorf("creating branch %s: %w", branch, err)
@@ -126,6 +133,51 @@ func (c *Client) CreateBranch(ctx context.Context, taskID string) (string, error
 
 	slog.Info("branch created", "branch", branch)
 	return branch, nil
+}
+
+// slugifyIntent converts an intent string into a short, git-safe branch
+// slug: first non-empty line, lowercased, ASCII alphanumerics joined by
+// hyphens, capped at 40 chars, trimmed of leading "ui:" / "fix:" /
+// "feat:" style conventional-commit prefixes so the slug describes the
+// change rather than the type. Returns empty string if no usable
+// characters remain.
+func slugifyIntent(intent string) string {
+	// First non-empty line — issue bodies often have a title line
+	// followed by a blank line and a long description.
+	line := ""
+	for l := range strings.SplitSeq(intent, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			line = t
+			break
+		}
+	}
+	if line == "" {
+		return ""
+	}
+	// Drop a leading conventional-commit prefix like "ui:", "fix:",
+	// "feat(scope):" — slug should describe the change, not the type.
+	if i := strings.IndexByte(line, ':'); i != -1 && i < 20 {
+		line = strings.TrimSpace(line[i+1:])
+	}
+	line = strings.ToLower(line)
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range line {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+		if b.Len() >= 40 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // CreatePR creates a pull request using gh pr create.
