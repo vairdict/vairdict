@@ -86,9 +86,10 @@ type reviewGH interface {
 }
 
 // reviewJudge is the narrow judge surface; *quality.QualityJudge satisfies
-// it. Plan is always empty for review mode (per #48 acceptance criteria).
+// it. Plan is always empty for review mode (per #48 acceptance criteria);
+// the third argument is the unified diff fetched from the PR.
 type reviewJudge interface {
-	Judge(ctx context.Context, intent string, plan string, workDir string) (*state.Verdict, error)
+	Judge(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error)
 }
 
 // runReview is the production entry point: it loads the config, builds
@@ -149,15 +150,9 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 		return err
 	}
 
-	// The QualityJudge.Judge signature is locked at (intent, plan, workDir)
-	// — see issue #48 acceptance criteria. Review mode has no plan, so we
-	// pass an empty plan and embed the diff into the workDir context line
-	// of the prompt by stuffing the diff into the intent string under a
-	// clearly delimited section. This avoids changing the judge API for
-	// a single command. The judge prompt already accepts free-form text.
-	enrichedIntent := fmt.Sprintf("%s\n\n## PR Diff (review mode)\n```diff\n%s\n```", intent, diff)
-
-	verdict, err := deps.judge.Judge(ctx, enrichedIntent, "", ".")
+	// Review mode has no plan — pass empty. The diff is what the judge
+	// actually evaluates.
+	verdict, err := deps.judge.Judge(ctx, intent, "", diff)
 	if err != nil {
 		return fmt.Errorf("running quality judge: %w", err)
 	}

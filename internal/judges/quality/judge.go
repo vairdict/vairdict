@@ -112,19 +112,26 @@ Respond with this exact JSON structure:
   ]
 }`
 
-// Judge evaluates whether the code in workDir fulfills the given intent and plan.
-// It runs AI-based intent verification and optionally e2e tests, returning a
-// combined Verdict.
-func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, workDir string) (*state.Verdict, error) {
+// Judge evaluates whether the given diff fulfills the original intent and plan.
+// It runs AI-based intent verification (against the diff content, not a
+// directory path) and optionally e2e tests, returning a combined Verdict.
+//
+// `diff` is the full unified diff the LLM is asked to judge. Callers
+// (the quality phase orchestrator and `vairdict review`) compute it via
+// git before invoking the judge. An empty diff is allowed but will
+// produce a low score because the LLM has nothing concrete to evaluate.
+func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error) {
 	// Step 1: AI intent verification.
-	aiVerdict, err := j.evaluateIntent(ctx, intent, plan, workDir)
+	aiVerdict, err := j.evaluateIntent(ctx, intent, plan, diff)
 	if err != nil {
 		return nil, fmt.Errorf("evaluating intent: %w", err)
 	}
 
-	// Step 2: Run e2e tests if configured.
+	// Step 2: Run e2e tests if configured. Run them in the current process
+	// working directory — the judge no longer takes a workDir, and the
+	// orchestrator always invokes us with the project root as cwd.
 	if j.cfg.Phases.Quality.E2ERequired && j.cfg.Commands.E2E != "" {
-		e2eGap := j.runE2E(ctx, workDir)
+		e2eGap := j.runE2E(ctx, ".")
 		if e2eGap != nil {
 			aiVerdict.Gaps = append(aiVerdict.Gaps, *e2eGap)
 			// Penalize score for e2e failure: reduce by 30 points, floor at 0.
@@ -144,10 +151,14 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, wo
 	return aiVerdict, nil
 }
 
-// evaluateIntent uses the Claude API to assess whether the code matches the intent.
-func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan string, workDir string) (*state.Verdict, error) {
-	prompt := fmt.Sprintf("## Original Intent\n%s\n\n## Approved Plan\n%s\n\n## Work Directory\n%s",
-		intent, plan, workDir)
+// evaluateIntent uses the Claude API to assess whether the diff matches the intent.
+func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error) {
+	diffSection := diff
+	if strings.TrimSpace(diffSection) == "" {
+		diffSection = "(no diff provided — judge cannot evaluate code changes)"
+	}
+	prompt := fmt.Sprintf("## Original Intent\n%s\n\n## Approved Plan\n%s\n\n## Diff (unified format)\n```diff\n%s\n```",
+		intent, plan, diffSection)
 
 	var verdict state.Verdict
 	if err := j.client.CompleteWithSystem(ctx, systemPrompt, prompt, &verdict); err != nil {

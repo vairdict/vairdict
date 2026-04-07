@@ -45,17 +45,19 @@ func (f *fakeReviewGH) PostVerdict(_ context.Context, n int, v *state.Verdict, _
 }
 
 // fakeReviewJudge captures the inputs to Judge so tests can verify the
-// command stitches the intent + diff together correctly.
+// command threads intent / plan / diff through correctly.
 type fakeReviewJudge struct {
 	verdict *state.Verdict
 	err     error
 	intent  string
 	plan    string
+	diff    string
 }
 
-func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, _ string) (*state.Verdict, error) {
+func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, diff string) (*state.Verdict, error) {
 	f.intent = intent
 	f.plan = plan
+	f.diff = diff
 	return f.verdict, f.err
 }
 
@@ -97,8 +99,8 @@ func TestRunReview_HappyPath_LinkedIssue(t *testing.T) {
 	if !strings.Contains(judge.intent, "review cmd") || !strings.Contains(judge.intent, "build it") {
 		t.Errorf("judge intent missing issue text: %q", judge.intent)
 	}
-	if !strings.Contains(judge.intent, "diff --git") {
-		t.Errorf("judge intent missing diff: %q", judge.intent)
+	if !strings.Contains(judge.diff, "diff --git") {
+		t.Errorf("judge diff missing PR diff: %q", judge.diff)
 	}
 	if judge.plan != "" {
 		t.Errorf("plan should be empty in review mode, got %q", judge.plan)
