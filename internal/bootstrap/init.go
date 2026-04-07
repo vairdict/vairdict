@@ -60,12 +60,15 @@ func Run(dir string) error {
 	// emit comments, so we splice it in textually.
 	header := []byte(`# vairdict.yaml — base config used in every environment.
 #
-# For environment-specific overrides, drop a vairdict.ci.yaml next
-# to this file. When CI=true (set automatically by GitHub Actions,
-# GitLab, CircleCI, …) it is merged on top of this file. Only the
-# fields you set in the overlay are overridden.
+# For environment-specific overrides, drop a vairdict.<env>.yaml file
+# next to this one (e.g. vairdict.dev.yaml, vairdict.ci.yaml) and
+# select it with: vairdict run --env <env>
 #
-# Force a specific overlay with: vairdict run --config-overlay <path>
+# vairdict.ci.yaml is auto-loaded when CI=true (set by GitHub Actions,
+# GitLab, CircleCI, …) — no flag needed.
+#
+# Only the fields you set in the overlay override the base; everything
+# else is preserved.
 
 `)
 	yamlBytes = append(header, yamlBytes...)

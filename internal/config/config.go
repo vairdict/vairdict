@@ -199,30 +199,57 @@ func parseOverlay(data []byte) (Config, error) {
 	return cfg, nil
 }
 
-// ResolveOverlayPath picks which overlay file (if any) to load. Precedence:
+// ResolveOverlayPath picks which overlay file (if any) to load.
 //
-//  1. explicit non-empty path (from --config-overlay flag) — always wins
-//  2. CI=true env var AND vairdict.ci.yaml exists alongside the base
-//  3. neither → empty string (no overlay)
+// Precedence:
 //
-// Detection 2 is the convenient zero-config CI path: drop a
-// vairdict.ci.yaml in the repo and any CI provider that sets CI=true
-// (GitHub Actions, GitLab, CircleCI, Travis) picks it up automatically.
+//  1. envName non-empty (from --env flag): use vairdict.<envName>.yaml.
+//     The file MUST exist — LoadConfigWithOverlay errors otherwise.
+//     Explicit means the user wanted it.
+//  2. ci=true AND vairdict.ci.yaml exists alongside the base config:
+//     auto-pick it. Silent no-op if the file is missing — CI without an
+//     overlay file is a perfectly normal setup.
+//  3. neither → empty string (no overlay).
 //
-// fileExists is injected so callers can avoid touching the filesystem in
-// tests; nil is treated as "always false".
-func ResolveOverlayPath(explicit string, ci bool, baseDir string, fileExists func(string) bool) string {
-	if explicit != "" {
-		return explicit
+// envName must be a simple identifier — no slashes, no `..`, no leading
+// `.`. This prevents `--env ../../etc/passwd` style path traversal.
+//
+// fileExists is injected so tests can avoid touching the filesystem;
+// nil is treated as "always false".
+func ResolveOverlayPath(envName string, ci bool, baseDir string, fileExists func(string) bool) (string, error) {
+	if envName != "" {
+		if err := validateEnvName(envName); err != nil {
+			return "", err
+		}
+		return filepath.Join(baseDir, "vairdict."+envName+".yaml"), nil
 	}
 	if !ci {
-		return ""
+		return "", nil
 	}
 	candidate := filepath.Join(baseDir, "vairdict.ci.yaml")
 	if fileExists != nil && fileExists(candidate) {
-		return candidate
+		return candidate, nil
 	}
-	return ""
+	return "", nil
+}
+
+// validateEnvName rejects values that could escape the base directory or
+// produce surprising filenames. Allowed: [A-Za-z0-9_-]+.
+func validateEnvName(name string) error {
+	if name == "" {
+		return fmt.Errorf("env name must not be empty")
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return fmt.Errorf("invalid env name %q: only letters, digits, '_' and '-' are allowed", name)
+		}
+	}
+	return nil
 }
 
 // IsCI reports whether the process is running in a CI environment.

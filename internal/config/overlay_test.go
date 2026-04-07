@@ -147,26 +147,49 @@ func TestResolveOverlayPath(t *testing.T) {
 	never := func(string) bool { return false }
 
 	cases := []struct {
-		name     string
-		explicit string
-		ci       bool
-		exists   func(string) bool
-		want     string
+		name    string
+		envName string
+		ci      bool
+		exists  func(string) bool
+		want    string
+		wantErr bool
 	}{
-		{"explicit wins over everything", "/tmp/custom.yaml", true, exists, "/tmp/custom.yaml"},
-		{"explicit wins even when ci off", "/tmp/custom.yaml", false, never, "/tmp/custom.yaml"},
-		{"ci + file present picks default", "", true, exists, filepath.Join(".", "vairdict.ci.yaml")},
-		{"ci but no file", "", true, never, ""},
-		{"no ci no explicit", "", false, exists, ""},
-		{"nil exists treated as false", "", true, nil, ""},
+		{"explicit env wins over ci auto", "dev", true, exists, filepath.Join(".", "vairdict.dev.yaml"), false},
+		{"explicit env wins when ci off", "test", false, never, filepath.Join(".", "vairdict.test.yaml"), false},
+		{"explicit env: file presence not pre-checked", "staging", false, never, filepath.Join(".", "vairdict.staging.yaml"), false},
+		{"ci + file present picks vairdict.ci.yaml", "", true, exists, filepath.Join(".", "vairdict.ci.yaml"), false},
+		{"ci but no file → no overlay", "", true, never, "", false},
+		{"no ci no explicit → no overlay", "", false, exists, "", false},
+		{"nil exists treated as false", "", true, nil, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ResolveOverlayPath(tc.explicit, tc.ci, ".", tc.exists)
+			got, err := ResolveOverlayPath(tc.envName, tc.ci, ".", tc.exists)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
 			if got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveOverlayPath_RejectsPathTraversal(t *testing.T) {
+	bad := []string{"../etc", "foo/bar", ".hidden", "with space", "ci.yaml", ""}
+	for _, name := range bad {
+		// empty is special — it means "no env" not "invalid env" — so
+		// only the non-empty cases should error.
+		_, err := ResolveOverlayPath(name, false, ".", nil)
+		if name == "" {
+			if err != nil {
+				t.Errorf("empty name should be valid (no overlay), got err %v", err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("expected error for %q", name)
+		}
 	}
 }
 
