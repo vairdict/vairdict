@@ -15,7 +15,7 @@ Update this file when opening, completing, or blocking an issue.
 - #63 ui: VAIrdict logo in PR verdict comment header
 
 ## In Progress
-- #48 cmd: `vairdict review <pr>` — judge an existing PR
+- none
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
@@ -46,6 +46,7 @@ Update this file when opening, completing, or blocking an issue.
 - #45 logs: write run logs to ~/.vairdict/logs/<task>.log
 - #47 agents/claudecli: completer wrapping `claude -p` + auto backend resolver
 - #49 config: --env flag + vairdict.<env>.yaml overlays
+- #48 cmd: `vairdict review <pr>` — judge an existing PR
 
 ---
 
@@ -139,7 +140,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 11/15       |
+| M3        | in progress | 12/15       |
 | M4        | not started | 0/5         |
 | M5        | not started | 0/6         |
 | M6        | not started | 0/5         |
