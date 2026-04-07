@@ -12,6 +12,7 @@ Update this file when opening, completing, or blocking an issue.
 ## Ready to Start
 - #36 dogfood: first full three-phase task on vairdict
 - #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
+- #63 ui: VAIrdict logo in PR verdict comment header
 
 ## In Progress
 - #48 cmd: `vairdict review <pr>` — judge an existing PR
@@ -138,7 +139,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 11/14       |
+| M3        | in progress | 11/15       |
 | M4        | not started | 0/5         |
 | M5        | not started | 0/6         |
 | M6        | not started | 0/5         |
