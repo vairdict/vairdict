@@ -282,6 +282,16 @@ func TestExtractJSON(t *testing.T) {
 			`prefix {"a":{"b":{"c":9}}} suffix`,
 			`{"a":{"b":{"c":9}}}`,
 		},
+		{
+			// Regression: a JSON string value that contains an embedded
+			// ``` fence used to fool the fence-first extractor into
+			// matching the embedded fence as the closing fence and
+			// returning a truncated payload. Brace matching ignores
+			// braces and fences inside string literals.
+			"fenced_with_embedded_fence_in_string",
+			"```json\n{\"requirements\":\"see ```html\\nfoo\\n``` for an example\",\"n\":10}\n```",
+			"{\"requirements\":\"see ```html\\nfoo\\n``` for an example\",\"n\":10}",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

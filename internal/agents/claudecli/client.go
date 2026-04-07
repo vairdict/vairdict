@@ -235,29 +235,26 @@ func truncate(s string, n int) string {
 // extractJSON pulls a JSON object out of Claude's result string, tolerating
 // two common ways the CLI wraps structured output even when told not to:
 //
-//  1. Fenced markdown block (```json ... ``` or ``` ... ```), possibly
-//     preceded by prose like "Let me produce the plan."
-//  2. A plain top-level { ... } object embedded in prose, with or without
-//     fences, possibly with a missing closing fence (streamed output that
-//     got truncated near the end).
+//  1. A plain top-level { ... } object, possibly preceded by prose like
+//     "Let me produce the plan." and possibly wrapped in a ```json fence.
+//  2. A fenced markdown block (```json ... ``` or ``` ... ```) with no
+//     extractable brace object (rare — content isn't JSON-shaped).
 //
-// Strategy: prefer a fenced block when present, else fall back to
-// brace-matching from the first `{` to its balanced `}` (string-aware so
-// `{` / `}` inside JSON string values don't throw off the count). The
-// JSON parser is the ultimate validator — extractJSON just produces the
-// best candidate slice it can.
+// Strategy: prefer string-aware brace matching from the first `{` to its
+// balanced `}`. This handles bare objects, prose-wrapped objects, AND
+// fenced objects in one pass — the leading ```json and trailing ``` sit
+// outside the braces and are naturally ignored. Crucially, brace matching
+// is immune to a subtle fence bug: if the JSON string values themselves
+// contain an embedded ``` (e.g. an issue body that includes a code block),
+// a fence-based extractor will treat that embedded fence as the closing
+// fence and chop the JSON in half. Fenced extraction is kept only as a
+// last-resort fallback for non-object payloads.
 func extractJSON(text string) string {
-	if fenced := extractFencedBlock(text); fenced != "" {
-		// A fenced block might itself contain prose before the actual
-		// JSON object (rare but seen). Run the brace extractor over it
-		// as a second pass so we return just the object.
-		if obj := extractBraceObject(fenced); obj != "" {
-			return obj
-		}
-		return fenced
-	}
 	if obj := extractBraceObject(text); obj != "" {
 		return obj
+	}
+	if fenced := extractFencedBlock(text); fenced != "" {
+		return fenced
 	}
 	return strings.TrimSpace(text)
 }
