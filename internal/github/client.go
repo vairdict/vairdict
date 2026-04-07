@@ -3,9 +3,11 @@ package github
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -74,6 +76,25 @@ func (e *ExecRunner) Run(ctx context.Context, name string, args ...string) ([]by
 type PR struct {
 	URL    string
 	Number int
+}
+
+// PRDetails carries the fields needed to review an existing PR. It is the
+// minimal projection of `gh pr view --json` that the review command needs;
+// extending it is cheap if more fields are needed later.
+type PRDetails struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	HeadRefName string `json:"headRefName"`
+	BaseRefName string `json:"baseRefName"`
+}
+
+// IssueDetails is the minimal projection of `gh issue view --json` that the
+// review command uses to derive an intent string from a linked issue.
+type IssueDetails struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
 }
 
 // CreatePROpts holds options for creating a pull request.
@@ -163,6 +184,69 @@ func parsePRNumber(url string) int {
 	}
 	last := parts[len(parts)-1]
 	n, err := strconv.Atoi(last)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// FetchPR loads the metadata for an existing PR via `gh pr view --json`.
+// Returns a PRDetails populated from the gh JSON output. The fields fetched
+// are deliberately limited to those needed by the review command.
+func (c *Client) FetchPR(ctx context.Context, number int) (*PRDetails, error) {
+	out, err := c.runner.Run(ctx, "gh", "pr", "view", strconv.Itoa(number),
+		"--json", "number,title,body,headRefName,baseRefName")
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR #%d: %w", number, err)
+	}
+	var pr PRDetails
+	if err := json.Unmarshal(out, &pr); err != nil {
+		return nil, fmt.Errorf("parsing gh pr view output: %w", err)
+	}
+	return &pr, nil
+}
+
+// FetchIssue loads the metadata for an existing issue via `gh issue view`.
+// Used by the review command to derive an intent string from the issue
+// linked in the PR body.
+func (c *Client) FetchIssue(ctx context.Context, number int) (*IssueDetails, error) {
+	out, err := c.runner.Run(ctx, "gh", "issue", "view", strconv.Itoa(number),
+		"--json", "number,title,body")
+	if err != nil {
+		return nil, fmt.Errorf("fetching issue #%d: %w", number, err)
+	}
+	var iss IssueDetails
+	if err := json.Unmarshal(out, &iss); err != nil {
+		return nil, fmt.Errorf("parsing gh issue view output: %w", err)
+	}
+	return &iss, nil
+}
+
+// FetchPRDiff returns the unified diff of the PR via `gh pr diff <n>`.
+// Used by the review command to give the quality judge enough context
+// without actually checking the branch out.
+func (c *Client) FetchPRDiff(ctx context.Context, number int) (string, error) {
+	out, err := c.runner.Run(ctx, "gh", "pr", "diff", strconv.Itoa(number))
+	if err != nil {
+		return "", fmt.Errorf("fetching diff for PR #%d: %w", number, err)
+	}
+	return string(out), nil
+}
+
+// linkedIssueRe matches GitHub's PR-closes-issue keywords. Case-insensitive,
+// matches `Closes #12`, `fixes #34`, `Resolves: #56`, etc. Captures the
+// issue number into group 1.
+var linkedIssueRe = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[^\n#]*#(\d+)`)
+
+// ParseLinkedIssue scans a PR body for the first GitHub closing-keyword
+// reference (Closes/Fixes/Resolves) and returns the linked issue number,
+// or 0 if no such reference is found.
+func ParseLinkedIssue(body string) int {
+	m := linkedIssueRe.FindStringSubmatch(body)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
 	if err != nil {
 		return 0
 	}

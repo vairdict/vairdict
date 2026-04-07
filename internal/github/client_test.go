@@ -402,6 +402,100 @@ func TestGeneratePRTitle_Long(t *testing.T) {
 	}
 }
 
+func TestFetchPR(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr view": {Output: []byte(`{"number":46,"title":"add review cmd","body":"Closes #48","headRefName":"feat/x","baseRefName":"main"}`)},
+		},
+	}
+	client := New(runner)
+
+	pr, err := client.FetchPR(context.Background(), 46)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pr.Number != 46 || pr.Title != "add review cmd" || pr.HeadRefName != "feat/x" || pr.BaseRefName != "main" {
+		t.Errorf("unexpected pr: %+v", pr)
+	}
+}
+
+func TestFetchPR_RunError(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr view": {Err: errors.New("not found")},
+		},
+	}
+	if _, err := New(runner).FetchPR(context.Background(), 9); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestFetchPR_InvalidJSON(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr view": {Output: []byte("not json")},
+		},
+	}
+	if _, err := New(runner).FetchPR(context.Background(), 9); err == nil {
+		t.Fatal("expected json parse error")
+	}
+}
+
+func TestFetchIssue(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh issue view": {Output: []byte(`{"number":48,"title":"review cmd","body":"intent here"}`)},
+		},
+	}
+	iss, err := New(runner).FetchIssue(context.Background(), 48)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if iss.Number != 48 || iss.Title != "review cmd" || iss.Body != "intent here" {
+		t.Errorf("unexpected issue: %+v", iss)
+	}
+}
+
+func TestFetchPRDiff(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr diff": {Output: []byte("diff --git a/x b/x\n+hello\n")},
+		},
+	}
+	diff, err := New(runner).FetchPRDiff(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !contains(diff, "+hello") {
+		t.Errorf("unexpected diff: %q", diff)
+	}
+}
+
+func TestParseLinkedIssue(t *testing.T) {
+	cases := []struct {
+		body string
+		want int
+	}{
+		{"Closes #42", 42},
+		{"closes #42", 42},
+		{"Fixes #7\n\nlots of context", 7},
+		{"Resolves #123 — done", 123},
+		{"fixed #5", 5},
+		{"resolved #5", 5},
+		{"some text Closes: #99", 99},
+		{"## Issue\nCloses #48\n", 48},
+		{"no linked issue here", 0},
+		{"#42 alone is not enough", 0},
+		{"see #42 for context", 0},
+		{"", 0},
+	}
+	for _, tc := range cases {
+		if got := ParseLinkedIssue(tc.body); got != tc.want {
+			t.Errorf("ParseLinkedIssue(%q) = %d, want %d", tc.body, got, tc.want)
+		}
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && containsStr(s, substr)
 }
