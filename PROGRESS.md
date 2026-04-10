@@ -10,10 +10,10 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
+- none
 
 ## In Progress
-- none
+- #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ## Blocked
 - #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)

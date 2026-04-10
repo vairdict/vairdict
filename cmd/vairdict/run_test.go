@@ -9,6 +9,10 @@ import (
 
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/escalation"
+	"github.com/vairdict/vairdict/internal/github"
+	codephase "github.com/vairdict/vairdict/internal/phases/code"
+	planphase "github.com/vairdict/vairdict/internal/phases/plan"
+	qualityphase "github.com/vairdict/vairdict/internal/phases/quality"
 	"github.com/vairdict/vairdict/internal/state"
 	"github.com/vairdict/vairdict/internal/ui"
 )
@@ -439,5 +443,334 @@ func TestDispatchEscalation_AlreadyEscalatedNoOp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Escalation") {
 		t.Errorf("expected escalation output even when already escalated, got %q", out.String())
+	}
+}
+
+// --- Orchestration test fakes ---
+
+type fakePlanRunner struct {
+	result *planphase.PhaseResult
+	gaps   []state.Gap
+	err    error
+	called bool
+}
+
+func (f *fakePlanRunner) Run(_ context.Context, task *state.Task) (*planphase.PhaseResult, error) {
+	f.called = true
+	if f.result != nil {
+		task.Attempts = append(task.Attempts, state.Attempt{
+			Phase: state.PhasePlan, Loop: f.result.Loops,
+			Verdict: &state.Verdict{Score: f.result.LastScore, Pass: f.result.Pass, Gaps: f.gaps},
+		})
+	}
+	return f.result, f.err
+}
+
+type fakeCodeRunner struct {
+	result *codephase.PhaseResult
+	gaps   []state.Gap
+	err    error
+	called bool
+	plan   string
+}
+
+func (f *fakeCodeRunner) Run(_ context.Context, task *state.Task, plan string) (*codephase.PhaseResult, error) {
+	f.called = true
+	f.plan = plan
+	if f.result != nil {
+		task.Attempts = append(task.Attempts, state.Attempt{
+			Phase: state.PhaseCode, Loop: f.result.Loops,
+			Verdict: &state.Verdict{Score: f.result.LastScore, Pass: f.result.Pass, Gaps: f.gaps},
+		})
+	}
+	return f.result, f.err
+}
+
+type fakeQualityRunner struct {
+	result *qualityphase.PhaseResult
+	gaps   []state.Gap
+	err    error
+	called bool
+	plan   string
+}
+
+func (f *fakeQualityRunner) Run(_ context.Context, task *state.Task, plan string) (*qualityphase.PhaseResult, error) {
+	f.called = true
+	f.plan = plan
+	if f.result != nil {
+		task.Attempts = append(task.Attempts, state.Attempt{
+			Phase: state.PhaseQuality, Loop: f.result.Loops,
+			Verdict: &state.Verdict{Score: f.result.LastScore, Pass: f.result.Pass, Gaps: f.gaps},
+		})
+	}
+	return f.result, f.err
+}
+
+type fakeGHOrch struct {
+	branchName string
+	branchErr  error
+	pr         *github.PR
+	prErr      error
+	verdictErr error
+
+	branchCalled  bool
+	prCalled      bool
+	verdictCalled bool
+}
+
+func (f *fakeGHOrch) CreateBranch(context.Context, string, string) (string, error) {
+	f.branchCalled = true
+	return f.branchName, f.branchErr
+}
+
+func (f *fakeGHOrch) CreatePR(context.Context, github.CreatePROpts) (*github.PR, error) {
+	f.prCalled = true
+	return f.pr, f.prErr
+}
+
+func (f *fakeGHOrch) PostVerdict(context.Context, int, *state.Verdict, state.Phase, int) error {
+	f.verdictCalled = true
+	return f.verdictErr
+}
+
+// orchBundle groups the fakes so tests can inspect them after a run.
+type orchBundle struct {
+	plan    *fakePlanRunner
+	code    *fakeCodeRunner
+	quality *fakeQualityRunner
+	gh      *fakeGHOrch
+
+	commitCalled     bool
+	escalationCalled bool
+	escalationResult escalation.Result
+}
+
+var errEscalated = errors.New("escalated (test sentinel)")
+
+func newOrchBundle() *orchBundle {
+	return &orchBundle{
+		plan: &fakePlanRunner{result: &planphase.PhaseResult{
+			Pass: true, Loops: 1, LastScore: 90, Plan: "the plan",
+		}},
+		code: &fakeCodeRunner{result: &codephase.PhaseResult{
+			Pass: true, Loops: 1, LastScore: 100,
+		}},
+		quality: &fakeQualityRunner{result: &qualityphase.PhaseResult{
+			Pass: true, Loops: 1, LastScore: 95,
+		}},
+		gh: &fakeGHOrch{
+			branchName: "vairdict/test-abc",
+			pr:         &github.PR{URL: "https://github.com/x/y/pull/42", Number: 42},
+		},
+	}
+}
+
+func (b *orchBundle) deps() runDeps {
+	return runDeps{
+		plan:    b.plan,
+		code:    b.code,
+		quality: b.quality,
+		gh:      b.gh,
+		commit: func(context.Context, *state.Task) error {
+			b.commitCalled = true
+			return nil
+		},
+		onEscalation: func(_ context.Context, _ *state.Task, result escalation.Result) error {
+			b.escalationCalled = true
+			b.escalationResult = result
+			return errEscalated
+		},
+	}
+}
+
+// --- Orchestration tests ---
+
+func TestRunOrchestration_HappyPath(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	task := state.NewTask("t-1", "build the thing")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !b.plan.called {
+		t.Error("plan runner not called")
+	}
+	if !b.code.called {
+		t.Error("code runner not called")
+	}
+	if b.code.plan != "the plan" {
+		t.Errorf("code runner got plan %q, want %q", b.code.plan, "the plan")
+	}
+	if !b.quality.called {
+		t.Error("quality runner not called")
+	}
+	if b.quality.plan != "the plan" {
+		t.Errorf("quality runner got plan %q, want %q", b.quality.plan, "the plan")
+	}
+	if !b.commitCalled {
+		t.Error("commit not called")
+	}
+	if !b.gh.branchCalled {
+		t.Error("CreateBranch not called")
+	}
+	if !b.gh.prCalled {
+		t.Error("CreatePR not called")
+	}
+	if !b.gh.verdictCalled {
+		t.Error("PostVerdict not called")
+	}
+	if b.escalationCalled {
+		t.Error("escalation should not be called on happy path")
+	}
+}
+
+func TestRunOrchestration_PlanEscalates(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.plan.result = &planphase.PhaseResult{Escalate: true, Loops: 3, LastScore: 40}
+	b.plan.gaps = []state.Gap{{Severity: state.SeverityP1, Description: "missing req", Blocking: true}}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if !errors.Is(err, errEscalated) {
+		t.Fatalf("expected errEscalated, got %v", err)
+	}
+	if !b.escalationCalled {
+		t.Error("escalation not called")
+	}
+	if b.escalationResult.Phase != state.PhasePlan {
+		t.Errorf("escalation phase = %s, want plan", b.escalationResult.Phase)
+	}
+	if b.code.called {
+		t.Error("code should not run when plan escalates")
+	}
+	if b.quality.called {
+		t.Error("quality should not run when plan escalates")
+	}
+	if b.gh.branchCalled {
+		t.Error("branch should not be created when plan escalates")
+	}
+	if b.gh.prCalled {
+		t.Error("PR should not be created when plan escalates")
+	}
+}
+
+func TestRunOrchestration_CodeEscalates(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.code.result = &codephase.PhaseResult{Escalate: true, Loops: 3, LastScore: 25}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if !errors.Is(err, errEscalated) {
+		t.Fatalf("expected errEscalated, got %v", err)
+	}
+	if b.escalationResult.Phase != state.PhaseCode {
+		t.Errorf("escalation phase = %s, want code", b.escalationResult.Phase)
+	}
+	if b.quality.called {
+		t.Error("quality should not run when code escalates")
+	}
+	if b.gh.prCalled {
+		t.Error("PR should not be created when code escalates")
+	}
+	if b.commitCalled {
+		t.Error("commit should not be called when code escalates")
+	}
+}
+
+func TestRunOrchestration_QualityEscalates(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.quality.result = &qualityphase.PhaseResult{Escalate: true, Loops: 3, LastScore: 30}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if !errors.Is(err, errEscalated) {
+		t.Fatalf("expected errEscalated, got %v", err)
+	}
+	if b.escalationResult.Phase != state.PhaseQuality {
+		t.Errorf("escalation phase = %s, want quality", b.escalationResult.Phase)
+	}
+	if b.gh.prCalled {
+		t.Error("PR should not be created when quality escalates")
+	}
+	// Commit happens BEFORE quality, so it should have been called.
+	if !b.commitCalled {
+		t.Error("commit should be called even when quality escalates (happens before quality)")
+	}
+}
+
+func TestRunOrchestration_QualityRequeueToCode(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.quality.result = &qualityphase.PhaseResult{RequeueToCode: true, Loops: 2, LastScore: 50}
+	b.quality.gaps = []state.Gap{{Severity: state.SeverityP0, Description: "code broken", Blocking: true}}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if !errors.Is(err, errEscalated) {
+		t.Fatalf("expected errEscalated, got %v", err)
+	}
+	if b.escalationResult.Phase != state.PhaseQuality {
+		t.Errorf("escalation phase = %s, want quality", b.escalationResult.Phase)
+	}
+	if b.gh.prCalled {
+		t.Error("PR should not be created on requeue")
+	}
+}
+
+func TestRunOrchestration_PostVerdictFailure_DoesNotFailRun(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.gh.verdictErr = errors.New("github API down")
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if err != nil {
+		t.Fatalf("PostVerdict failure should not fail the run, got %v", err)
+	}
+	if !b.gh.verdictCalled {
+		t.Error("PostVerdict should have been attempted")
+	}
+	if !b.gh.prCalled {
+		t.Error("PR should still be created")
+	}
+}
+
+func TestRunOrchestration_BranchCreationFailure(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.gh.branchErr = errors.New("branch already exists")
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "creating branch") {
+		t.Errorf("error should mention branch creation: %v", err)
+	}
+	if b.code.called {
+		t.Error("code should not run after branch creation failure")
+	}
+	if b.escalationCalled {
+		t.Error("branch failure should not trigger escalation")
 	}
 }
