@@ -26,6 +26,8 @@ type fakeReviewGH struct {
 	postedNumber int
 	postedVerd   *state.Verdict
 	postCalled   bool
+	mergeCalled  bool
+	mergeErr     error
 }
 
 func (f *fakeReviewGH) FetchPR(_ context.Context, _ int) (*github.PRDetails, error) {
@@ -42,6 +44,10 @@ func (f *fakeReviewGH) PostVerdict(_ context.Context, n int, v *state.Verdict, _
 	f.postedNumber = n
 	f.postedVerd = v
 	return f.postErr
+}
+func (f *fakeReviewGH) MergePR(_ context.Context, _ int) error {
+	f.mergeCalled = true
+	return f.mergeErr
 }
 
 // fakeReviewJudge captures the inputs to Judge so tests can verify the
@@ -254,5 +260,88 @@ func TestRunReview_PostVerdictError_Propagates(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "posting verdict") {
 		t.Errorf("error should mention posting, got: %v", err)
+	}
+}
+
+func TestRunReview_AutoMerge_Enabled(t *testing.T) {
+	t.Parallel()
+	gh := &fakeReviewGH{
+		pr:    &github.PRDetails{Number: 10, Body: "Closes #11"},
+		issue: &github.IssueDetails{Number: 11, Title: "t", Body: "b"},
+		diff:  "diff",
+	}
+	judge := &fakeReviewJudge{verdict: passingVerdict()}
+
+	deps := baseDeps(gh, judge)
+	deps.autoMerge = true
+
+	if err := runReviewWith(context.Background(), 10, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !gh.mergeCalled {
+		t.Error("expected MergePR to be called when autoMerge is enabled")
+	}
+}
+
+func TestRunReview_AutoMerge_Disabled(t *testing.T) {
+	t.Parallel()
+	gh := &fakeReviewGH{
+		pr:    &github.PRDetails{Number: 10, Body: "Closes #11"},
+		issue: &github.IssueDetails{Number: 11, Title: "t", Body: "b"},
+		diff:  "diff",
+	}
+	judge := &fakeReviewJudge{verdict: passingVerdict()}
+
+	deps := baseDeps(gh, judge)
+	// autoMerge defaults to false
+
+	if err := runReviewWith(context.Background(), 10, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gh.mergeCalled {
+		t.Error("MergePR should not be called when autoMerge is disabled")
+	}
+}
+
+func TestRunReview_AutoMerge_FailingVerdict_NoMerge(t *testing.T) {
+	t.Parallel()
+	gh := &fakeReviewGH{
+		pr:    &github.PRDetails{Number: 10, Body: "Closes #11"},
+		issue: &github.IssueDetails{Number: 11, Title: "t", Body: "b"},
+		diff:  "diff",
+	}
+	judge := &fakeReviewJudge{verdict: failingVerdict()}
+
+	deps := baseDeps(gh, judge)
+	deps.autoMerge = true
+
+	err := runReviewWith(context.Background(), 10, deps)
+	if err == nil {
+		t.Fatal("expected error for failing verdict")
+	}
+	if gh.mergeCalled {
+		t.Error("MergePR should not be called on failing verdict")
+	}
+}
+
+func TestRunReview_AutoMerge_Error_WarnsOnly(t *testing.T) {
+	t.Parallel()
+	gh := &fakeReviewGH{
+		pr:       &github.PRDetails{Number: 10, Body: "Closes #11"},
+		issue:    &github.IssueDetails{Number: 11, Title: "t", Body: "b"},
+		diff:     "diff",
+		mergeErr: errors.New("merge conflict"),
+	}
+	judge := &fakeReviewJudge{verdict: passingVerdict()}
+
+	deps := baseDeps(gh, judge)
+	deps.autoMerge = true
+
+	// Auto-merge failure should warn, not error — the verdict still passed.
+	if err := runReviewWith(context.Background(), 10, deps); err != nil {
+		t.Fatalf("auto-merge failure should not propagate as error, got: %v", err)
+	}
+	if !gh.mergeCalled {
+		t.Error("expected MergePR to be called")
 	}
 }

@@ -363,6 +363,19 @@ func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.V
 	return nil
 }
 
+// MergePR merges a PR via `gh pr merge --squash --delete-branch`. The
+// squash strategy is hardcoded for now — merge strategy configuration
+// is out of scope for M4.
+func (c *Client) MergePR(ctx context.Context, prNumber int) error {
+	_, err := c.runner.Run(ctx, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber),
+		"--squash", "--delete-branch")
+	if err != nil {
+		return fmt.Errorf("merging PR #%d: %w", prNumber, err)
+	}
+	slog.Info("PR merged", "pr", prNumber)
+	return nil
+}
+
 // FormatPRBody generates a PR body from task data.
 func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 	var b strings.Builder

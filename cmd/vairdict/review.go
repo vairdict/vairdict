@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -74,6 +75,7 @@ type reviewDeps struct {
 	stdout    io.Writer
 	intent    string // resolved value of --intent (empty = derive from linked issue)
 	noComment bool   // resolved value of --no-comment
+	autoMerge bool   // when true, auto-merge after passing verdict
 }
 
 // reviewGH is the narrow GitHub surface the review command depends on.
@@ -83,6 +85,7 @@ type reviewGH interface {
 	FetchIssue(ctx context.Context, n int) (*github.IssueDetails, error)
 	FetchPRDiff(ctx context.Context, n int) (string, error)
 	PostVerdict(ctx context.Context, n int, v *state.Verdict, p state.Phase, loop int) error
+	MergePR(ctx context.Context, n int) error
 }
 
 // reviewJudge is the narrow judge surface; *quality.QualityJudge satisfies
@@ -127,6 +130,7 @@ func runReview(prNumber int) error {
 		stdout:    os.Stdout,
 		intent:    reviewIntentFlag,
 		noComment: reviewNoCommentFlag,
+		autoMerge: cfg.AutoVairdict,
 	})
 }
 
@@ -167,6 +171,14 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 
 	if !verdict.Pass {
 		return fmt.Errorf("verdict failed: score %.0f%%", verdict.Score)
+	}
+
+	if deps.autoMerge {
+		if err := deps.gh.MergePR(ctx, prNumber); err != nil {
+			slog.Warn("auto-merge failed", "pr", prNumber, "error", err)
+		} else {
+			_, _ = fmt.Fprintf(deps.stdout, "auto-merged PR #%d\n", prNumber)
+		}
 	}
 	return nil
 }

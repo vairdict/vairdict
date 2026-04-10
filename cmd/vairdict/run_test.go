@@ -512,10 +512,12 @@ type fakeGHOrch struct {
 	pr         *github.PR
 	prErr      error
 	verdictErr error
+	mergeErr   error
 
 	branchCalled  bool
 	prCalled      bool
 	verdictCalled bool
+	mergeCalled   bool
 }
 
 func (f *fakeGHOrch) CreateBranch(context.Context, string, string) (string, error) {
@@ -531,6 +533,11 @@ func (f *fakeGHOrch) CreatePR(context.Context, github.CreatePROpts) (*github.PR,
 func (f *fakeGHOrch) PostVerdict(context.Context, int, *state.Verdict, state.Phase, int) error {
 	f.verdictCalled = true
 	return f.verdictErr
+}
+
+func (f *fakeGHOrch) MergePR(context.Context, int) error {
+	f.mergeCalled = true
+	return f.mergeErr
 }
 
 // orchBundle groups the fakes so tests can inspect them after a run.
@@ -772,5 +779,60 @@ func TestRunOrchestration_BranchCreationFailure(t *testing.T) {
 	}
 	if b.escalationCalled {
 		t.Error("branch failure should not trigger escalation")
+	}
+}
+
+func TestRunOrchestration_AutoMerge_Enabled(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.autoMerge = true
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !b.gh.mergeCalled {
+		t.Error("MergePR should be called when autoMerge is enabled and verdict passes")
+	}
+}
+
+func TestRunOrchestration_AutoMerge_Disabled(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.autoMerge = false
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b.gh.mergeCalled {
+		t.Error("MergePR should NOT be called when autoMerge is disabled")
+	}
+}
+
+func TestRunOrchestration_AutoMerge_FailureDoesNotFailRun(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	b.gh.mergeErr = errors.New("merge conflict")
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.autoMerge = true
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if err != nil {
+		t.Fatalf("auto-merge failure should not fail the run, got %v", err)
+	}
+	if !b.gh.mergeCalled {
+		t.Error("MergePR should have been attempted")
 	}
 }
