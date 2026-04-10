@@ -118,6 +118,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - No performance degradation at 5 concurrent tasks
 
 **Issues:**
+- [ ] #72 judge/review: inline PR review comments on specific diff lines
 - [ ] workspace: isolated workspace per task (git worktree)
 - [ ] parallel: agent spawning per phase
 - [ ] deps: task dependency graph
