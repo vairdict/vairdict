@@ -130,6 +130,7 @@ type ghOrchestrator interface {
 	CreateBranch(ctx context.Context, taskID, intent string) (string, error)
 	CreatePR(ctx context.Context, opts github.CreatePROpts) (*github.PR, error)
 	PostVerdict(ctx context.Context, prNumber int, v *state.Verdict, phase state.Phase, loop int) error
+	MergePR(ctx context.Context, prNumber int) error
 }
 
 // runDeps bundles all dependencies the orchestration loop needs.
@@ -141,6 +142,7 @@ type runDeps struct {
 	commit       func(ctx context.Context, task *state.Task) error
 	onEscalation func(ctx context.Context, task *state.Task, result escalation.Result) error
 	issueNumber  int
+	autoMerge    bool
 }
 
 // --- Default (production) phase runner implementations ---
@@ -192,6 +194,7 @@ func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, wo
 			return escalateAndExit(ctx, task, result, cfg.Escalation, ghClient)
 		},
 		issueNumber: issueFlag,
+		autoMerge:   cfg.AutoVairdict,
 	}
 }
 
@@ -387,6 +390,15 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 				slog.Warn("failed to post verdict comment", "error", err)
 			} else {
 				r.VerdictPosted(lastVerdict.Score, lastVerdict.Pass)
+			}
+		}
+
+		// --- Auto-merge if enabled and verdict passed ---
+		if deps.autoMerge && lastVerdict != nil && lastVerdict.Pass {
+			if err := deps.gh.MergePR(ctx, pr.Number); err != nil {
+				slog.Warn("auto-merge failed", "error", err)
+			} else {
+				r.Note("auto-merge", fmt.Sprintf("PR #%d merged", pr.Number))
 			}
 		}
 	}

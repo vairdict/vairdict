@@ -6,6 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
+	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -17,6 +18,16 @@ If a task ID is provided, show detailed information including the full
 verdict history, assumptions, and attempts.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Show auto-vairdict status from config.
+		cfg, cfgErr := config.LoadConfig("vairdict.yaml")
+		if cfgErr == nil {
+			autoMerge := "disabled"
+			if cfg.AutoVairdict {
+				autoMerge = "enabled"
+			}
+			fmt.Printf("auto-vairdict: %s\n\n", autoMerge)
+		}
+
 		dbPath, err := state.DefaultDBPath()
 		if err != nil {
 			return fmt.Errorf("resolving database path: %w", err)

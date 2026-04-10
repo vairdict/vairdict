@@ -19,6 +19,7 @@ func successRunner() *FakeRunner {
 			"gh pr create":  {Output: []byte("https://github.com/foo/bar/pull/1\n")},
 			"gh pr comment": {Output: []byte("ok")},
 			"gh pr review":  {Output: []byte("ok")},
+			"gh pr merge":   {Output: []byte("ok")},
 		},
 	}
 }
@@ -274,6 +275,61 @@ func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
 	}
 	if !foundComment {
 		t.Error("expected gh pr comment to be called for failing verdict")
+	}
+}
+
+func TestMergePR_Success(t *testing.T) {
+	runner := successRunner()
+	client := New(runner)
+
+	err := client.MergePR(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	found := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 3 &&
+			call.Args[0] == "pr" && call.Args[1] == "merge" && call.Args[2] == "42" {
+			found = true
+			// Verify squash + delete-branch flags
+			hasSquash := false
+			hasDelete := false
+			for _, a := range call.Args {
+				if a == "--squash" {
+					hasSquash = true
+				}
+				if a == "--delete-branch" {
+					hasDelete = true
+				}
+			}
+			if !hasSquash {
+				t.Error("expected --squash flag")
+			}
+			if !hasDelete {
+				t.Error("expected --delete-branch flag")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected gh pr merge to be called")
+	}
+}
+
+func TestMergePR_Error(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh pr merge": {Err: errors.New("merge conflict")},
+		},
+	}
+	client := New(runner)
+
+	err := client.MergePR(context.Background(), 99)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, err) {
+		t.Errorf("error not wrapped properly: %v", err)
 	}
 }
 

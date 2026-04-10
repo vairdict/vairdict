@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
-	Project     ProjectConfig     `yaml:"project"`
-	Agents      AgentsConfig      `yaml:"agents"`
-	Environment EnvironmentConfig `yaml:"environment"`
-	Commands    CommandsConfig    `yaml:"commands"`
-	Phases      PhasesConfig      `yaml:"phases"`
-	Escalation  EscalationConfig  `yaml:"escalation"`
-	Conventions ConventionsConfig `yaml:"conventions"`
+	Project      ProjectConfig     `yaml:"project"`
+	Agents       AgentsConfig      `yaml:"agents"`
+	Environment  EnvironmentConfig `yaml:"environment"`
+	Commands     CommandsConfig    `yaml:"commands"`
+	Phases       PhasesConfig      `yaml:"phases"`
+	Escalation   EscalationConfig  `yaml:"escalation"`
+	Conventions  ConventionsConfig `yaml:"conventions"`
+	AutoVairdict bool              `yaml:"auto_vairdict"`
 }
 
 type ProjectConfig struct {
@@ -410,7 +411,7 @@ func warnUnknownFields(data []byte) {
 	known := map[string]bool{
 		"project": true, "agents": true, "environment": true,
 		"commands": true, "phases": true, "escalation": true,
-		"conventions": true,
+		"conventions": true, "auto_vairdict": true,
 	}
 
 	var raw map[string]any
