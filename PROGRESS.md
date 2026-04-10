@@ -11,12 +11,15 @@ Update this file when opening, completing, or blocking an issue.
 
 ## Ready to Start
 - #39 cmd/auto-vairdict: auto-merge on passing verdict
+- #66 release: GoReleaser + signed v0.0.x artifacts + install script
 
 ## In Progress
 - none
 
 ## Blocked
-- none
+- #67 action: GitHub Action wrapper published to marketplace (blocked on #66)
+- #68 action/auto-review: run quality judge on every PR push (blocked on #67)
+- #69 docs: README quickstart + dogfooding story (blocked on #66, #67)
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -142,7 +145,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
-| M4        | not started | 0/5         |
+| M4        | in progress | 0/5         |
 | M5        | not started | 0/6         |
 | M6        | not started | 0/5         |
 | M7+       | not started | —           |
