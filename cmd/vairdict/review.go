@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -174,9 +175,10 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 
 	if deps.autoMerge {
 		if err := deps.gh.MergePR(ctx, prNumber); err != nil {
-			return fmt.Errorf("auto-merge PR #%d: %w", prNumber, err)
+			slog.Warn("auto-merge failed", "pr", prNumber, "error", err)
+		} else {
+			_, _ = fmt.Fprintf(deps.stdout, "auto-merged PR #%d\n", prNumber)
 		}
-		_, _ = fmt.Fprintf(deps.stdout, "auto-merged PR #%d\n", prNumber)
 	}
 	return nil
 }

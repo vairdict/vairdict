@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/state"
@@ -328,8 +329,8 @@ func TestMergePR_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !errors.Is(err, err) {
-		t.Errorf("error not wrapped properly: %v", err)
+	if !strings.Contains(err.Error(), "merge conflict") {
+		t.Errorf("expected wrapped merge conflict error, got: %v", err)
 	}
 }
 

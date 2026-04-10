@@ -324,7 +324,7 @@ func TestRunReview_AutoMerge_FailingVerdict_NoMerge(t *testing.T) {
 	}
 }
 
-func TestRunReview_AutoMerge_Error_Propagates(t *testing.T) {
+func TestRunReview_AutoMerge_Error_WarnsOnly(t *testing.T) {
 	t.Parallel()
 	gh := &fakeReviewGH{
 		pr:       &github.PRDetails{Number: 10, Body: "Closes #11"},
@@ -337,11 +337,11 @@ func TestRunReview_AutoMerge_Error_Propagates(t *testing.T) {
 	deps := baseDeps(gh, judge)
 	deps.autoMerge = true
 
-	err := runReviewWith(context.Background(), 10, deps)
-	if err == nil {
-		t.Fatal("expected auto-merge error")
+	// Auto-merge failure should warn, not error — the verdict still passed.
+	if err := runReviewWith(context.Background(), 10, deps); err != nil {
+		t.Fatalf("auto-merge failure should not propagate as error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "auto-merge") {
-		t.Errorf("error should mention auto-merge, got: %v", err)
+	if !gh.mergeCalled {
+		t.Error("expected MergePR to be called")
 	}
 }
