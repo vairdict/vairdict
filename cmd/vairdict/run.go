@@ -106,6 +106,95 @@ func fileExistsFunc(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// --- Orchestration interfaces ---
+//
+// These describe what the run orchestrator needs from each subsystem.
+// Production uses defaultRunDeps; tests inject fakes. Interfaces are
+// co-located here (not in the subsystem packages) because they describe
+// the orchestrator's requirements, not the implementations' capabilities.
+
+type planRunner interface {
+	Run(ctx context.Context, task *state.Task) (*planphase.PhaseResult, error)
+}
+
+type codeRunner interface {
+	Run(ctx context.Context, task *state.Task, plan string) (*codephase.PhaseResult, error)
+}
+
+type qualityRunner interface {
+	Run(ctx context.Context, task *state.Task, plan string) (*qualityphase.PhaseResult, error)
+}
+
+// ghOrchestrator is the subset of github.Client the orchestrator needs.
+type ghOrchestrator interface {
+	CreateBranch(ctx context.Context, taskID, intent string) (string, error)
+	CreatePR(ctx context.Context, opts github.CreatePROpts) (*github.PR, error)
+	PostVerdict(ctx context.Context, prNumber int, v *state.Verdict, phase state.Phase, loop int) error
+}
+
+// runDeps bundles all dependencies the orchestration loop needs.
+type runDeps struct {
+	plan         planRunner
+	code         codeRunner
+	quality      qualityRunner
+	gh           ghOrchestrator
+	commit       func(ctx context.Context, task *state.Task) error
+	onEscalation func(ctx context.Context, task *state.Task, result escalation.Result) error
+	issueNumber  int
+}
+
+// --- Default (production) phase runner implementations ---
+
+type defaultPlanRunner struct {
+	cfg    *config.Config
+	client completer
+	store  *state.Store
+	r      ui.Renderer
+}
+
+func (d *defaultPlanRunner) Run(ctx context.Context, task *state.Task) (*planphase.PhaseResult, error) {
+	return runPlanPhase(ctx, d.cfg, d.client, d.store, task, d.r)
+}
+
+type defaultCodeRunner struct {
+	cfg     *config.Config
+	store   *state.Store
+	workDir string
+	r       ui.Renderer
+}
+
+func (d *defaultCodeRunner) Run(ctx context.Context, task *state.Task, plan string) (*codephase.PhaseResult, error) {
+	return runCodePhase(ctx, d.cfg, d.store, task, plan, d.workDir, d.r)
+}
+
+type defaultQualityRunner struct {
+	cfg     *config.Config
+	client  completer
+	store   *state.Store
+	workDir string
+	r       ui.Renderer
+}
+
+func (d *defaultQualityRunner) Run(ctx context.Context, task *state.Task, plan string) (*qualityphase.PhaseResult, error) {
+	return runQualityPhase(ctx, d.cfg, d.client, d.store, task, plan, d.workDir, d.r)
+}
+
+func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client) runDeps {
+	return runDeps{
+		plan:    &defaultPlanRunner{cfg: cfg, client: client, store: store, r: r},
+		code:    &defaultCodeRunner{cfg: cfg, store: store, workDir: workDir, r: r},
+		quality: &defaultQualityRunner{cfg: cfg, client: client, store: store, workDir: workDir, r: r},
+		gh:      ghClient,
+		commit: func(ctx context.Context, task *state.Task) error {
+			return commitChanges(ctx, task, workDir, r)
+		},
+		onEscalation: func(ctx context.Context, task *state.Task, result escalation.Result) error {
+			return escalateAndExit(ctx, task, result, cfg.Escalation, ghClient)
+		},
+		issueNumber: issueFlag,
+	}
+}
+
 func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
 	// Resolve overlay path from --env / CI auto-detect.
 	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
@@ -192,8 +281,16 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	ghRunner := &github.ExecRunner{Dir: workDir}
 	ghClient := github.New(ghRunner)
 
+	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient)
+	return runOrchestration(ctx, deps, task, r)
+}
+
+// runOrchestration is the testable core of runTask. It receives all
+// dependencies via deps so tests can substitute fakes for every
+// external interaction (phases, GitHub, git commit, escalation).
+func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.Renderer) error {
 	// --- Plan phase ---
-	planResult, err := runPlanPhase(ctx, cfg, client, store, task, r)
+	planResult, err := deps.plan.Run(ctx, task)
 	if err != nil {
 		r.Error(err)
 		return err
@@ -202,16 +299,16 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	if planResult.Escalate {
 		gaps := lastGapsForPhase(task, state.PhasePlan)
 		r.Escalation(task.ID, state.PhasePlan, planResult.Loops, planResult.LastScore, gaps)
-		return escalateAndExit(ctx, task, escalation.Result{
+		return deps.onEscalation(ctx, task, escalation.Result{
 			Phase:     state.PhasePlan,
 			Loops:     planResult.Loops,
 			LastScore: planResult.LastScore,
 			Gaps:      gaps,
-		}, cfg.Escalation, ghClient)
+		})
 	}
 
 	// --- Create branch before code phase so commits land on it ---
-	branch, err := ghClient.CreateBranch(ctx, task.ID, task.Intent)
+	branch, err := deps.gh.CreateBranch(ctx, task.ID, task.Intent)
 	if err != nil {
 		r.Error(err)
 		return fmt.Errorf("creating branch: %w", err)
@@ -219,7 +316,7 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	r.Note("branch", branch)
 
 	// --- Code phase ---
-	codeResult, err := runCodePhase(ctx, cfg, store, task, planResult.Plan, workDir, r)
+	codeResult, err := deps.code.Run(ctx, task, planResult.Plan)
 	if err != nil {
 		r.Error(err)
 		return err
@@ -228,22 +325,22 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	if codeResult.Escalate {
 		gaps := lastGapsForPhase(task, state.PhaseCode)
 		r.Escalation(task.ID, state.PhaseCode, codeResult.Loops, codeResult.LastScore, gaps)
-		return escalateAndExit(ctx, task, escalation.Result{
+		return deps.onEscalation(ctx, task, escalation.Result{
 			Phase:     state.PhaseCode,
 			Loops:     codeResult.Loops,
 			LastScore: codeResult.LastScore,
 			Gaps:      gaps,
-		}, cfg.Escalation, ghClient)
+		})
 	}
 
 	// --- Commit any changes the coder made ---
-	if err := commitChanges(ctx, task, workDir, r); err != nil {
+	if err := deps.commit(ctx, task); err != nil {
 		r.Error(err)
 		return err
 	}
 
 	// --- Quality phase (gates the PR) ---
-	qualityResult, err := runQualityPhase(ctx, cfg, client, store, task, planResult.Plan, workDir, r)
+	qualityResult, err := deps.quality.Run(ctx, task, planResult.Plan)
 	if err != nil {
 		r.Error(err)
 		return err
@@ -257,26 +354,35 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 		// needed.
 		gaps := lastGapsForPhase(task, state.PhaseQuality)
 		r.Escalation(task.ID, state.PhaseQuality, qualityResult.Loops, qualityResult.LastScore, gaps)
-		return escalateAndExit(ctx, task, escalation.Result{
+		return deps.onEscalation(ctx, task, escalation.Result{
 			Phase:     state.PhaseQuality,
 			Loops:     qualityResult.Loops,
 			LastScore: qualityResult.LastScore,
 			Gaps:      gaps,
-		}, cfg.Escalation, ghClient)
+		})
 	}
 
 	// --- Create GitHub PR (only after quality passes) ---
-	pr, err := createPR(ctx, task, workDir, branch, r)
+	title := github.GeneratePRTitle(task)
+	body := github.FormatPRBody(task, deps.issueNumber, "Implemented via VAIrdict run")
+	pr, err := deps.gh.CreatePR(ctx, github.CreatePROpts{
+		Title:       title,
+		Body:        body,
+		BaseBranch:  "main",
+		HeadBranch:  branch,
+		IssueNumber: deps.issueNumber,
+	})
 	if err != nil {
 		r.Error(err)
-		return err
+		return fmt.Errorf("creating PR: %w", err)
 	}
+	r.PRCreated(pr.URL)
 
 	// --- Post quality verdict comment on PR ---
 	if pr.Number > 0 {
 		lastVerdict := lastVerdictForPhase(task, state.PhaseQuality)
 		if lastVerdict != nil {
-			if err := ghClient.PostVerdict(ctx, pr.Number, lastVerdict, state.PhaseQuality, qualityResult.Loops); err != nil {
+			if err := deps.gh.PostVerdict(ctx, pr.Number, lastVerdict, state.PhaseQuality, qualityResult.Loops); err != nil {
 				// Log but don't fail the whole run for a comment posting failure.
 				slog.Warn("failed to post verdict comment", "error", err)
 			} else {
@@ -517,29 +623,6 @@ func execCommandInDir(dir string, name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	return cmd.CombinedOutput()
-}
-
-func createPR(ctx context.Context, task *state.Task, workDir string, branch string, r ui.Renderer) (*github.PR, error) {
-	ghRunner := &github.ExecRunner{Dir: workDir}
-	ghClient := github.New(ghRunner)
-
-	// Build PR content.
-	title := github.GeneratePRTitle(task)
-	body := github.FormatPRBody(task, issueFlag, "Implemented via VAIrdict run")
-
-	pr, err := ghClient.CreatePR(ctx, github.CreatePROpts{
-		Title:       title,
-		Body:        body,
-		BaseBranch:  "main",
-		HeadBranch:  branch,
-		IssueNumber: issueFlag,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("creating PR: %w", err)
-	}
-
-	r.PRCreated(pr.URL)
-	return pr, nil
 }
 
 // lastVerdictForPhase returns the verdict from the last attempt of the given phase.
