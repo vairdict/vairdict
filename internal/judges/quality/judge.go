@@ -71,11 +71,16 @@ You MUST respond with valid JSON only — no markdown, no explanation outside th
 
 Severity levels for gaps:
 - P0: intent mismatch — the code does not solve the stated problem or is fundamentally wrong
-- P1: significant gap — major feature or requirement is missing or broken
-- P2: minor issue — small improvements, edge cases, or polish items
+- P1: significant gap — major feature or requirement is missing or broken.
+  This includes any correctness bug in production code OR test code, such as:
+  tautological assertions (e.g. errors.Is(err, err)), unreachable branches,
+  tests that can never fail, wrong variable compared, dead code that masks
+  missing coverage.
+- P2: minor issue — style, naming, docs, minor edge cases that do not affect correctness
 - P3: nice to have — deferred to future work
 
 For each gap, set "blocking" to true only for P0 and P1 severity.
+A correctness bug is ALWAYS at least P1, never P2 — even if it is in test code.
 
 Score is a float from 0 to 100 representing how well the implementation fulfills the intent.
 Set pass to true if the implementation adequately fulfills the intent (score >= 70).
