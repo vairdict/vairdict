@@ -5,18 +5,18 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M3 — Quality Phase
+## Current Milestone: M4 — Distribution
 
 ---
 
 ## Ready to Start
-- none
+- #39 cmd/auto-vairdict: auto-merge on passing verdict
 
 ## In Progress
-- #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
+- none
 
 ## Blocked
-- #39 cmd/auto-vairdict: auto-merge on passing verdict (blocked on M3 complete)
+- none
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -47,6 +47,7 @@ Update this file when opening, completing, or blocking an issue.
 - #48 cmd: `vairdict review <pr>` — judge an existing PR
 - #63 ui: VAIrdict logo in PR verdict comment header
 - #36 dogfood: first full three-phase task on vairdict
+- #51 test: orchestration coverage for runTask + runQualityPhase (DI refactor)
 
 ---
 
@@ -140,7 +141,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M0        | done        | 1/1         |
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
-| M3        | in progress | 14/15       |
+| M3        | done        | 15/15       |
 | M4        | not started | 0/5         |
 | M5        | not started | 0/6         |
 | M6        | not started | 0/5         |
