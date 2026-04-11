@@ -5,12 +5,14 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M5 — Parallelism
+## Current Milestone: M4 — Distribution
 
 ---
 
 ## Ready to Start
-- none (M5 issues not yet opened)
+- #60 judge/security: scan diff for security issues in quality judge
+- #61 judge/code-reuse: detect duplicated logic in quality judge
+- #62 judge/style: maintainability + readability checks in quality judge
 
 ## In Progress
 - none
@@ -147,7 +149,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
-| M4        | done        | 5/5         |
+| M4        | in progress | 5/8         |
 | M5        | not started | 0/6         |
 | M6        | not started | 0/5         |
 | M7+       | not started | —           |
