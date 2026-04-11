@@ -82,6 +82,50 @@ Severity levels for gaps:
 For each gap, set "blocking" to true only for P0 and P1 severity.
 A correctness bug is ALWAYS at least P1, never P2 — even if it is in test code.
 
+## Additional checks
+
+In addition to intent/plan alignment, scan the diff for the following.
+These are supplementary — they should NOT lower the score below the pass
+threshold on their own. Report them as non-blocking gaps (P2 or P3).
+
+### Security (P2 non-blocking)
+Flag any of these patterns visible in the diff:
+- Hardcoded secrets, API keys, tokens, or passwords (look for string literals
+  assigned to variables named key, secret, token, password, etc.)
+- SQL injection: string concatenation or fmt.Sprintf used to build queries
+  instead of parameterised queries
+- Command injection: unsanitised user input passed to exec.Command, os/exec,
+  subprocess, or shell invocations
+- Path traversal: user-controlled input used in file paths without sanitisation
+- Broken authentication or missing authorisation checks on new endpoints
+- Use of known-insecure crypto (MD5, SHA1 for security purposes, DES, RC4)
+- Disabled TLS verification or certificate checks
+
+Only flag what is actually visible in the diff. Do not speculate about code
+outside the diff.
+
+### Code reuse (P2 non-blocking)
+Flag duplicated or copy-pasted logic visible in the diff:
+- Two or more new functions/methods with near-identical bodies (>5 lines)
+- Copy-pasted blocks that differ only in variable names or literals
+- Re-implementation of logic that clearly exists in the same diff
+  (e.g. a helper is defined but not used, and the same logic is inlined)
+
+Only flag duplication within the diff itself — do not assume what exists
+in the rest of the codebase.
+
+### Style & maintainability (P3 non-blocking)
+Flag readability and maintainability issues visible in the diff:
+- Functions longer than ~80 lines (suggest splitting)
+- Magic numbers or string literals that should be named constants
+- Confusing or misleading variable/function names
+- Deeply nested control flow (>3 levels) that could be simplified
+- Missing error handling where errors are silently discarded (e.g. _ = fn())
+
+These are suggestions, not requirements. Use P3 severity.
+
+---
+
 Score is a float from 0 to 100 representing how well the implementation fulfills the intent.
 Set pass to true if the implementation adequately fulfills the intent (score >= 70).
 

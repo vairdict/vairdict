@@ -517,3 +517,61 @@ func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestJudge_SystemPromptContainsSecurityChecks(t *testing.T) {
+	// #60: security scanning instructions must be present in the system prompt.
+	for _, keyword := range []string{
+		"### Security",
+		"Hardcoded secrets",
+		"SQL injection",
+		"Command injection",
+		"Path traversal",
+		"insecure crypto",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing security keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptContainsCodeReuseChecks(t *testing.T) {
+	// #61: code-reuse detection instructions must be present in the system prompt.
+	for _, keyword := range []string{
+		"### Code reuse",
+		"duplicated",
+		"copy-pasted",
+		"near-identical",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing code-reuse keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptContainsStyleChecks(t *testing.T) {
+	// #62: style & maintainability instructions must be present in the system prompt.
+	for _, keyword := range []string{
+		"### Style",
+		"maintainability",
+		"Magic numbers",
+		"nested control flow",
+		"error handling",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing style keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SupplementaryChecksAreNonBlocking(t *testing.T) {
+	// The security / code-reuse / style sections must instruct P2/P3 non-blocking.
+	if !strings.Contains(systemPrompt, "P2 non-blocking") {
+		t.Error("system prompt should mark security and code-reuse checks as P2 non-blocking")
+	}
+	if !strings.Contains(systemPrompt, "P3 non-blocking") {
+		t.Error("system prompt should mark style checks as P3 non-blocking")
+	}
+	if !strings.Contains(systemPrompt, "should NOT lower the score below the pass") {
+		t.Error("system prompt should clarify supplementary checks don't block on their own")
+	}
+}
