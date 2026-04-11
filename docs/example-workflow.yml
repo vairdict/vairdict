@@ -1,0 +1,32 @@
+# Example: run VAIrdict review on every PR.
+#
+# Copy this file to .github/workflows/vairdict.yml in your repo.
+# Set ANTHROPIC_API_KEY as a repository secret.
+
+name: VAIrdict Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: vairdict/vairdict@v0
+        id: vairdict
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Gate on verdict
+        if: steps.vairdict.outputs.pass != 'true'
+        run: |
+          echo "VAIrdict verdict failed (score: ${{ steps.vairdict.outputs.score }})"
+          exit 1

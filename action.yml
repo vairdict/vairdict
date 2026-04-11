@@ -1,0 +1,81 @@
+name: "VAIrdict Review"
+description: "Run the VAIrdict quality judge on a pull request and post a verdict comment"
+author: "vairdict"
+
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  version:
+    description: "VAIrdict version to install (default: latest)"
+    required: false
+    default: "latest"
+  anthropic-api-key:
+    description: "Anthropic API key for the quality judge"
+    required: true
+  intent:
+    description: "Explicit intent text (overrides linked issue detection)"
+    required: false
+    default: ""
+
+outputs:
+  score:
+    description: "Quality score (0-100)"
+    value: ${{ steps.review.outputs.score }}
+  pass:
+    description: "Whether the verdict passed (true/false)"
+    value: ${{ steps.review.outputs.pass }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve PR number
+      id: pr
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "pull_request_target" ]; then
+          echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::VAIrdict Review action requires a pull_request or pull_request_target trigger"
+          exit 1
+        fi
+
+    - name: Install VAIrdict
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          curl -fsSL https://raw.githubusercontent.com/vairdict/vairdict/main/scripts/install.sh | INSTALL_DIR="${{ runner.temp }}" sh
+        else
+          curl -fsSL https://raw.githubusercontent.com/vairdict/vairdict/main/scripts/install.sh | INSTALL_DIR="${{ runner.temp }}" VERSION="$VERSION" sh
+        fi
+
+    - name: Run VAIrdict review
+      id: review
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        INTENT_FLAG=""
+        if [ -n "${{ inputs.intent }}" ]; then
+          INTENT_FLAG="--intent ${{ inputs.intent }}"
+        fi
+
+        # Run review; capture output but don't fail the step yet.
+        set +e
+        OUTPUT=$("${{ runner.temp }}/vairdict" review ${{ steps.pr.outputs.number }} $INTENT_FLAG 2>&1)
+        EXIT_CODE=$?
+        set -e
+
+        echo "$OUTPUT"
+
+        # Extract score from log line: "quality judge verdict score=NN pass=true/false"
+        SCORE=$(echo "$OUTPUT" | grep -o 'score=[0-9.]*' | head -1 | cut -d= -f2)
+        PASS=$(echo "$OUTPUT" | grep -o 'pass=[a-z]*' | head -1 | cut -d= -f2)
+
+        echo "score=${SCORE:-0}" >> "$GITHUB_OUTPUT"
+        echo "pass=${PASS:-false}" >> "$GITHUB_OUTPUT"
+
+        exit $EXIT_CODE
