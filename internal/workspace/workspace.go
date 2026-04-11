@@ -133,9 +133,11 @@ func (w *Workspace) Cleanup(ctx context.Context) error {
 }
 
 // PruneStale removes any leftover worktrees that were not cleaned up
-// (e.g. from a crashed process). It scans the base directory for
+// (e.g. from a crashed process). It asks git to prune its internal
+// worktree metadata, then scans the base directory and removes any
 // directories that are not registered as active worktrees.
 func (m *Manager) PruneStale(ctx context.Context) error {
+	// Let git clean up its own stale metadata first.
 	_, _ = m.runner.Run(ctx, m.repoRoot, "git", "worktree", "prune")
 
 	baseDir := filepath.Join(m.repoRoot, m.baseDir)
@@ -147,28 +149,44 @@ func (m *Manager) PruneStale(ctx context.Context) error {
 		return fmt.Errorf("reading worktree base dir: %w", err)
 	}
 
+	// Build a set of active worktree paths from git.
+	activeWorktrees := m.listActiveWorktrees(ctx)
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		worktreePath := filepath.Join(baseDir, entry.Name())
 
-		// Check if this directory is a registered worktree.
-		_, err := m.runner.Run(ctx, m.repoRoot, "git", "worktree", "list", "--porcelain")
-		if err != nil {
+		// Skip directories that are still active worktrees.
+		if activeWorktrees[worktreePath] {
 			continue
 		}
 
-		// If the directory exists but isn't in the worktree list, remove it.
-		// For simplicity, just try to remove it — git worktree remove will
-		// fail gracefully if it's still active.
-		_, rmErr := m.runner.Run(ctx, m.repoRoot, "git", "worktree", "remove", "--force", worktreePath)
-		if rmErr != nil {
-			_ = os.RemoveAll(worktreePath)
-		}
+		// Not an active worktree — remove the orphaned directory.
+		slog.Info("pruning stale worktree", "path", worktreePath)
+		_ = os.RemoveAll(worktreePath)
 	}
 
 	return nil
+}
+
+// listActiveWorktrees returns a set of absolute paths for all currently
+// registered git worktrees.
+func (m *Manager) listActiveWorktrees(ctx context.Context) map[string]bool {
+	out, err := m.runner.Run(ctx, m.repoRoot, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+
+	active := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			path := strings.TrimPrefix(line, "worktree ")
+			active[path] = true
+		}
+	}
+	return active
 }
 
 // resolveMainBranch returns the name of the main branch (main or master).
