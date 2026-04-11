@@ -10,7 +10,6 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #68 action/auto-review: run quality judge on every PR push
 - #69 docs: README quickstart + dogfooding story
 
 ## In Progress
@@ -52,6 +51,7 @@ Update this file when opening, completing, or blocking an issue.
 - #39 cmd/auto-vairdict: auto-merge on passing verdict
 - #66 release: GoReleaser + signed v0.0.x artifacts + install script
 - #67 action: GitHub Action wrapper published to marketplace
+- #68 action/auto-review: run quality judge on every PR push
 
 ---
 
@@ -146,7 +146,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M1        | done        | 9/9         |
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
-| M4        | in progress | 3/5         |
+| M4        | in progress | 4/5         |
 | M5        | not started | 0/6         |
 | M6        | not started | 0/5         |
 | M7+       | not started | —           |
