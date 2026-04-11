@@ -1,11 +1,11 @@
 {
   "lockfileVersion": 1,
-  "generated_at": "2026-04-03T19:50:04Z",
-  "generated_by": "spm@0.0.1",
+  "generated_at": "2026-04-11T14:24:24Z",
+  "generated_by": "spm@1.2.2",
   "skills": {
-    "ship": {
+    "@almog27/ship": {
       "version": "1.0.2",
-      "resolved": "/api/v1/skills/ship/1.0.2/download",
+      "resolved": "/api/v1/skills/@almog27/ship/1.0.2/download",
       "checksum": "2530a7f4a3038189646eeddcba402c3e54cf30290af579dcff4cae9df664be12",
       "source": "registry"
     }
