@@ -60,6 +60,26 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 curl -fsSL "$URL" -o "${TMPDIR}/${TARBALL}"
+
+# Verify checksum.
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/v${VERSION}/checksums.txt"
+curl -fsSL "$CHECKSUMS_URL" -o "${TMPDIR}/checksums.txt"
+EXPECTED="$(grep "${TARBALL}" "${TMPDIR}/checksums.txt" | awk '{print $1}')"
+if [ -z "$EXPECTED" ]; then
+  echo "Warning: no checksum found for ${TARBALL}, skipping verification" >&2
+else
+  if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL="$(sha256sum "${TMPDIR}/${TARBALL}" | awk '{print $1}')"
+  else
+    ACTUAL="$(shasum -a 256 "${TMPDIR}/${TARBALL}" | awk '{print $1}')"
+  fi
+  if [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo "Checksum mismatch! Expected ${EXPECTED}, got ${ACTUAL}" >&2
+    exit 1
+  fi
+  echo "Checksum verified."
+fi
+
 tar -xzf "${TMPDIR}/${TARBALL}" -C "$TMPDIR"
 
 # Install binary.
