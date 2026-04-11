@@ -1,0 +1,21 @@
+name: VAIrdict Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: vairdict/vairdict@main
+        id: vairdict
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
