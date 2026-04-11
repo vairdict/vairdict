@@ -1,105 +1,182 @@
-# VAIrdict
+<p align="center">
+  <img src="assets/logo.png" alt="VAIrdict" height="80">
+</p>
 
-VAIrdict is a development process engine that orchestrates 
-and judges AI-driven development across three phases: 
-plan, code, and quality.
+<h3 align="center">Development process engine that judges AI-driven development</h3>
 
-> This repository is built by the same system it implements.
-> Every PR goes through VAIrdict's three-layer process.
+<p align="center">
+  <a href="https://github.com/vairdict/vairdict/releases/latest"><img src="https://img.shields.io/github/v/release/vairdict/vairdict?label=release" alt="Latest Release"></a>
+  <a href="https://github.com/vairdict/vairdict/actions/workflows/release.yml"><img src="https://github.com/vairdict/vairdict/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://github.com/vairdict/vairdict/actions/workflows/vairdict.yml"><img src="https://github.com/vairdict/vairdict/actions/workflows/vairdict.yml/badge.svg" alt="VAIrdict Review"></a>
+</p>
 
-## How it works
+---
+
+VAIrdict runs tasks through three judged phases — **plan**, **code**, and **quality** — with automatic requeue on failure and human escalation after 3 loops. Every phase transition is gated by a judge, not just the final output.
+
 ```
 HUMAN: writes intent
-         ↓
-PLAN PHASE
-├── Planner: expands intent into requirements + plan
-└── Judge: scores plan, flags gaps, blocks if <85% coverage
-         ↓
-CODE PHASE
-├── Coder: implements plan step by step
-└── Judge: lint, test, build, scope check
-         ↓
-QUALITY PHASE
-├── Reviewer: documents, e2e, integration tests
-└── Judge: full system check vs original intent
-         ↓
-OUTPUT: verified, production-ready PR
+         |
+   PLAN PHASE
+   |-- Planner: expands intent into requirements + plan
+   '-- Judge: scores plan, flags gaps, blocks if incomplete
+         |
+   CODE PHASE
+   |-- Coder: implements plan step by step
+   '-- Judge: lint, test, build, scope check
+         |
+   QUALITY PHASE
+   |-- Reviewer: checks diff against original intent
+   '-- Judge: full system check vs original intent
+         |
+   OUTPUT: verified, production-ready PR
 ```
 
-After 3 failed loops → escalated to human.
+After 3 failed loops in any phase, the task escalates to a human.
 
-## Quick start
+## Install
+
+**curl (Mac / Linux):**
 ```bash
-# Install
-curl -fsSL vairdict.dev/install | sh
+curl -fsSL https://raw.githubusercontent.com/vairdict/vairdict/main/scripts/install.sh | sh
+```
 
-# Initialize in your repo
+**Go:**
+```bash
+go install github.com/vairdict/vairdict/cmd/vairdict@latest
+```
+
+**GitHub Action** (review every PR automatically):
+```yaml
+# .github/workflows/vairdict.yml
+name: VAIrdict Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vairdict/vairdict@main
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+## Quickstart
+
+```bash
+# Initialize in your repo — generates vairdict.yaml
 vairdict init
 
-# Run a task
+# Run a full plan -> code -> quality loop
 vairdict run "add forgot password flow"
 
-# Check status
-vairdict status
+# Or run from a GitHub issue
+vairdict run --issue 42
+
+# Judge an existing PR without the full loop
+vairdict review 73
 ```
 
-## Agent roles & backends
+## Configuration
 
-Each phase has its own agent role with a different job. They are
-configured separately under `agents:` in `vairdict.yaml`.
+VAIrdict is configured via `vairdict.yaml` at the repo root. `vairdict init` generates one for you.
 
 ```yaml
+project:
+  name: my-app
+  language: go
+
 agents:
-  planner: claude       # generates the plan from the intent
+  planner: claude       # generates the plan
   coder:   claude-code  # writes the code
-  judge:   claude       # scores plan, code, and quality
+  judge:   claude       # scores every phase
+
+commands:
+  build: make build
+  test:  make test
+  lint:  make lint
+
+phases:
+  plan:
+    max_loops: 3
+  code:
+    max_loops: 3
+  quality:
+    max_loops: 3
+    e2e_required: false
 ```
 
-There are two **kinds** of agent roles, and they accept different values:
+### Environment overlays
 
-### Completer roles — `planner`, `judge`
+Drop `vairdict.<env>.yaml` next to the base config to override settings per environment:
 
-Stateless: prompt in, structured JSON out, no tools, no file edits.
-Used by the planner and the three judges. Accepted values:
+```bash
+vairdict run --env ci "deploy the thing"
+```
 
-| value        | meaning |
-|--------------|---------|
-| `claude`     | smart default — try local CLI, fall back to HTTP API |
-| `claude-cli` | strict: shell out to the local `claude` binary (errors if not on PATH) |
-| `claude-api` | strict: HTTP call against api.anthropic.com (errors if no API key) |
+`vairdict.ci.yaml` is auto-loaded when `CI=true`. Typical use: local dev uses `claude` (CLI fallback), CI uses `claude-api` with an API key.
 
-`claude-cli` is the zero-auth path: if you have the `claude` binary
-installed and logged in, vairdict reuses your subscription session — no
-API key needed. CI environments without an interactive login set
-`claude-api` (or use the `vairdict.ci.yaml` overlay).
+### Agent backends
 
-### Coder role — `coder`
+**Completer roles** (`planner`, `judge`) — stateless prompt-in, JSON-out:
 
-Agentic: reads files, edits files, runs shell commands, runs tests.
-This is fundamentally different from a completer — the output is **side
-effects on your working directory**, not a JSON struct. Currently the
-only supported value is:
+| Value | Meaning |
+|-------|---------|
+| `claude` | Smart default — try local CLI, fall back to HTTP API |
+| `claude-cli` | Local `claude` binary only (no API key needed) |
+| `claude-api` | HTTP API only (requires `ANTHROPIC_API_KEY`) |
 
-| value         | meaning |
-|---------------|---------|
-| `claude-code` | the local Claude Code agent (the `claude` binary in agentic mode) |
+**Coder role** — agentic, edits files, runs commands:
 
-`claude-code` and `claude-cli` happen to invoke the same `claude`
-binary, but they use it for entirely different jobs: `claude-cli` runs
-it as a one-shot JSON function (`claude -p --output-format json`),
-while `claude-code` runs it as a long-running autonomous agent that
-modifies your filesystem (`claude -p --dangerously-skip-permissions`).
-There is no HTTP equivalent of `claude-code` because no HTTP endpoint
-edits your filesystem and runs your tests for you.
+| Value | Meaning |
+|-------|---------|
+| `claude-code` | Claude Code agent in autonomous mode |
 
-## How agents use this repo
+## Architecture
 
-See [AGENTS.md](./AGENTS.md) for how the three-layer
-agent team operates on this codebase.
+```
+cmd/vairdict/        CLI entrypoint (cobra)
+internal/
+  phases/
+    plan/            Plan phase orchestration
+    code/            Code phase orchestration
+    quality/         Quality phase orchestration
+  judges/
+    plan/            Plan judge: scores vs requirements
+    code/            Code judge: lint, test, build
+    quality/         Quality judge: diff vs intent
+  agents/
+    claude/          Anthropic API client
+    claudecli/       Claude CLI wrapper
+    claudecode/      Claude Code agent runner
+  github/            PR creation, verdict comments
+  escalation/        Loop limit + human notification
+  config/            vairdict.yaml parsing
+  state/             Task state machine + SQLite
+```
 
-## Status
+## Built with VAIrdict
 
-🚧 Active development — built by VAIrdict itself.
+This repository is built by the same system it implements. Every PR goes through VAIrdict's three-phase process.
+
+| Milestone | What happened |
+|-----------|--------------|
+| **M0-M1** | VAIrdict doesn't exist yet — human judges all PRs manually |
+| **M2** | Plan + code phases working — agents write code, ship skill judges it |
+| **M3** | Full loop — quality judge gates every PR, escalation works, first dogfood task runs end-to-end |
+| **M4** | Distribution — GoReleaser, GitHub Action, auto-review on every PR to this repo |
+
+From M3 onwards, `vairdict run` is the only way to open a PR. No PR merges without a passing verdict. The judge has caught real bugs during development — including shell injection vulnerabilities in the GitHub Action that were fixed in the same review loop.
+
+## Contributing
+
+Read [CLAUDE.md](./CLAUDE.md) for architecture, conventions, and how to pick up issues. Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ## License
 
