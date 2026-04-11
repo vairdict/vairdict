@@ -328,12 +328,14 @@ func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error
 	return nil
 }
 
-// cannotApproveOwnPRRe matches the GitHub API error returned when the
-// authenticated user tries to approve a PR they authored. We detect this
-// (rather than failing the run) so PostVerdict can gracefully fall back
-// to a regular comment — discovered via dogfooding `vairdict review` on
-// a self-authored PR.
-var cannotApproveOwnPRRe = regexp.MustCompile(`(?i)can ?not approve your own pull request`)
+// cannotApprovePRRe matches GitHub API errors when the authenticated
+// user/token is not permitted to approve a PR. Two known cases:
+//  1. Self-authored PR: "Can not approve your own pull request"
+//  2. GitHub Actions token: "GitHub Actions is not permitted to approve pull requests"
+//
+// We detect these (rather than failing the run) so PostVerdict can
+// gracefully fall back to a regular comment.
+var cannotApprovePRRe = regexp.MustCompile(`(?i)(can ?not approve your own pull request|is not permitted to approve pull requests)`)
 
 // PostVerdict posts a structured verdict comment on a PR. On pass, it
 // tries to approve via the review API; if GitHub refuses because the PR
@@ -348,12 +350,12 @@ func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.V
 			slog.Info("verdict posted", "pr", prNumber, "pass", true, "score", verdict.Score, "mode", "approval")
 			return nil
 		}
-		if !cannotApproveOwnPRRe.MatchString(err.Error()) {
+		if !cannotApprovePRRe.MatchString(err.Error()) {
 			return fmt.Errorf("posting verdict approval: %w", err)
 		}
-		// Self-authored PR — gh refuses approval. Fall through to a
-		// plain comment so the verdict still gets posted.
-		slog.Info("approval rejected (self-authored PR), falling back to comment", "pr", prNumber)
+		// Approval denied (self-authored PR or Actions token restriction).
+		// Fall through to a plain comment so the verdict still gets posted.
+		slog.Info("approval rejected, falling back to comment", "pr", prNumber, "reason", err)
 	}
 
 	if err := c.AddComment(ctx, prNumber, comment); err != nil {

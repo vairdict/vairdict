@@ -228,6 +228,32 @@ func TestPostVerdict_Pass_SelfAuthored_FallsBackToComment(t *testing.T) {
 	}
 }
 
+func TestPostVerdict_Pass_ActionsTokenDenied_FallsBackToComment(t *testing.T) {
+	// GitHub Actions tokens cannot approve PRs unless explicitly allowed
+	// in repo settings. PostVerdict should fall back to a comment.
+	runner := successRunner()
+	runner.Responses["gh pr review"] = fakeResponse{
+		Err: errors.New("failed to create review: GraphQL: GitHub Actions is not permitted to approve pull requests. (addPullRequestReview)"),
+	}
+	client := New(runner)
+
+	verdict := &state.Verdict{Score: 95, Pass: true}
+	err := client.PostVerdict(context.Background(), 75, verdict, state.PhaseQuality, 1)
+	if err != nil {
+		t.Fatalf("expected fallback to comment, got error: %v", err)
+	}
+
+	foundComment := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[0] == "pr" && call.Args[1] == "comment" {
+			foundComment = true
+		}
+	}
+	if !foundComment {
+		t.Error("expected fallback to gh pr comment after Actions approval rejection")
+	}
+}
+
 func TestPostVerdict_Pass_OtherApprovalError_Propagates(t *testing.T) {
 	runner := successRunner()
 	runner.Responses["gh pr review"] = fakeResponse{Err: errors.New("network error")}
