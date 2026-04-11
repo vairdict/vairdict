@@ -57,15 +57,20 @@ runs:
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GH_TOKEN: ${{ github.token }}
+        VAIRDICT_INTENT: ${{ inputs.intent }}
       run: |
         INTENT_FLAG=""
-        if [ -n "${{ inputs.intent }}" ]; then
-          INTENT_FLAG="--intent ${{ inputs.intent }}"
+        if [ -n "$VAIRDICT_INTENT" ]; then
+          INTENT_FLAG="--intent"
         fi
 
         # Run review; capture output but don't fail the step yet.
         set +e
-        OUTPUT=$("${{ runner.temp }}/vairdict" review ${{ steps.pr.outputs.number }} $INTENT_FLAG 2>&1)
+        if [ -n "$INTENT_FLAG" ]; then
+          OUTPUT=$("${{ runner.temp }}/vairdict" review ${{ steps.pr.outputs.number }} --intent "$VAIRDICT_INTENT" 2>&1)
+        else
+          OUTPUT=$("${{ runner.temp }}/vairdict" review ${{ steps.pr.outputs.number }} 2>&1)
+        fi
         EXIT_CODE=$?
         set -e
 

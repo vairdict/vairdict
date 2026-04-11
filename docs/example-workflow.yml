@@ -2,12 +2,18 @@
 #
 # Copy this file to .github/workflows/vairdict.yml in your repo.
 # Set ANTHROPIC_API_KEY as a repository secret.
+#
+# Uses pull_request for standard PRs. Switch to pull_request_target
+# if you need to review PRs from forks (requires careful secret scoping).
 
 name: VAIrdict Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  # Uncomment for fork PRs (secrets available but code runs from base):
+  # pull_request_target:
+  #   types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
