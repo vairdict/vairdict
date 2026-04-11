@@ -611,15 +611,17 @@ func TestJudge_NonBlockingGapDoesNotFail(t *testing.T) {
 	}
 }
 
-func TestJudge_SupplementaryChecksAreNonBlocking(t *testing.T) {
-	// The security / code-reuse / style sections must instruct P2/P3 non-blocking.
+func TestJudge_SecurityChecksAreBlocking(t *testing.T) {
+	if !strings.Contains(systemPrompt, "P1 blocking") {
+		t.Error("system prompt should mark security checks as P1 blocking")
+	}
+}
+
+func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
 	if !strings.Contains(systemPrompt, "P2 non-blocking") {
-		t.Error("system prompt should mark security and code-reuse checks as P2 non-blocking")
+		t.Error("system prompt should mark code-reuse checks as P2 non-blocking")
 	}
 	if !strings.Contains(systemPrompt, "P3 non-blocking") {
 		t.Error("system prompt should mark style checks as P3 non-blocking")
-	}
-	if !strings.Contains(systemPrompt, "should NOT lower the score below the pass") {
-		t.Error("system prompt should clarify supplementary checks don't block on their own")
 	}
 }

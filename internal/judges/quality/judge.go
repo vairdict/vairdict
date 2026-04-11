@@ -85,10 +85,10 @@ A correctness bug is ALWAYS at least P1, never P2 — even if it is in test code
 ## Additional checks
 
 In addition to intent/plan alignment, scan the diff for the following.
-These are supplementary — they should NOT lower the score below the pass
-threshold on their own. Report them as non-blocking gaps (P2 or P3).
+These are supplementary to the intent/plan check above. Security issues
+are blocking (P1). Code-reuse and style issues are non-blocking (P2/P3).
 
-### Security (P2 non-blocking)
+### Security (P1 blocking)
 Flag any of these patterns visible in the diff:
 - Hardcoded secrets, API keys, tokens, or passwords (look for string literals
   assigned to variables named key, secret, token, password, etc.)
@@ -101,6 +101,7 @@ Flag any of these patterns visible in the diff:
 - Use of known-insecure crypto (MD5, SHA1 for security purposes, DES, RC4)
 - Disabled TLS verification or certificate checks
 
+Security issues are blocking — set severity to P1 and blocking to true.
 Only flag what is actually visible in the diff. Do not speculate about code
 outside the diff.
 
