@@ -188,8 +188,15 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 		}
 	}
 
-	// Enforce pass threshold: score >= 70.
-	aiVerdict.Pass = aiVerdict.Score >= 70
+	// Enforce pass threshold: score >= 70 AND no blocking gaps.
+	hasBlocking := false
+	for _, g := range aiVerdict.Gaps {
+		if g.Blocking {
+			hasBlocking = true
+			break
+		}
+	}
+	aiVerdict.Pass = aiVerdict.Score >= 70 && !hasBlocking
 
 	slog.Info("quality judge verdict",
 		"score", aiVerdict.Score,
