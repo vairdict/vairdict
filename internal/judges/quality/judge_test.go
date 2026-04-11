@@ -199,7 +199,8 @@ func TestJudge_E2EFail(t *testing.T) {
 }
 
 func TestJudge_E2EFailHighScore(t *testing.T) {
-	// AI gives 100, e2e fails -> 100-30=70, still passes.
+	// AI gives 100, e2e fails -> 100-30=70 score, but the e2e gap is
+	// P1 blocking, so the verdict must still fail.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Score: 100,
@@ -223,8 +224,8 @@ func TestJudge_E2EFailHighScore(t *testing.T) {
 	if verdict.Score != 70 {
 		t.Errorf("expected score 70 (100-30), got %f", verdict.Score)
 	}
-	if !verdict.Pass {
-		t.Error("expected pass=true when score is exactly 70")
+	if verdict.Pass {
+		t.Error("expected pass=false when e2e fails (P1 blocking gap), even with score >= 70")
 	}
 }
 
@@ -515,5 +516,112 @@ func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
 		if !strings.Contains(systemPrompt, section) {
 			t.Errorf("system prompt missing summary sub-section %q", section)
 		}
+	}
+}
+
+func TestJudge_SystemPromptContainsSecurityChecks(t *testing.T) {
+	// #60: security scanning instructions must be present in the system prompt.
+	for _, keyword := range []string{
+		"### Security",
+		"Hardcoded secrets",
+		"SQL injection",
+		"Command injection",
+		"Path traversal",
+		"insecure crypto",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing security keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptContainsCodeReuseChecks(t *testing.T) {
+	// #61: code-reuse detection instructions must be present in the system prompt.
+	for _, keyword := range []string{
+		"### Code reuse",
+		"duplicated",
+		"copy-pasted",
+		"near-identical",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing code-reuse keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptContainsStyleChecks(t *testing.T) {
+	// #62: style & maintainability instructions must be present in the system prompt.
+	for _, keyword := range []string{
+		"### Style",
+		"maintainability",
+		"Magic numbers",
+		"nested control flow",
+		"error handling",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing style keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_BlockingGapFailsEvenWithHighScore(t *testing.T) {
+	// A P1 blocking gap must fail the verdict even when score >= 70.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Score: 85,
+			Pass:  true,
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP1, Description: "tautological assertion", Blocking: true},
+			},
+		},
+	}
+
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if verdict.Pass {
+		t.Error("expected pass=false when a blocking gap exists, even with score 85")
+	}
+}
+
+func TestJudge_NonBlockingGapDoesNotFail(t *testing.T) {
+	// Non-blocking gaps (P2/P3) should not prevent passing when score >= 70.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Score: 80,
+			Pass:  true,
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "magic number", Blocking: false},
+				{Severity: state.SeverityP3, Description: "long function", Blocking: false},
+			},
+		},
+	}
+
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !verdict.Pass {
+		t.Error("expected pass=true when only non-blocking gaps exist and score >= 70")
+	}
+}
+
+func TestJudge_SecurityChecksAreBlocking(t *testing.T) {
+	if !strings.Contains(systemPrompt, "P1 blocking") {
+		t.Error("system prompt should mark security checks as P1 blocking")
+	}
+}
+
+func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
+	if !strings.Contains(systemPrompt, "P2 non-blocking") {
+		t.Error("system prompt should mark code-reuse checks as P2 non-blocking")
+	}
+	if !strings.Contains(systemPrompt, "P3 non-blocking") {
+		t.Error("system prompt should mark style checks as P3 non-blocking")
 	}
 }

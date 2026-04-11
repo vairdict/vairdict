@@ -305,6 +305,33 @@ func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
 	}
 }
 
+func TestPostVerdict_DeletesPreviousVerdicts(t *testing.T) {
+	runner := successRunner()
+	// Simulate gh api listing two previous verdict comment IDs.
+	runner.Responses["gh api"] = fakeResponse{
+		Output: []byte("111\n222\n"),
+	}
+	client := New(runner)
+
+	verdict := &state.Verdict{Score: 90, Pass: true}
+	err := client.PostVerdict(context.Background(), 7, verdict, state.PhaseQuality, 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have called gh api DELETE for each old comment ID.
+	deleteCount := 0
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 3 &&
+			call.Args[0] == "api" && call.Args[1] == "-X" && call.Args[2] == "DELETE" {
+			deleteCount++
+		}
+	}
+	if deleteCount != 2 {
+		t.Errorf("expected 2 DELETE calls for old verdicts, got %d", deleteCount)
+	}
+}
+
 func TestMergePR_Success(t *testing.T) {
 	runner := successRunner()
 	client := New(runner)

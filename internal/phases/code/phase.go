@@ -157,6 +157,11 @@ func buildCoderPrompt(intent string, plan string, feedback string, assumptions [
 	b.WriteString(plan)
 	b.WriteString("\n")
 
+	b.WriteString("\n## Guidelines\n")
+	b.WriteString("- Avoid duplicating logic. Before writing a new helper, check if one already exists.\n")
+	b.WriteString("- Do not copy-paste blocks that differ only in variable names — extract a shared function.\n")
+	b.WriteString("- Reuse existing utilities and patterns found in the codebase.\n")
+
 	if feedback != "" {
 		b.WriteString("\n## Previous Attempt Feedback\n")
 		b.WriteString("Your previous code did not pass the quality checks. Fix the following:\n")

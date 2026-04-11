@@ -337,11 +337,46 @@ func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error
 // gracefully fall back to a regular comment.
 var cannotApprovePRRe = regexp.MustCompile(`(?i)(can ?not approve your own pull request|is not permitted to approve pull requests)`)
 
+// verdictMarker is the string that appears in every verdict comment.
+// Used to identify and clean up previous verdicts before posting a new one.
+const verdictMarker = "Posted by @vairdict-judge"
+
+// deletePreviousVerdicts removes any existing verdict comments on the PR
+// so only the latest verdict is visible. Best-effort — errors are logged
+// but do not block posting the new verdict.
+func (c *Client) deletePreviousVerdicts(ctx context.Context, prNumber int) {
+	// List all comments on the PR via the GitHub API.
+	out, err := c.runner.Run(ctx, "gh", "api",
+		fmt.Sprintf("repos/{owner}/{repo}/issues/%d/comments", prNumber),
+		"--paginate", "--jq",
+		fmt.Sprintf(`.[] | select(.body | contains("%s")) | .id`, verdictMarker))
+	if err != nil {
+		slog.Debug("failed to list previous verdicts", "pr", prNumber, "error", err)
+		return
+	}
+
+	ids := strings.Fields(strings.TrimSpace(string(out)))
+	for _, id := range ids {
+		_, delErr := c.runner.Run(ctx, "gh", "api", "-X", "DELETE",
+			fmt.Sprintf("repos/{owner}/{repo}/issues/comments/%s", id))
+		if delErr != nil {
+			slog.Debug("failed to delete old verdict comment", "id", id, "error", delErr)
+		} else {
+			slog.Debug("deleted old verdict comment", "id", id)
+		}
+	}
+}
+
 // PostVerdict posts a structured verdict comment on a PR. On pass, it
 // tries to approve via the review API; if GitHub refuses because the PR
 // is self-authored, it falls back to a plain comment so the verdict still
 // lands. On fail, it posts a plain comment directly.
+//
+// Before posting, any previous verdict comments on the PR are deleted
+// so the PR always shows exactly one verdict.
 func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
+	c.deletePreviousVerdicts(ctx, prNumber)
+
 	comment := FormatVerdictComment(verdict, phase, loop)
 
 	if verdict.Pass {

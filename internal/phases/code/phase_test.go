@@ -226,6 +226,9 @@ func TestBuildCoderPrompt(t *testing.T) {
 	if !containsStr(prompt, "assumed X") {
 		t.Error("prompt should contain assumptions")
 	}
+	if !containsStr(prompt, "Avoid duplicating logic") {
+		t.Error("prompt should contain code-reuse guidance")
+	}
 }
 
 func containsStr(s, substr string) bool {
