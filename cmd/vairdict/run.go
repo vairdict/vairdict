@@ -24,6 +24,7 @@ import (
 	qualityphase "github.com/vairdict/vairdict/internal/phases/quality"
 	"github.com/vairdict/vairdict/internal/state"
 	"github.com/vairdict/vairdict/internal/ui"
+	"github.com/vairdict/vairdict/internal/workspace"
 )
 
 const (
@@ -275,13 +276,25 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// Resolve working directory.
-	workDir, err := os.Getwd()
+	// Resolve working directory — the repo root where vairdict was invoked.
+	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolving working directory: %w", err)
 	}
 
-	ghRunner := &github.ExecRunner{Dir: workDir}
+	// Create an isolated workspace (git worktree) for this task so
+	// concurrent tasks don't interfere with each other's file changes.
+	wsMgr := workspace.New(repoRoot, "", &workspace.ExecRunner{})
+	ws, err := wsMgr.Create(ctx, task.ID)
+	if err != nil {
+		return fmt.Errorf("creating workspace: %w", err)
+	}
+	defer func() { _ = ws.Cleanup(ctx) }()
+
+	workDir := ws.Path
+	r.Note("workspace", workDir)
+
+	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
 
 	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient)
