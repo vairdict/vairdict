@@ -104,7 +104,7 @@ func WithExtraArgs(args ...string) Option {
 // New constructs a Client with the given options.
 func New(opts ...Option) *Client {
 	c := &Client{
-		timeout:    120 * time.Second,
+		timeout:    5 * time.Minute,
 		cmdFactory: exec.CommandContext,
 	}
 	for _, o := range opts {

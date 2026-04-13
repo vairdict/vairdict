@@ -49,7 +49,7 @@ func WithCommandFactory(f CommandFactory) Option {
 // New creates a Runner with the given options.
 func New(opts ...Option) *Runner {
 	r := &Runner{
-		timeout:    10 * time.Minute,
+		timeout:    30 * time.Minute,
 		cmdFactory: exec.CommandContext,
 	}
 	for _, o := range opts {
