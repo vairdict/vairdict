@@ -11,16 +11,15 @@ Update this file when opening, completing, or blocking an issue.
 
 ## Ready to Start
 - #72 judge/review: inline PR review comments on specific diff lines
-- #77 workspace: isolated git worktree per task
+- #78 parallel: concurrent task runner
 
 ## In Progress
 - none
 
 ## Blocked
-- #78 parallel: concurrent task runner (depends on #77)
 - #79 deps: task dependency graph (depends on #78)
 - #80 queue: priority ordering + dependency resolution (depends on #79)
-- #81 conflicts: merge conflict detection (depends on #77, #78)
+- #81 conflicts: merge conflict detection (depends on #78)
 - #82 perf: load test 5 concurrent tasks (depends on #77-#81)
 
 ## Done
@@ -61,6 +60,7 @@ Update this file when opening, completing, or blocking an issue.
 - #60 judge/security: scan diff for security issues in quality judge
 - #61 judge/code-reuse: detect duplicated logic in quality judge
 - #62 judge/style: maintainability + readability checks in quality judge
+- #77 workspace: isolated git worktree per task
 
 ---
 
@@ -156,6 +156,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 0/7         |
+| M5        | in progress | 1/7         |
 | M6        | not started | 0/5         |
 | M7+       | not started | —           |
