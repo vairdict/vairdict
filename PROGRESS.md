@@ -12,6 +12,8 @@ Update this file when opening, completing, or blocking an issue.
 ## Ready to Start
 - #72 judge/review: inline PR review comments on specific diff lines
 - #78 parallel: concurrent task runner
+- #84 judge/consistency: tool-use schema, temperature 0, deterministic scoring
+- #85 judge/baseline: hardcoded non-negotiable engineering standards
 
 ## In Progress
 - none
@@ -21,6 +23,8 @@ Update this file when opening, completing, or blocking an issue.
 - #80 queue: priority ordering + dependency resolution (depends on #79)
 - #81 conflicts: merge conflict detection (depends on #78)
 - #82 perf: load test 5 concurrent tasks (depends on #77-#81)
+- #86 state/rewind: verdict ReturnTo field + phase rewind in outer loop
+- #87 state/rewind-context: structured failure context propagation (depends on #86)
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -156,6 +160,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 1/7         |
-| M6        | not started | 0/5         |
+| M5        | in progress | 1/11        |
+| M6        | not started | 0/7         |
 | M7+       | not started | —           |
