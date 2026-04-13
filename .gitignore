@@ -35,5 +35,8 @@ coverage/
 # Logs
 *.log
 
+# VAIrdict workspaces (git worktrees)
+.vairdict/
+
 # Local notes / open discussion items (not for commit)
 open_issues.md
