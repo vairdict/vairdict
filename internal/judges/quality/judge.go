@@ -151,7 +151,9 @@ Respond with this exact JSON structure:
     {
       "severity": "<P0|P1|P2|P3>",
       "description": "<what is missing or wrong>",
-      "blocking": <bool>
+      "blocking": <bool>,
+      "file": "<path from diff header, e.g. internal/foo/bar.go>",
+      "line": <line number in the new file where the issue is>
     }
   ],
   "questions": [
@@ -160,7 +162,13 @@ Respond with this exact JSON structure:
       "priority": "<high|medium|low>"
     }
   ]
-}`
+}
+
+For each gap, include "file" and "line" when the issue maps to a specific
+location in the diff. Use the file path from the diff header (the b/ side)
+and the line number from the @@ hunk header (the + side). Omit "file" and
+"line" (or set to "" and 0) for gaps that are architectural or span multiple
+files.`
 
 // Judge evaluates whether the given diff fulfills the original intent and plan.
 // It runs AI-based intent verification (against the diff content, not a

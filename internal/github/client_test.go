@@ -664,6 +664,143 @@ func TestParseLinkedIssue(t *testing.T) {
 	}
 }
 
+func TestPostVerdictWithDiff_InlineComments(t *testing.T) {
+	diff := `diff --git a/internal/foo/bar.go b/internal/foo/bar.go
+--- a/internal/foo/bar.go
++++ b/internal/foo/bar.go
+@@ -10,6 +10,8 @@ func existing() {
+ 	unchanged := true
+ 	_ = unchanged
++	added1 := "new"
++	added2 := "also new"
+ 	more := "context"
+ }
+`
+	runner := successRunner()
+	client := New(runner)
+
+	verdict := &state.Verdict{
+		Score: 40,
+		Pass:  false,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP1, Description: "bug on added line", Blocking: true, File: "internal/foo/bar.go", Line: 12},
+			{Severity: state.SeverityP2, Description: "style issue elsewhere", Blocking: false}, // no file/line
+			{Severity: state.SeverityP3, Description: "line not in diff", Blocking: false, File: "internal/foo/bar.go", Line: 1},
+		},
+	}
+
+	err := client.PostVerdictWithDiff(context.Background(), 7, verdict, state.PhaseQuality, 1, diff)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have called gh api to create a review with inline comments.
+	foundReviewAPI := false
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 &&
+			call.Args[0] == "api" && strings.Contains(strings.Join(call.Args, " "), "reviews") {
+			foundReviewAPI = true
+		}
+	}
+	if !foundReviewAPI {
+		t.Error("expected gh api call to create review with inline comments")
+	}
+}
+
+func TestPostVerdictWithDiff_NoInlineWhenNoFileLines(t *testing.T) {
+	diff := `diff --git a/x.go b/x.go
+--- a/x.go
++++ b/x.go
+@@ -1,3 +1,4 @@
+ package main
++func New() {}
+ func Old() {}
+`
+	runner := successRunner()
+	client := New(runner)
+
+	verdict := &state.Verdict{
+		Score: 80,
+		Pass:  false,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP2, Description: "missing docs", Blocking: false},
+		},
+	}
+
+	err := client.PostVerdictWithDiff(context.Background(), 5, verdict, state.PhaseQuality, 1, diff)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No gaps have file/line, so no review API call should be made.
+	for _, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) >= 2 &&
+			call.Args[0] == "api" && strings.Contains(strings.Join(call.Args, " "), "reviews") {
+			t.Error("did not expect gh api review call when no gaps have file/line")
+		}
+	}
+}
+
+func TestPostVerdictWithDiff_EmptyDiffSkipsInline(t *testing.T) {
+	runner := successRunner()
+	client := New(runner)
+
+	verdict := &state.Verdict{
+		Score: 90,
+		Pass:  true,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP3, Description: "nit", Blocking: false, File: "x.go", Line: 5},
+		},
+	}
+
+	// Empty diff — should not attempt inline comments.
+	err := client.PostVerdictWithDiff(context.Background(), 3, verdict, state.PhaseQuality, 1, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFormatInlineComment_Blocking(t *testing.T) {
+	g := state.Gap{Severity: state.SeverityP1, Description: "security issue", Blocking: true}
+	body := formatInlineComment(g)
+	if !contains(body, "[P1]") {
+		t.Errorf("expected [P1] in body, got %q", body)
+	}
+	if !contains(body, "security issue") {
+		t.Errorf("expected description in body, got %q", body)
+	}
+}
+
+func TestFormatInlineComment_NonBlocking(t *testing.T) {
+	g := state.Gap{Severity: state.SeverityP3, Description: "style nit", Blocking: false}
+	body := formatInlineComment(g)
+	if !contains(body, "[P3]") {
+		t.Errorf("expected [P3] in body, got %q", body)
+	}
+}
+
+func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
+	// Gaps with file/line should show the location in the criteria table.
+	verdict := &state.Verdict{
+		Score: 70,
+		Pass:  true,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP2, Description: "magic number", Blocking: false, File: "foo.go", Line: 42},
+			{Severity: state.SeverityP3, Description: "style nit", Blocking: false},
+		},
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+
+	// Both gaps should appear in the table regardless of file/line.
+	if !contains(comment, "magic number") {
+		t.Error("expected gap description in comment")
+	}
+	if !contains(comment, "style nit") {
+		t.Error("expected second gap description in comment")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && containsStr(s, substr)
 }

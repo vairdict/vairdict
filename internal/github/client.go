@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -367,15 +368,34 @@ func (c *Client) deletePreviousVerdicts(ctx context.Context, prNumber int) {
 	}
 }
 
-// PostVerdict posts a structured verdict comment on a PR. On pass, it
-// tries to approve via the review API; if GitHub refuses because the PR
-// is self-authored, it falls back to a plain comment so the verdict still
-// lands. On fail, it posts a plain comment directly.
+// InlineComment represents a single inline review comment on a PR diff.
+type InlineComment struct {
+	Path     string `json:"path"`
+	Position int    `json:"position"`
+	Body     string `json:"body"`
+}
+
+// PostVerdict posts a structured verdict comment on a PR, optionally with
+// inline review comments on specific diff lines. When a diff is provided,
+// gaps with file:line info are posted as inline comments in a single
+// GitHub review; the summary verdict is still posted as a separate comment.
 //
 // Before posting, any previous verdict comments on the PR are deleted
 // so the PR always shows exactly one verdict.
 func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int) error {
+	return c.PostVerdictWithDiff(ctx, prNumber, verdict, phase, loop, "")
+}
+
+// PostVerdictWithDiff is like PostVerdict but accepts a diff string for
+// resolving inline comment positions. When diff is non-empty, gaps that
+// have File and Line set are posted as inline review comments.
+func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int, diff string) error {
 	c.deletePreviousVerdicts(ctx, prNumber)
+
+	// Post inline review comments for gaps with file:line info.
+	if diff != "" {
+		c.postInlineReview(ctx, prNumber, verdict, diff)
+	}
 
 	comment := FormatVerdictComment(verdict, phase, loop)
 
@@ -398,6 +418,90 @@ func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.V
 	}
 	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "comment")
 	return nil
+}
+
+// postInlineReview creates a single GitHub review with inline comments
+// for gaps that have resolvable file:line positions. Best-effort — errors
+// are logged but do not block the summary verdict from being posted.
+func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *state.Verdict, diff string) {
+	positions := ParseDiffPositions(diff)
+
+	var comments []InlineComment
+	for _, g := range verdict.Gaps {
+		if g.File == "" || g.Line == 0 {
+			continue
+		}
+		pos, ok := ResolveDiffPosition(positions, g.File, g.Line)
+		if !ok {
+			slog.Debug("gap line not in diff, skipping inline comment",
+				"file", g.File, "line", g.Line, "severity", g.Severity)
+			continue
+		}
+		comments = append(comments, InlineComment{
+			Path:     g.File,
+			Position: pos,
+			Body:     formatInlineComment(g),
+		})
+	}
+
+	if len(comments) == 0 {
+		return
+	}
+
+	// Build the review payload. Use COMMENT event to batch all inline
+	// comments into a single review (avoids notification spam).
+	review := struct {
+		Event    string          `json:"event"`
+		Body     string          `json:"body"`
+		Comments []InlineComment `json:"comments"`
+	}{
+		Event:    "COMMENT",
+		Body:     fmt.Sprintf("VAIrdict inline review: %d comment(s)", len(comments)),
+		Comments: comments,
+	}
+
+	payload, err := json.Marshal(review)
+	if err != nil {
+		slog.Debug("failed to marshal review payload", "error", err)
+		return
+	}
+
+	// Write payload to a temp file for gh api --input since our
+	// CommandRunner doesn't support stdin.
+	f, err := os.CreateTemp("", "vairdict-review-*.json")
+	if err != nil {
+		slog.Debug("failed to create temp file for review", "error", err)
+		return
+	}
+	tmpPath := f.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := f.Write(payload); err != nil {
+		_ = f.Close()
+		slog.Debug("failed to write review payload", "error", err)
+		return
+	}
+	_ = f.Close()
+
+	_, err = c.runner.Run(ctx, "gh", "api",
+		fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/reviews", prNumber),
+		"-X", "POST",
+		"--input", tmpPath,
+	)
+	if err != nil {
+		slog.Debug("failed to post inline review", "pr", prNumber, "error", err)
+		return
+	}
+	slog.Info("inline review posted", "pr", prNumber, "comments", len(comments))
+}
+
+// formatInlineComment builds the markdown body for a single inline comment.
+func formatInlineComment(g state.Gap) string {
+	icon := "💡"
+	if g.Blocking {
+		icon = "🚫"
+	}
+	return fmt.Sprintf("%s **[%s]** %s", icon, g.Severity, g.Description)
 }
 
 // MergePR merges a PR via `gh pr merge --squash --delete-branch`. The

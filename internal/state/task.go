@@ -89,6 +89,8 @@ type Gap struct {
 	Severity    Severity `json:"severity"`
 	Description string   `json:"description"`
 	Blocking    bool     `json:"blocking"`
+	File        string   `json:"file,omitempty"`
+	Line        int      `json:"line,omitempty"`
 }
 
 // Question represents a question raised by a judge.

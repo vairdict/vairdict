@@ -625,3 +625,53 @@ func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
 		t.Error("system prompt should mark style checks as P3 non-blocking")
 	}
 }
+
+func TestJudge_SystemPromptRequestsFileAndLine(t *testing.T) {
+	// #72: the system prompt must instruct the LLM to include file/line
+	// in gap JSON so inline PR comments can be posted.
+	for _, keyword := range []string{
+		`"file"`,
+		`"line"`,
+		"diff header",
+		"hunk header",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing file/line keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_GapWithFileAndLine(t *testing.T) {
+	// Judge must preserve file/line fields from the LLM response.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Score: 75,
+			Pass:  true,
+			Gaps: []state.Gap{
+				{
+					Severity:    state.SeverityP2,
+					Description: "magic number",
+					Blocking:    false,
+					File:        "internal/foo/bar.go",
+					Line:        42,
+				},
+			},
+		},
+	}
+
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(verdict.Gaps) != 1 {
+		t.Fatalf("expected 1 gap, got %d", len(verdict.Gaps))
+	}
+	if verdict.Gaps[0].File != "internal/foo/bar.go" {
+		t.Errorf("expected file = %q, got %q", "internal/foo/bar.go", verdict.Gaps[0].File)
+	}
+	if verdict.Gaps[0].Line != 42 {
+		t.Errorf("expected line = 42, got %d", verdict.Gaps[0].Line)
+	}
+}

@@ -85,6 +85,7 @@ type reviewGH interface {
 	FetchIssue(ctx context.Context, n int) (*github.IssueDetails, error)
 	FetchPRDiff(ctx context.Context, n int) (string, error)
 	PostVerdict(ctx context.Context, n int, v *state.Verdict, p state.Phase, loop int) error
+	PostVerdictWithDiff(ctx context.Context, n int, v *state.Verdict, p state.Phase, loop int, diff string) error
 	MergePR(ctx context.Context, n int) error
 }
 
@@ -164,7 +165,7 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	if deps.noComment {
 		_, _ = fmt.Fprintln(deps.stdout, github.FormatVerdictComment(verdict, state.PhaseQuality, 1))
 	} else {
-		if err := deps.gh.PostVerdict(ctx, prNumber, verdict, state.PhaseQuality, 1); err != nil {
+		if err := deps.gh.PostVerdictWithDiff(ctx, prNumber, verdict, state.PhaseQuality, 1, diff); err != nil {
 			return fmt.Errorf("posting verdict: %w", err)
 		}
 	}

@@ -45,6 +45,12 @@ func (f *fakeReviewGH) PostVerdict(_ context.Context, n int, v *state.Verdict, _
 	f.postedVerd = v
 	return f.postErr
 }
+func (f *fakeReviewGH) PostVerdictWithDiff(_ context.Context, n int, v *state.Verdict, _ state.Phase, _ int, _ string) error {
+	f.postCalled = true
+	f.postedNumber = n
+	f.postedVerd = v
+	return f.postErr
+}
 func (f *fakeReviewGH) MergePR(_ context.Context, _ int) error {
 	f.mergeCalled = true
 	return f.mergeErr
