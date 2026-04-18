@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/config"
@@ -835,4 +837,162 @@ func TestRunOrchestration_AutoMerge_FailureDoesNotFailRun(t *testing.T) {
 	if !b.gh.mergeCalled {
 		t.Error("MergePR should have been attempted")
 	}
+}
+
+// --- Concurrent runner tests ---
+
+// runConcurrentTest is a helper that calls runTasksConcurrent with the given
+// bundles and returns the collected results. It avoids real config loading,
+// store, workspaces, etc. by exercising runOrchestration directly.
+func runConcurrentTest(t *testing.T, bundles []*orchBundle, maxTasks int) []taskResult {
+	t.Helper()
+	intents := make([]string, len(bundles))
+	for i := range bundles {
+		intents[i] = fmt.Sprintf("intent-%d", i)
+	}
+
+	results := make([]taskResult, len(intents))
+	sem := make(chan struct{}, maxTasks)
+	var wg sync.WaitGroup
+
+	for i, b := range bundles {
+		task := state.NewTask(fmt.Sprintf("t-%d", i), intents[i])
+		r := &fakeRenderer{}
+		deps := b.deps()
+		wg.Add(1)
+		go func(idx int, task *state.Task, deps runDeps, r ui.Renderer) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			err := runOrchestration(context.Background(), deps, task, r)
+			results[idx] = taskResult{TaskID: task.ID, Intent: task.Intent, Err: err}
+		}(i, task, deps, r)
+	}
+
+	wg.Wait()
+	return results
+}
+
+func TestConcurrent_TwoTasksBothPass(t *testing.T) {
+	t.Parallel()
+	b1 := newOrchBundle()
+	b2 := newOrchBundle()
+
+	results := runConcurrentTest(t, []*orchBundle{b1, b2}, 3)
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	for i, r := range results {
+		if r.Err != nil {
+			t.Errorf("task %d: unexpected error: %v", i, r.Err)
+		}
+	}
+	if !b1.gh.prCalled {
+		t.Error("task 0: PR not created")
+	}
+	if !b2.gh.prCalled {
+		t.Error("task 1: PR not created")
+	}
+}
+
+func TestConcurrent_OneFailsOneSucceeds(t *testing.T) {
+	t.Parallel()
+	b1 := newOrchBundle()
+	b2 := newOrchBundle()
+	b2.plan.result = &planphase.PhaseResult{Escalate: true, Loops: 3, LastScore: 30}
+
+	results := runConcurrentTest(t, []*orchBundle{b1, b2}, 3)
+
+	if results[0].Err != nil {
+		t.Errorf("task 0: expected success, got %v", results[0].Err)
+	}
+	if results[1].Err == nil {
+		t.Error("task 1: expected escalation error, got nil")
+	}
+	if !b1.gh.prCalled {
+		t.Error("task 0: PR should be created even when task 1 fails")
+	}
+	if b2.gh.prCalled {
+		t.Error("task 1: PR should not be created on escalation")
+	}
+}
+
+func TestConcurrent_SemaphoreRespected(t *testing.T) {
+	t.Parallel()
+	const numTasks = 4
+	const maxConcurrent = 2
+
+	var mu sync.Mutex
+	var running, peak int
+
+	results := make([]taskResult, numTasks)
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numTasks; i++ {
+		b := newOrchBundle()
+		task := state.NewTask(fmt.Sprintf("t-%d", i), fmt.Sprintf("intent-%d", i))
+		r := &fakeRenderer{}
+		deps := b.deps()
+
+		// Wrap the plan runner to track concurrency.
+		origPlan := deps.plan
+		deps.plan = &trackingPlanRunner{
+			inner:   origPlan,
+			mu:      &mu,
+			running: &running,
+			peak:    &peak,
+		}
+
+		wg.Add(1)
+		go func(idx int, task *state.Task, deps runDeps, r ui.Renderer) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			err := runOrchestration(context.Background(), deps, task, r)
+			results[idx] = taskResult{TaskID: task.ID, Intent: task.Intent, Err: err}
+		}(i, task, deps, r)
+	}
+
+	wg.Wait()
+
+	mu.Lock()
+	observed := peak
+	mu.Unlock()
+
+	if observed > maxConcurrent {
+		t.Errorf("peak concurrency = %d, want <= %d", observed, maxConcurrent)
+	}
+
+	for i, r := range results {
+		if r.Err != nil {
+			t.Errorf("task %d: unexpected error: %v", i, r.Err)
+		}
+	}
+}
+
+// trackingPlanRunner wraps a planRunner and tracks peak concurrency.
+type trackingPlanRunner struct {
+	inner   planRunner
+	mu      *sync.Mutex
+	running *int
+	peak    *int
+}
+
+func (tr *trackingPlanRunner) Run(ctx context.Context, task *state.Task) (*planphase.PhaseResult, error) {
+	tr.mu.Lock()
+	*tr.running++
+	if *tr.running > *tr.peak {
+		*tr.peak = *tr.running
+	}
+	tr.mu.Unlock()
+
+	defer func() {
+		tr.mu.Lock()
+		*tr.running--
+		tr.mu.Unlock()
+	}()
+
+	return tr.inner.Run(ctx, task)
 }
