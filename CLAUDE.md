@@ -164,6 +164,7 @@ Do not open a PR without a passing verdict (M3+).
 
 ## What NOT to do
 
+- Do not commit directly to main — all code changes go through PRs
 - Do not add dependencies without checking existing ones first
 - Do not change vairdict.yaml schema without updating config/ parser
 - Do not write judges that return raw strings — always typed structs
