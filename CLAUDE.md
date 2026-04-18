@@ -148,17 +148,17 @@ No PR is merged without a passing VAIrdict verdict.
 ## How to Work on VAIrdict
 
 1. Read CLAUDE.md first — understand the architecture
-2. Read PROGRESS.md — find the first issue in "Ready to Start"
+2. Read plans/PROGRESS.md — find the first issue in "Ready to Start"
 3. Read the full issue on GitHub — understand intent and acceptance criteria
 4. Check dependencies — make sure they exist before starting
 5. Write the code in the correct package per the architecture above
 6. Write tests alongside the code — no exceptions
-7. Update PROGRESS.md — move issue to "In Progress"
+7. Update plans/PROGRESS.md — move issue to "In Progress"
 8. Open a PR linked to the issue
-9. Update PROGRESS.md — move issue to "Done" when PR is merged
+9. Update plans/PROGRESS.md — move issue to "Done" when PR is merged
 10. Check dependency graph — move newly unblocked issues to "Ready to Start"
 
-Do not start work on an issue that is still "Blocked" in PROGRESS.md.
+Do not start work on an issue that is still "Blocked" in plans/PROGRESS.md.
 Do not exceed the scope defined in the issue.
 Do not open a PR without a passing verdict (M3+).
 

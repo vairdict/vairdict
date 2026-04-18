@@ -119,7 +119,7 @@ reviewed by the agent judge, only then created in GitHub.
 | M6+       | same pattern, one ahead      |
 
 **Process for opening new milestone issues:**
-1. Planner agent reads ROADMAP.md for the next milestone
+1. Planner agent reads plans/ROADMAP.md for the next milestone
 2. Planner writes detailed issues (intent, criteria, notes, deps)
 3. Judge agent reviews each issue — is it actionable? unambiguous?
 4. Judge approved → open in GitHub and add to this file

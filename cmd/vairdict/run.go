@@ -365,7 +365,7 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 	if qualityResult.Escalate || qualityResult.RequeueToCode {
 		// RequeueToCode is currently treated as escalation: cross-phase
 		// routing back into the code phase is intentionally deferred to
-		// a follow-up issue (see PROGRESS.md). The escalation summary
+		// a follow-up issue (see plans/PROGRESS.md). The escalation summary
 		// includes the blocking gaps so the human knows code rework is
 		// needed.
 		gaps := lastGapsForPhase(task, state.PhaseQuality)

@@ -129,10 +129,10 @@ The three bot accounts (@vairdict-planner, @vairdict-coder,
 
 ## Writing new milestone issues (M6+)
 
-When it's time to open the next milestone (see PROGRESS.md):
+When it's time to open the next milestone (see plans/PROGRESS.md):
 
 **Planner writes each issue:**
-- Reads ROADMAP.md for the milestone definition
+- Reads plans/ROADMAP.md for the milestone definition
 - Expands each bullet into a full issue
 - Includes: intent, context, acceptance criteria, technical notes,
   dependencies, out of scope
@@ -146,7 +146,7 @@ Scores each issue on:
 - Are dependencies correctly identified?
 - Could a coder agent implement this with zero clarification?
 
-Pass (all yes) → issue opened in GitHub, added to PROGRESS.md
+Pass (all yes) → issue opened in GitHub, added to plans/PROGRESS.md
 Fail → back to Planner with specific gaps
 
 ---

@@ -176,7 +176,7 @@ From M3 onwards, `vairdict run` is the only way to open a PR. No PR merges witho
 
 ## Contributing
 
-Read [CLAUDE.md](./CLAUDE.md) for architecture, conventions, and how to pick up issues. Progress is tracked in [PROGRESS.md](./PROGRESS.md).
+Read [CLAUDE.md](./CLAUDE.md) for architecture, conventions, and how to pick up issues. Progress is tracked in [PROGRESS.md](./plans/PROGRESS.md).
 
 ## License
 
