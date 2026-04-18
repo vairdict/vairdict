@@ -14,6 +14,8 @@ Update this file when opening, completing, or blocking an issue.
 - #78 parallel: concurrent task runner
 - #84 judge/consistency: tool-use schema, temperature 0, deterministic scoring
 - #85 judge/baseline: hardcoded non-negotiable engineering standards
+- #90 cmd/resume: resume interrupted run from last checkpoint
+- #91 cmd/interactive: status, notes, pause/continue during execution
 
 ## In Progress
 - none

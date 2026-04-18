@@ -38,5 +38,8 @@ coverage/
 # VAIrdict workspaces (git worktrees)
 .vairdict/
 
+# Claude Code worktree metadata
+.claude/worktrees/
+
 # Local notes / open discussion items (not for commit)
 open_issues.md
