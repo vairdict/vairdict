@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -33,7 +34,7 @@ const (
 )
 
 var (
-	issueFlag  int
+	issueFlags []int
 	outputFlag string
 	colorsFlag string
 	asciiFlag  bool
@@ -41,16 +42,18 @@ var (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run [intent]",
+	Use:   "run [intent...]",
 	Short: "Create a task and run it through the development phases",
-	Long: `Create a new task with the given intent, then run it through
-the plan and code phases. On success, creates a GitHub PR with
-the VAIrdict verdict. Streams progress updates as each phase
-loop executes.
+	Long: `Create one or more tasks with the given intents, then run each through
+the plan, code, and quality phases. On success, creates a GitHub PR with
+the VAIrdict verdict.
 
-Use --issue to fetch the intent from a GitHub issue:
-  vairdict run --issue 32`,
-	Args: cobra.MaximumNArgs(1),
+Multiple intents run concurrently (up to parallel.max_tasks from config):
+  vairdict run "add login" "fix logout bug"
+
+Use --issue to fetch intents from GitHub issues:
+  vairdict run --issue 32 --issue 45`,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mode, err := ui.ParseMode(outputFlag)
 		if err != nil {
@@ -61,23 +64,41 @@ Use --issue to fetch the intent from a GitHub issue:
 			return err
 		}
 
-		var intent string
-		if issueFlag > 0 {
-			intent, err = fetchIssueIntent(issueFlag)
-			if err != nil {
-				return err
+		// Collect intents from positional args and --issue flags.
+		var intents []string
+		var issues []int
+		for _, num := range issueFlags {
+			if num > 0 {
+				intent, err := fetchIssueIntent(num)
+				if err != nil {
+					return err
+				}
+				intents = append(intents, intent)
+				issues = append(issues, num)
 			}
-		} else if len(args) == 1 {
-			intent = args[0]
-		} else {
+		}
+		intents = append(intents, args...)
+
+		if len(intents) == 0 {
 			return fmt.Errorf("provide an intent argument or use --issue")
 		}
-		return runTask(intent, mode, colors, asciiFlag)
+
+		// Single intent: run exactly as before (backward compatible).
+		if len(intents) == 1 {
+			issueNum := 0
+			if len(issues) > 0 {
+				issueNum = issues[0]
+			}
+			return runTask(intents[0], issueNum, mode, colors, asciiFlag)
+		}
+
+		// Multiple intents: concurrent execution.
+		return runTasks(intents, issues, mode, colors, asciiFlag)
 	},
 }
 
 func init() {
-	runCmd.Flags().IntVar(&issueFlag, "issue", 0, "GitHub issue number to use as intent")
+	runCmd.Flags().IntSliceVar(&issueFlags, "issue", nil, "GitHub issue number(s) to use as intent (repeatable)")
 	runCmd.Flags().StringVar(&outputFlag, "output", "", "output mode: cli|ci|json (default: auto-detect)")
 	runCmd.Flags().StringVar(&colorsFlag, "colors", "", "color scheme: default|accessible|no-color (default: auto-detect)")
 	runCmd.Flags().BoolVar(&asciiFlag, "ascii", false, "use ASCII glyphs instead of unicode emoji")
@@ -182,7 +203,7 @@ func (d *defaultQualityRunner) Run(ctx context.Context, task *state.Task, plan s
 	return runQualityPhase(ctx, d.cfg, d.client, d.store, task, plan, d.workDir, d.r)
 }
 
-func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client) runDeps {
+func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client, issueNumber int) runDeps {
 	return runDeps{
 		plan:    &defaultPlanRunner{cfg: cfg, client: client, store: store, r: r},
 		code:    &defaultCodeRunner{cfg: cfg, store: store, workDir: workDir, r: r},
@@ -194,12 +215,12 @@ func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, wo
 		onEscalation: func(ctx context.Context, task *state.Task, result escalation.Result) error {
 			return escalateAndExit(ctx, task, result, cfg.Escalation, ghClient)
 		},
-		issueNumber: issueFlag,
+		issueNumber: issueNumber,
 		autoMerge:   cfg.AutoVairdict,
 	}
 }
 
-func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
+func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
 	// Resolve overlay path from --env / CI auto-detect.
 	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
 	if err != nil {
@@ -266,8 +287,8 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 
 	r.RunStart(task.ID, intent, logPath)
 	r.Note("completer", string(backend))
-	if issueFlag > 0 {
-		r.Note("issue", fmt.Sprintf("#%d", issueFlag))
+	if issueNumber > 0 {
+		r.Note("issue", fmt.Sprintf("#%d", issueNumber))
 	}
 
 	slog.Info("task created", "id", task.ID, "intent", intent)
@@ -297,8 +318,180 @@ func runTask(intent string, mode ui.Mode, colors ui.ColorScheme, ascii bool) err
 	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
 
-	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient)
+	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, issueNumber)
 	return runOrchestration(ctx, deps, task, r)
+}
+
+// taskResult records the outcome of a single concurrent task.
+type taskResult struct {
+	TaskID string
+	Intent string
+	Err    error
+}
+
+// runTasks executes multiple intents concurrently with a semaphore
+// controlling the degree of parallelism. Shared resources (config, store,
+// completer) are created once; per-task resources (workspace, log file,
+// renderer, deps) are created inside each goroutine.
+func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
+	// Resolve overlay path from --env / CI auto-detect.
+	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
+	if err != nil {
+		return fmt.Errorf("resolving env: %w", err)
+	}
+
+	cfg, err := config.LoadConfigWithOverlay("vairdict.yaml", overlayPath)
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+
+	dbPath, err := state.DefaultDBPath()
+	if err != nil {
+		return fmt.Errorf("resolving database path: %w", err)
+	}
+
+	store, err := state.NewStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("opening state store: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	client, _, err := resolveCompleter(cfg)
+	if err != nil {
+		return err
+	}
+
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolving working directory: %w", err)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	// Print header for concurrent run.
+	_, _ = fmt.Fprintf(os.Stdout, "Running %d tasks (max %d concurrent)\n\n", len(intents), cfg.Parallel.MaxTasks)
+
+	sem := make(chan struct{}, cfg.Parallel.MaxTasks)
+	results := make([]taskResult, len(intents))
+	var wg sync.WaitGroup
+
+	for i, intent := range intents {
+		issueNum := 0
+		if i < len(issues) {
+			issueNum = issues[i]
+		}
+
+		wg.Add(1)
+		go func(idx int, intent string, issueNum int) {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			results[idx] = runSingleTask(ctx, cfg, client, store, repoRoot, intent, issueNum)
+			r := results[idx]
+			status := "pass"
+			if r.Err != nil {
+				status = "FAIL"
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "[%s] %s → %s\n", r.TaskID, truncate(intent, 60), status)
+		}(i, intent, issueNum)
+	}
+
+	wg.Wait()
+
+	// Print summary table.
+	_, _ = fmt.Fprintln(os.Stdout, "\n--- Summary ---")
+	var errs []string
+	for _, r := range results {
+		status := "pass"
+		detail := ""
+		if r.Err != nil {
+			status = "FAIL"
+			detail = ": " + r.Err.Error()
+		}
+		_, _ = fmt.Fprintf(os.Stdout, "  [%s] %-6s %s%s\n", r.TaskID, status, truncate(r.Intent, 50), detail)
+		if r.Err != nil {
+			errs = append(errs, fmt.Sprintf("task %s: %v", r.TaskID, r.Err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("%d of %d tasks failed:\n  %s", len(errs), len(results), strings.Join(errs, "\n  "))
+	}
+	return nil
+}
+
+// runSingleTask runs one task in the context of a concurrent runTasks call.
+// It creates per-task isolated resources (workspace, log file, renderer).
+func runSingleTask(
+	ctx context.Context,
+	cfg *config.Config,
+	client completer,
+	store *state.Store,
+	repoRoot string,
+	intent string,
+	issueNumber int,
+) taskResult {
+	taskID := uuid.New().String()[:8]
+	task := state.NewTask(taskID, intent)
+	res := taskResult{TaskID: taskID, Intent: intent}
+
+	if err := store.CreateTask(task); err != nil {
+		res.Err = fmt.Errorf("creating task: %w", err)
+		return res
+	}
+
+	logFile, logErr := ui.OpenLogFile(task.ID)
+	logger := slog.Default()
+	if logErr == nil {
+		logger = slog.New(logFile.Handler()).With("task_id", taskID)
+		defer func() { _ = logFile.Close() }()
+	}
+	logger.Info("task created", "id", task.ID, "intent", intent)
+
+	// Each concurrent task writes to its own log file, not stdout.
+	logWriter := io.Discard
+	if logFile != nil {
+		logWriter = logFile.File()
+	}
+
+	r := ui.New(ui.Options{
+		Mode:       ui.ModeCI,
+		Colors:     ui.ColorsNone,
+		ASCII:      true,
+		IsTTY:      false,
+		NoColorEnv: true,
+		Out:        logWriter,
+	})
+	defer func() { _ = r.Close() }()
+
+	r.RunStart(task.ID, intent, "")
+
+	wsMgr := workspace.New(repoRoot, "", &workspace.ExecRunner{})
+	ws, err := wsMgr.Create(ctx, task.ID)
+	if err != nil {
+		res.Err = fmt.Errorf("creating workspace: %w", err)
+		return res
+	}
+	defer func() { _ = ws.Cleanup(ctx) }()
+
+	workDir := ws.Path
+	ghRunner := &github.ExecRunner{Dir: repoRoot}
+	ghClient := github.New(ghRunner)
+
+	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, issueNumber)
+	// In concurrent mode, escalation returns an error instead of os.Exit.
+	deps.onEscalation = func(ctx context.Context, task *state.Task, result escalation.Result) error {
+		if err := dispatchEscalation(ctx, task, result, cfg.Escalation, logWriter, ghClient); err != nil {
+			return fmt.Errorf("escalating task: %w", err)
+		}
+		return fmt.Errorf("task escalated in %s phase after %d loops (score: %.0f)", result.Phase, result.Loops, result.LastScore)
+	}
+
+	res.Err = runOrchestration(ctx, deps, task, r)
+	return res
 }
 
 // runOrchestration is the testable core of runTask. It receives all

@@ -253,6 +253,75 @@ func TestMerge(t *testing.T) {
 	}
 }
 
+func TestParseConfig_ParallelDefaults(t *testing.T) {
+	data := []byte(`
+project:
+  name: test
+`)
+	cfg, err := ParseConfig(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Parallel.MaxTasks != 3 {
+		t.Errorf("default parallel.max_tasks = %d, want 3", cfg.Parallel.MaxTasks)
+	}
+}
+
+func TestParseConfig_ParallelExplicit(t *testing.T) {
+	data := []byte(`
+project:
+  name: test
+parallel:
+  max_tasks: 5
+`)
+	cfg, err := ParseConfig(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Parallel.MaxTasks != 5 {
+		t.Errorf("parallel.max_tasks = %d, want 5", cfg.Parallel.MaxTasks)
+	}
+}
+
+func TestParseConfig_ParallelMaxTasksZeroRejected(t *testing.T) {
+	data := []byte(`
+project:
+  name: test
+parallel:
+  max_tasks: 0
+`)
+	_, err := ParseConfig(data)
+	if err == nil {
+		t.Fatal("expected error for max_tasks=0, got nil")
+	}
+}
+
+func TestMerge_Parallel(t *testing.T) {
+	base := Defaults()
+	base.Project.Name = "base"
+
+	overrides := Config{
+		Parallel: ParallelConfig{MaxTasks: 8},
+	}
+
+	merged := Merge(&base, overrides)
+	if merged.Parallel.MaxTasks != 8 {
+		t.Errorf("merged parallel.max_tasks = %d, want 8", merged.Parallel.MaxTasks)
+	}
+}
+
+func TestMerge_ParallelZeroNoOverride(t *testing.T) {
+	base := Defaults()
+	base.Project.Name = "base"
+
+	overrides := Config{}
+
+	merged := Merge(&base, overrides)
+	if merged.Parallel.MaxTasks != 3 {
+		t.Errorf("merged parallel.max_tasks = %d, want 3 (base default)", merged.Parallel.MaxTasks)
+	}
+}
+
 func TestMerge_DoesNotMutateBase(t *testing.T) {
 	base := Defaults()
 	base.Project.Name = "original"

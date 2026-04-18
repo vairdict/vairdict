@@ -17,7 +17,12 @@ type Config struct {
 	Phases       PhasesConfig      `yaml:"phases"`
 	Escalation   EscalationConfig  `yaml:"escalation"`
 	Conventions  ConventionsConfig `yaml:"conventions"`
+	Parallel     ParallelConfig    `yaml:"parallel"`
 	AutoVairdict bool              `yaml:"auto_vairdict"`
+}
+
+type ParallelConfig struct {
+	MaxTasks int `yaml:"max_tasks"`
 }
 
 type ProjectConfig struct {
@@ -90,6 +95,9 @@ type ConventionsConfig struct {
 // Defaults returns a Config with sensible defaults for all optional fields.
 func Defaults() Config {
 	return Config{
+		Parallel: ParallelConfig{
+			MaxTasks: 3,
+		},
 		Agents: AgentsConfig{
 			// "claude" is the smart default for the claude family: try
 			// the local CLI, fall back to the HTTP API. See
@@ -372,6 +380,11 @@ func Merge(base *Config, overrides Config) *Config {
 		merged.Escalation.Channel = overrides.Escalation.Channel
 	}
 
+	// Parallel
+	if overrides.Parallel.MaxTasks > 0 {
+		merged.Parallel.MaxTasks = overrides.Parallel.MaxTasks
+	}
+
 	// Conventions
 	if overrides.Conventions.Language != "" {
 		merged.Conventions.Language = overrides.Conventions.Language
@@ -402,6 +415,9 @@ func validate(cfg *Config) error {
 	if cfg.Escalation.AfterLoops < 1 {
 		return fmt.Errorf("validating config: escalation.after_loops must be >= 1")
 	}
+	if cfg.Parallel.MaxTasks < 1 {
+		return fmt.Errorf("validating config: parallel.max_tasks must be >= 1")
+	}
 	return nil
 }
 
@@ -411,7 +427,7 @@ func warnUnknownFields(data []byte) {
 	known := map[string]bool{
 		"project": true, "agents": true, "environment": true,
 		"commands": true, "phases": true, "escalation": true,
-		"conventions": true, "auto_vairdict": true,
+		"conventions": true, "parallel": true, "auto_vairdict": true,
 	}
 
 	var raw map[string]any

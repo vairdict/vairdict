@@ -45,6 +45,10 @@ func (l *LogFile) Handler() slog.Handler {
 	return slog.NewJSONHandler(l.f, &slog.HandlerOptions{Level: slog.LevelDebug})
 }
 
+// File returns the underlying *os.File so callers can use it as an
+// io.Writer (e.g. for renderer output in concurrent mode).
+func (l *LogFile) File() *os.File { return l.f }
+
 // Close flushes and closes the underlying file.
 func (l *LogFile) Close() error {
 	if l == nil || l.f == nil {

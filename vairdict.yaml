@@ -41,6 +41,9 @@ escalation:
   notify_via: stdout
   channel: ""
 
+parallel:
+  max_tasks: 3
+
 conventions:
   language: go
   formatter: gofmt
