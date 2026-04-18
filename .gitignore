@@ -42,4 +42,5 @@ coverage/
 .claude/worktrees/
 
 # Local notes / open discussion items (not for commit)
-open_issues.md
+OPEN_ISSUES.md
+plans/OPEN_ISSUES.md

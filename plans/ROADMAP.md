@@ -135,12 +135,14 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - Codex CLI usable as a completer backend
 - Gemini CLI usable as a completer backend
 - Backend selectable per phase in vairdict.yaml
+- Judge model swappable independently of completer model
 - Auto-resolver picks the best available backend like the existing claude resolver
 
 **Issues:**
 - [ ] agents/codex: Codex CLI completer
 - [ ] agents/gemini: Gemini CLI completer
 - [ ] config: per-phase backend selection in vairdict.yaml
+- [ ] judge/pluggable: swap judge model in vairdict.yaml
 - [ ] resolver: extend auto backend resolver to all agents
 - [ ] docs: agent backend selection guide
 
@@ -166,27 +168,120 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 8 — Advanced Judging
-> Judges that learn and improve over time.
+## Milestone 8 — Learning Foundation
+> VAIrdict remembers what went wrong and surfaces it next time.
+
+Design reference: [LEARNING-SYSTEM.md](./LEARNING-SYSTEM.md) · Detailed scope: [LEARNING-ROADMAP.md](./LEARNING-ROADMAP.md) milestones 1a + 1b.
 
 **Definition of done:**
-- Custom judge rules definable per project
-- Human overrides captured and influence future verdicts
-- Historical analytics per project available
+- Content-entry schema and stats-record schema locked in
+- Multi-entry content file format (`<!-- LEARNING -->` marker) implemented
+- Machine-tier storage at `~/.vairdict/learnings/` working
+- Config under `learnings:` key in `vairdict.yaml`
+- CLI commands: `vairdict learning add/list/show/remove/edit/set-grade`
+- `LearnableSignal` extension to `Gap` struct
+- Automated write path: trigger detection → Planner → Coder → Judge (fresh context)
+- Retrieval for Planner role with adaptive K, Jaccard similarity, token budget
+- Batch-and-flush stats infrastructure in place
+
+**Issues:**
+- [ ] learning/schema: content entry + stats record schemas
+- [ ] learning/parser: multi-entry file format with `<!-- LEARNING -->` marker
+- [ ] learning/storage: machine-tier file layout + manifest/index generation
+- [ ] learning/config: `learnings:` section in vairdict.yaml
+- [ ] learning/cli: `vairdict learning` subcommands (add, list, show, remove, edit, set-grade)
+- [ ] learning/signal: `LearnableSignal` extension to `Gap` struct
+- [ ] learning/write: automated write path (trigger detection + three-agent sub-phase)
+- [ ] learning/retrieve: relevance scoring + adaptive K retrieval for Planner
+- [ ] learning/stats: batch-and-flush stats update infrastructure
+- [ ] learning/dogfood: 10+ manual learnings created, 2+ auto-generated from real tasks
+
+---
+
+## Milestone 9 — Learning Repo Tier
+> Learnings become team artifacts reviewed in PRs.
+
+Design reference: [LEARNING-ROADMAP.md](./LEARNING-ROADMAP.md) milestone 2.
+
+**Definition of done:**
+- Repo-tier storage at `.vairdict/learnings/` (content git-tracked)
+- Stats via `vairdict-bot` commits (direct or dedicated branch)
+- Learnings land in PRs alongside code changes
+- `@vairdict` PR commands: add/drop/revise/set-grade learnings
+- `vairdict promote-learning` for machine → repo promotion
+- All three roles (Planner, Coder, Judge) consume learnings
+- Token budget accounting per role
+
+**Issues:**
+- [ ] learning/repo-tier: repo-level file layout + manifest
+- [ ] learning/bot-commits: stats commit strategy with retry-on-conflict
+- [ ] learning/three-role: extend retrieval to Coder and Judge with role-specific weights
+- [ ] learning/pr-flow: learnings in PR description + `@vairdict` comment commands
+- [ ] learning/promote: `vairdict promote-learning` CLI command
+- [ ] learning/triggers: inner-loop rejections, planning iteration, human `add-learning`
+
+---
+
+## Milestone 10 — Learning Monorepo Support
+> Multi-service monorepos without cross-service noise.
+
+Design reference: [LEARNING-ROADMAP.md](./LEARNING-ROADMAP.md) milestone 3.
+
+**Definition of done:**
+- `repo_type: monorepo | single-service` config working
+- Scope-based file layout: `_shared/`, `_repo/`, per-service dirs
+- Retrieval respects scope boundaries
+- CODEOWNERS integration documented
+
+**Issues:**
+- [ ] learning/monorepo-config: `repo_type` + `services` config
+- [ ] learning/monorepo-layout: scope-based directory structure
+- [ ] learning/monorepo-retrieval: scope-aware filtering
+- [ ] learning/monorepo-codeowners: CODEOWNERS integration
+
+---
+
+## Milestone 11 — Judge Intelligence
+> Judges get smarter and more transparent — custom rules, confidence, explainability.
+
+**Definition of done:**
+- Custom judge rules definable per project in vairdict.yaml
+- Historical verdict analytics per project available
+- Confidence scores on every verdict
 - Judge explains its reasoning clearly
 
 **Issues:**
 - [ ] judge/custom: custom rules in vairdict.yaml
-- [ ] judge/learning: capture human overrides
 - [ ] judge/analytics: historical verdict data
 - [ ] judge/patterns: cross-task failure patterns
 - [ ] judge/confidence: confidence scores per verdict
 - [ ] judge/explainability: why did this score X?
-- [ ] judge/pluggable: swap judge model in vairdict.yaml
 
 ---
 
-## Milestone 9 — Monetization
+## Milestone 12 — Learning Org Tier
+> Cross-repo knowledge, precedence rules, and grade reinforcement.
+
+Design reference: [LEARNING-ROADMAP.md](./LEARNING-ROADMAP.md) milestone 4.
+
+**Definition of done:**
+- Org repo (`<org>/.vairdict`) configurable and working
+- `vairdict org init/enable/sync` CLI commands
+- Precedence: repo-wins (default), org-wins for sticky tags (security, compliance)
+- Repo-level overrides with rationale + auto-PR to org repo
+- Grade reinforcement: asymptotic update on use, decay classes, protected tier
+- Graceful degradation on org tier failures
+
+**Issues:**
+- [ ] learning/org-repo: org-tier storage + `vairdict org` CLI commands
+- [ ] learning/precedence: repo-wins / org-wins / scope specificity rules
+- [ ] learning/overrides: repo override entries with auto-PR to org
+- [ ] learning/reinforcement: asymptotic grade updates + decay classes
+- [ ] learning/degradation: four failure modes handled gracefully
+
+---
+
+## Milestone 13 — Monetization
 > Sustainable business model.
 
 **Definition of done:**
@@ -204,7 +299,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 10 — Platform
+## Milestone 14 — Platform
 > VAIrdict as an ecosystem.
 
 **Definition of done:**
@@ -222,7 +317,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 11 — Early Users
+## Milestone 15 — Early Users
 > Validate with real teams outside your own repo.
 
 **Definition of done:**
@@ -241,7 +336,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 12 — Slack App
+## Milestone 16 — Slack App
 > Slack as the primary entry point for engineering teams.
 
 **Definition of done:**
@@ -259,7 +354,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 13 — Team Features
+## Milestone 17 — Team Features
 > Multiple users, roles, and projects.
 
 **Definition of done:**
@@ -278,7 +373,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 
 ---
 
-## Milestone 14 — Coder Integration
+## Milestone 18 — Coder Integration
 > Isolated cloud environments per agent.
 
 **Definition of done:**
@@ -293,6 +388,22 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - [ ] coder/permissions: scoped permissions per workspace
 - [ ] coder/registry: module published to Coder registry
 - [ ] coder/docs: setup guide for Coder users
+
+---
+
+## Learning Extensions
+> Post-v1 learning system enhancements. Prioritize based on real-world usage after M12.
+
+Design reference: [LEARNING-ROADMAP.md](./LEARNING-ROADMAP.md) milestones 5–10.
+
+All depend on M12 (Learning Org Tier). Independent of each other — order by demand.
+
+- **MCP Server** (learning-5): Expose learnings to external agents via MCP protocol (`search_learnings`, `get_learning`, `propose_learning`).
+- **Multi-Model Grading** (learning-6): Independent grading by a second model; disagreement flagging and resolution.
+- **SPM Consumption Skill** (learning-7): Portable skill for non-VAIrdict agents to read learnings from `.vairdict/learnings/`.
+- **Cross-Repo Pattern Detection** (learning-8): Auto-detect similar learnings across repos; propose org-tier promotion PRs.
+- **Rich Resolvers** (learning-9): `resolves_when` support for `version` (package manifest pins) and `ticket` (GitHub/Linear/Jira issue closure).
+- **Automatic Eviction** (learning-10): Maintenance PRs proposing removal of dormant, low-grade entries; `vairdict revive-learning` for undo.
 
 ---
 
@@ -328,6 +439,8 @@ during dogfooding land here.
 **Pluggable agents** — Claude Code is the default. Codex, Gemini, or any CLI agent can replace it.
 
 **Dogfood first** — every VAIrdict feature is built using VAIrdict itself before being shipped.
+
+**Learn from mistakes** — every rejection is a chance to capture a generalizable lesson. The learning system compounds over time.
 
 **Skills over monolith** — judge behaviors are skills published to skillpkg. Anyone can contribute or override them.
 
