@@ -67,6 +67,13 @@ of the changes that were made. Evaluate whether the diff actually
 implements the intent and plan. Base every observation on what the diff
 shows — never invent file contents that are not in the diff.
 
+IMPORTANT: The diff is a PARTIAL view of the codebase. Functions, types,
+and variables that are called or referenced in the diff but not defined
+in the diff almost certainly exist elsewhere in the codebase. Do NOT flag
+these as missing, undefined, or as compilation errors. Only flag something
+as missing if the diff itself introduces a new call to something that the
+diff also should have defined (e.g. a new helper referenced but never written).
+
 You MUST respond with valid JSON only — no markdown, no explanation outside the JSON.
 
 Severity levels for gaps:
@@ -163,6 +170,13 @@ Respond with this exact JSON structure:
     }
   ]
 }
+
+STRICT RULE — no duplication between gaps and questions:
+Every concern must appear in EXACTLY ONE of the two arrays, never both.
+Before adding a question, check whether you already listed the same
+concern as a gap. If you did, do NOT add a question about it.
+A question is ONLY for genuine uncertainty that is not already covered
+by any gap. If in doubt, use a gap and omit the question.
 
 For each gap, include "file" and "line" when the issue maps to a specific
 location in the diff. Use the file path from the diff header (the b/ side)
