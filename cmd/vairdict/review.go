@@ -6,8 +6,7 @@
 //
 // Flow:
 //  1. Fetch the PR via gh (title, body, head/base ref)
-//  2. Resolve the linked issue from the body (Closes/Fixes/Resolves #N)
-//     and use its title+body as the intent — or fall back to --intent.
+//  2. Resolve intent: --intent flag > linked issue (Closes/Fixes #N) > PR title+body
 //  3. Fetch the PR diff via gh (no checkout — keeps the user's tree clean)
 //  4. Run the quality judge with the diff passed as the diff argument
 //  5. Post the verdict via github.PostVerdict (or print to stdout when
@@ -42,8 +41,8 @@ var reviewCmd = &cobra.Command{
 	Short: "Run the quality judge against an existing PR",
 	Long: `Fetch an existing PR and run only the quality judge against it,
 posting a structured verdict comment. The intent is derived from the
-issue linked in the PR body (Closes/Fixes #N); use --intent to override
-or supply one when no issue is linked.
+issue linked in the PR body (Closes/Fixes #N), or falls back to the
+PR title and body. Use --intent to override.
 
 Use --no-comment to print the verdict to stdout instead of posting it
 on the PR (useful for local dry-runs).`,
@@ -184,10 +183,11 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	return nil
 }
 
-// resolveReviewIntent picks the intent for the judge: an explicit
-// override (from --intent) wins; otherwise the first linked issue in the
-// PR body is fetched and rendered as "title\n\nbody". Errors out cleanly
-// when neither source is available so the user gets a clear next step.
+// resolveReviewIntent picks the intent for the judge. Priority:
+//  1. Explicit --intent override
+//  2. Linked issue body (Closes/Fixes/Resolves #N in PR body)
+//  3. PR title + body as fallback
+//
 // The override is passed in (not read from package state) so the core is
 // parallel-test-safe.
 func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails, override string) (string, error) {
@@ -195,12 +195,15 @@ func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails,
 		return override, nil
 	}
 	issueNum := github.ParseLinkedIssue(pr.Body)
-	if issueNum == 0 {
-		return "", fmt.Errorf("PR #%d has no linked issue (Closes/Fixes/Resolves #N) and --intent was not provided", pr.Number)
+	if issueNum > 0 {
+		iss, err := gh.FetchIssue(ctx, issueNum)
+		if err != nil {
+			slog.Warn("failed to fetch linked issue, falling back to PR title", "issue", issueNum, "error", err)
+		} else {
+			return iss.Title + "\n\n" + iss.Body, nil
+		}
 	}
-	iss, err := gh.FetchIssue(ctx, issueNum)
-	if err != nil {
-		return "", err
-	}
-	return iss.Title + "\n\n" + iss.Body, nil
+	// Fall back to PR title + body as intent.
+	slog.Info("no linked issue or --intent, using PR title+body as intent", "pr", pr.Number)
+	return pr.Title + "\n\n" + pr.Body, nil
 }
