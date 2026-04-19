@@ -141,22 +141,23 @@ func TestRunReview_ExplicitIntentOverridesLinkedIssue(t *testing.T) {
 	}
 }
 
-func TestRunReview_NoLinkedIssue_NoIntentFlag_Errors(t *testing.T) {
+func TestRunReview_NoLinkedIssue_FallsBackToPRTitleBody(t *testing.T) {
 	t.Parallel()
 	gh := &fakeReviewGH{
-		pr: &github.PRDetails{Number: 9, Body: "no closing keyword here"},
+		pr:   &github.PRDetails{Number: 9, Title: "fix: handle nil pointer", Body: "no closing keyword here"},
+		diff: "diff --git a/x b/x\n+fix\n",
 	}
 	judge := &fakeReviewJudge{verdict: passingVerdict()}
 
 	err := runReviewWith(context.Background(), 9, baseDeps(gh, judge))
-	if err == nil {
-		t.Fatal("expected error for missing intent")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no linked issue") {
-		t.Errorf("error should mention linked issue, got: %v", err)
+	if !strings.Contains(judge.intent, "fix: handle nil pointer") {
+		t.Errorf("expected PR title in intent, got %q", judge.intent)
 	}
-	if gh.postCalled {
-		t.Error("PostVerdict should not be called on intent error")
+	if !strings.Contains(judge.intent, "no closing keyword here") {
+		t.Errorf("expected PR body in intent, got %q", judge.intent)
 	}
 }
 
