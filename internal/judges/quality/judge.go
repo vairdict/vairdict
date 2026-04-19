@@ -67,14 +67,22 @@ of the changes that were made. Evaluate whether the diff actually
 implements the intent and plan. Base every observation on what the diff
 shows — never invent file contents that are not in the diff.
 
-IMPORTANT: The diff is a PARTIAL view of the codebase. Functions, types,
-and variables that are called or referenced in the diff but not defined
-in the diff almost certainly exist elsewhere in the codebase. Do NOT flag
-these as missing, undefined, or as compilation errors. Only flag something
-as missing if the diff itself introduces a new call to something that the
-diff also should have defined (e.g. a new helper referenced but never written).
-
 You MUST respond with valid JSON only — no markdown, no explanation outside the JSON.
+
+## Critical: the diff is PARTIAL
+
+The diff shows ONLY the changed lines, not the entire codebase. Any function,
+type, variable, or import that is called/referenced in the diff but NOT
+defined in the diff ALREADY EXISTS in the codebase. This is normal — the
+diff is a patch, not a complete program.
+
+You MUST NOT:
+- Flag a function as "missing" or "undefined" because its definition is not in the diff
+- Flag a "compilation error" for a symbol not defined in the diff
+- Raise a question asking whether a function "exists elsewhere"
+- Treat a missing-from-diff symbol as a gap of ANY severity
+
+These are NOT bugs. They are existing code that was not modified.
 
 Severity levels for gaps:
 - P0: intent mismatch — the code does not solve the stated problem or is fundamentally wrong
@@ -83,6 +91,8 @@ Severity levels for gaps:
   tautological assertions (e.g. errors.Is(err, err)), unreachable branches,
   tests that can never fail, wrong variable compared, dead code that masks
   missing coverage.
+  NEVER use P1 for a symbol that is referenced but not defined in the diff —
+  that symbol exists in the codebase already.
 - P2: minor issue — style, naming, docs, minor edge cases that do not affect correctness
 - P3: nice to have — deferred to future work
 
@@ -149,6 +159,14 @@ exact sub-section headers (omit a section if empty), with "- " bullet items:
 
 Keep each bullet to one line. Do not include any other sections or prose.
 
+## Output rules
+
+1. Each concern goes in EXACTLY ONE array — either "gaps" or "questions", never both.
+   After drafting your response, remove any question that covers the same topic as a gap.
+2. A "question" is ONLY for genuine uncertainty you cannot resolve from the diff
+   (e.g. "is this called from a hot path?"). If you can state it as a finding, use a gap.
+3. Never create a gap or question about a symbol not defined in the diff — it exists.
+
 Respond with this exact JSON structure:
 {
   "score": <float 0-100>,
@@ -170,13 +188,6 @@ Respond with this exact JSON structure:
     }
   ]
 }
-
-STRICT RULE — no duplication between gaps and questions:
-Every concern must appear in EXACTLY ONE of the two arrays, never both.
-Before adding a question, check whether you already listed the same
-concern as a gap. If you did, do NOT add a question about it.
-A question is ONLY for genuine uncertainty that is not already covered
-by any gap. If in doubt, use a gap and omit the question.
 
 For each gap, include "file" and "line" when the issue maps to a specific
 location in the diff. Use the file path from the diff header (the b/ side)
