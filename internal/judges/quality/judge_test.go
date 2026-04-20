@@ -9,6 +9,7 @@ import (
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/judges/verdictschema"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -53,12 +54,10 @@ func testConfigWithE2E() config.Config {
 	return cfg
 }
 
-func TestJudge_Pass(t *testing.T) {
+func TestJudge_Pass_NoGapsScoresFull(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 85,
-			Pass:  true,
-			Gaps:  []state.Gap{},
+			Gaps: []state.Gap{},
 		},
 	}
 
@@ -69,21 +68,17 @@ func TestJudge_Pass(t *testing.T) {
 	}
 
 	if !verdict.Pass {
-		t.Error("expected pass=true for score 85")
+		t.Error("expected pass=true with 0 gaps")
 	}
-	if verdict.Score != 85 {
-		t.Errorf("expected score 85, got %f", verdict.Score)
-	}
-	if len(verdict.Gaps) != 0 {
-		t.Errorf("expected no gaps, got %d", len(verdict.Gaps))
+	if verdict.Score != 100 {
+		t.Errorf("expected score 100 with 0 gaps, got %f", verdict.Score)
 	}
 
-	// Verify prompt was sent correctly.
 	if len(fake.Calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
 	}
-	if fake.Calls[0].System == "" {
-		t.Error("expected system prompt to be set")
+	if fake.Calls[0].ToolName != verdictschema.ToolName {
+		t.Errorf("expected tool name %q, got %q", verdictschema.ToolName, fake.Calls[0].ToolName)
 	}
 	if !contains(fake.Calls[0].Prompt, "build a REST API") {
 		t.Error("expected prompt to contain intent")
@@ -93,13 +88,11 @@ func TestJudge_Pass(t *testing.T) {
 	}
 }
 
-func TestJudge_IntentMismatch(t *testing.T) {
+func TestJudge_IntentMismatch_P0Blocks(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 30,
-			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "code implements CRUD but intent was auth system", Blocking: true},
+				{Severity: state.SeverityP0, Description: "code implements CRUD but intent was auth system"},
 			},
 		},
 	}
@@ -111,16 +104,11 @@ func TestJudge_IntentMismatch(t *testing.T) {
 	}
 
 	if verdict.Pass {
-		t.Error("expected pass=false for score 30")
+		t.Error("expected pass=false for blocking P0 gap")
 	}
-	if verdict.Score != 30 {
-		t.Errorf("expected score 30, got %f", verdict.Score)
-	}
-	if len(verdict.Gaps) != 1 {
-		t.Fatalf("expected 1 gap, got %d", len(verdict.Gaps))
-	}
-	if verdict.Gaps[0].Severity != state.SeverityP0 {
-		t.Errorf("expected P0 severity for intent mismatch, got %s", verdict.Gaps[0].Severity)
+	// 100 - 40 = 60.
+	if verdict.Score != 60 {
+		t.Errorf("expected score 60 (100-40), got %f", verdict.Score)
 	}
 	if !verdict.Gaps[0].Blocking {
 		t.Error("expected P0 gap to be blocking")
@@ -130,9 +118,7 @@ func TestJudge_IntentMismatch(t *testing.T) {
 func TestJudge_E2EPass(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 90,
-			Pass:  true,
-			Gaps:  []state.Gap{},
+			Gaps: []state.Gap{},
 		},
 	}
 
@@ -151,20 +137,15 @@ func TestJudge_E2EPass(t *testing.T) {
 	if !verdict.Pass {
 		t.Error("expected pass=true when AI and e2e both pass")
 	}
-	if verdict.Score != 90 {
-		t.Errorf("expected score 90, got %f", verdict.Score)
-	}
-	if len(verdict.Gaps) != 0 {
-		t.Errorf("expected no gaps, got %d", len(verdict.Gaps))
+	if verdict.Score != 100 {
+		t.Errorf("expected score 100, got %f", verdict.Score)
 	}
 }
 
-func TestJudge_E2EFail(t *testing.T) {
+func TestJudge_E2EFail_AddsBlockingGap(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 85,
-			Pass:  true,
-			Gaps:  []state.Gap{},
+			Gaps: []state.Gap{},
 		},
 	}
 
@@ -180,65 +161,31 @@ func TestJudge_E2EFail(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Score should be penalized: 85 - 30 = 55.
-	if verdict.Score != 55 {
-		t.Errorf("expected score 55 (85-30), got %f", verdict.Score)
+	// E2E fail adds a P1 gap -> 100 - 20 = 80.
+	if verdict.Score != 80 {
+		t.Errorf("expected score 80, got %f", verdict.Score)
 	}
 	if verdict.Pass {
-		t.Error("expected pass=false when e2e fails and drops score below 70")
+		t.Error("expected pass=false due to blocking e2e gap, even with score 80")
 	}
 	if len(verdict.Gaps) != 1 {
-		t.Fatalf("expected 1 gap, got %d", len(verdict.Gaps))
+		t.Fatalf("expected 1 gap from e2e, got %d", len(verdict.Gaps))
 	}
 	if verdict.Gaps[0].Severity != state.SeverityP1 {
 		t.Errorf("expected P1 severity for e2e failure, got %s", verdict.Gaps[0].Severity)
 	}
 	if !verdict.Gaps[0].Blocking {
-		t.Error("expected e2e failure gap to be blocking")
-	}
-}
-
-func TestJudge_E2EFailHighScore(t *testing.T) {
-	// AI gives 100, e2e fails -> 100-30=70 score, but the e2e gap is
-	// P1 blocking, so the verdict must still fail.
-	fake := &claude.FakeClient{
-		Response: state.Verdict{
-			Score: 100,
-			Pass:  true,
-			Gaps:  []state.Gap{},
-		},
-	}
-
-	runner := &FakeRunner{
-		Responses: map[string]fakeResponse{
-			"make e2e": {Output: []byte("FAIL"), Err: errors.New("exit 1")},
-		},
-	}
-
-	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if verdict.Score != 70 {
-		t.Errorf("expected score 70 (100-30), got %f", verdict.Score)
-	}
-	if verdict.Pass {
-		t.Error("expected pass=false when e2e fails (P1 blocking gap), even with score >= 70")
+		t.Error("expected e2e failure gap to be blocking (assigned deterministically)")
 	}
 }
 
 func TestJudge_E2ENotRequired(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 75,
-			Pass:  true,
-			Gaps:  []state.Gap{},
+			Gaps: []state.Gap{},
 		},
 	}
 
-	// E2E not required — runner should not be called even if command exists.
 	cfg := testConfig()
 	cfg.Commands.E2E = "make e2e"
 	// E2ERequired is false by default.
@@ -252,21 +199,18 @@ func TestJudge_E2ENotRequired(t *testing.T) {
 	if !verdict.Pass {
 		t.Error("expected pass=true")
 	}
-	if verdict.Score != 75 {
-		t.Errorf("expected score 75, got %f", verdict.Score)
+	if verdict.Score != 100 {
+		t.Errorf("expected score 100, got %f", verdict.Score)
 	}
 }
 
 func TestJudge_E2ERequiredNoCommand(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 80,
-			Pass:  true,
-			Gaps:  []state.Gap{},
+			Gaps: []state.Gap{},
 		},
 	}
 
-	// E2E required but no command configured — skips e2e gracefully.
 	cfg := testConfig()
 	cfg.Phases.Quality.E2ERequired = true
 	// Commands.E2E is empty.
@@ -280,19 +224,20 @@ func TestJudge_E2ERequiredNoCommand(t *testing.T) {
 	if !verdict.Pass {
 		t.Error("expected pass=true when no e2e command configured")
 	}
-	if verdict.Score != 80 {
-		t.Errorf("expected score 80, got %f", verdict.Score)
+	if verdict.Score != 100 {
+		t.Errorf("expected score 100, got %f", verdict.Score)
 	}
 }
 
-func TestJudge_PassThresholdEnforced(t *testing.T) {
-	// AI says pass=true but score is 65 — judge overrides to pass=false.
+func TestJudge_AccumulatedP2sDragBelowThreshold(t *testing.T) {
+	// Four P2 gaps -> 100 - 40 = 60, below PassThreshold (70).
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 65,
-			Pass:  true,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "minor issue", Blocking: false},
+				{Severity: state.SeverityP2, Description: "a"},
+				{Severity: state.SeverityP2, Description: "b"},
+				{Severity: state.SeverityP2, Description: "c"},
+				{Severity: state.SeverityP2, Description: "d"},
 			},
 		},
 	}
@@ -303,16 +248,23 @@ func TestJudge_PassThresholdEnforced(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if verdict.Score != 60 {
+		t.Errorf("expected score 60, got %f", verdict.Score)
+	}
 	if verdict.Pass {
-		t.Error("expected pass=false when score 65 < threshold 70")
+		t.Error("expected pass=false when accumulated non-blocking gaps drag score below threshold")
 	}
 }
 
 func TestJudge_PassAtExactThreshold(t *testing.T) {
+	// Three P2 gaps -> 100 - 30 = 70, exactly equal to threshold. Non-blocking.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 70,
-			Pass:  false,
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "a"},
+				{Severity: state.SeverityP2, Description: "b"},
+				{Severity: state.SeverityP2, Description: "c"},
+			},
 		},
 	}
 
@@ -322,6 +274,9 @@ func TestJudge_PassAtExactThreshold(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if verdict.Score != 70 {
+		t.Errorf("expected score 70, got %f", verdict.Score)
+	}
 	if !verdict.Pass {
 		t.Error("expected pass=true when score equals threshold exactly")
 	}
@@ -340,13 +295,10 @@ func TestJudge_ClientError(t *testing.T) {
 }
 
 func TestJudge_MixedGapsWithE2E(t *testing.T) {
-	// AI finds minor gaps + e2e fails = combined gaps in verdict.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 80,
-			Pass:  true,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "missing edge case handling", Blocking: false},
+				{Severity: state.SeverityP2, Description: "missing edge case handling"},
 			},
 			Questions: []state.Question{
 				{Text: "Should we add retry logic?", Priority: "medium"},
@@ -366,18 +318,15 @@ func TestJudge_MixedGapsWithE2E(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Score: 80 - 30 = 50.
-	if verdict.Score != 50 {
-		t.Errorf("expected score 50, got %f", verdict.Score)
+	// One P2 (-10) + one P1 e2e (-20) = 100 - 30 = 70.
+	if verdict.Score != 70 {
+		t.Errorf("expected score 70, got %f", verdict.Score)
 	}
 	if verdict.Pass {
-		t.Error("expected pass=false")
+		t.Error("expected pass=false — the e2e P1 gap is blocking")
 	}
 	if len(verdict.Gaps) != 2 {
 		t.Fatalf("expected 2 gaps (1 AI + 1 e2e), got %d", len(verdict.Gaps))
-	}
-	if verdict.Gaps[0].Severity != state.SeverityP2 {
-		t.Errorf("expected first gap P2, got %s", verdict.Gaps[0].Severity)
 	}
 	if verdict.Gaps[1].Severity != state.SeverityP1 {
 		t.Errorf("expected second gap P1 (e2e), got %s", verdict.Gaps[1].Severity)
@@ -388,13 +337,13 @@ func TestJudge_MixedGapsWithE2E(t *testing.T) {
 }
 
 func TestJudge_ScoreFloorAtZero(t *testing.T) {
-	// AI gives low score, e2e also fails — score should not go below 0.
+	// Many severe gaps -> penalty exceeds 100, score must floor at 0.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 20,
-			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "wrong feature", Blocking: true},
+				{Severity: state.SeverityP0, Description: "wrong feature"},
+				{Severity: state.SeverityP0, Description: "missing core"},
+				{Severity: state.SeverityP0, Description: "broken api"},
 			},
 		},
 	}
@@ -411,22 +360,17 @@ func TestJudge_ScoreFloorAtZero(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Score: max(0, 20-30) = 0.
 	if verdict.Score != 0 {
-		t.Errorf("expected score 0, got %f", verdict.Score)
+		t.Errorf("expected score 0 (floored), got %f", verdict.Score)
 	}
 	if verdict.Pass {
 		t.Error("expected pass=false")
-	}
-	// 1 AI gap + 1 e2e gap.
-	if len(verdict.Gaps) != 2 {
-		t.Errorf("expected 2 gaps, got %d", len(verdict.Gaps))
 	}
 }
 
 func TestJudge_PromptContainsDiff(t *testing.T) {
 	fake := &claude.FakeClient{
-		Response: state.Verdict{Score: 80, Pass: true},
+		Response: state.Verdict{Gaps: []state.Gap{}},
 	}
 
 	judge := New(fake, nil, testConfig())
@@ -448,11 +392,8 @@ func TestJudge_PromptContainsDiff(t *testing.T) {
 }
 
 func TestJudge_EmptyDiffPlaceholder(t *testing.T) {
-	// Empty diff should still produce a prompt — with a placeholder line
-	// — so the LLM gets a clear signal there is nothing to evaluate
-	// instead of an empty code block.
 	fake := &claude.FakeClient{
-		Response: state.Verdict{Score: 10, Pass: false},
+		Response: state.Verdict{Gaps: []state.Gap{}},
 	}
 
 	judge := New(fake, nil, testConfig())
@@ -470,26 +411,13 @@ func TestJudge_EmptyDiffPlaceholder(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && containsStr(s, substr)
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
 
 func TestJudge_SummaryRoundTrip(t *testing.T) {
-	// The quality judge must preserve the narrative summary the LLM emits
-	// so the CLI renderer can show reviewed/notes under the phase header.
 	want := "## Reviewed\n- Intent matches implementation\n\n## Notes\n- e2e tests still green"
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score:   85,
-			Pass:    true,
 			Summary: want,
 		},
 	}
@@ -507,8 +435,6 @@ func TestJudge_SummaryRoundTrip(t *testing.T) {
 }
 
 func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
-	// Regression guard: if the summary instructions get stripped from the
-	// system prompt, the renderer silently loses its narrative block.
 	if !strings.Contains(systemPrompt, "summary") {
 		t.Error("system prompt no longer instructs the LLM to emit a summary field")
 	}
@@ -520,7 +446,6 @@ func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
 }
 
 func TestJudge_SystemPromptContainsSecurityChecks(t *testing.T) {
-	// #60: security scanning instructions must be present in the system prompt.
 	for _, keyword := range []string{
 		"### Security",
 		"Hardcoded secrets",
@@ -536,7 +461,6 @@ func TestJudge_SystemPromptContainsSecurityChecks(t *testing.T) {
 }
 
 func TestJudge_SystemPromptContainsCodeReuseChecks(t *testing.T) {
-	// #61: code-reuse detection instructions must be present in the system prompt.
 	for _, keyword := range []string{
 		"### Code reuse",
 		"duplicated",
@@ -550,7 +474,6 @@ func TestJudge_SystemPromptContainsCodeReuseChecks(t *testing.T) {
 }
 
 func TestJudge_SystemPromptContainsStyleChecks(t *testing.T) {
-	// #62: style & maintainability instructions must be present in the system prompt.
 	for _, keyword := range []string{
 		"### Style",
 		"maintainability",
@@ -561,53 +484,6 @@ func TestJudge_SystemPromptContainsStyleChecks(t *testing.T) {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing style keyword %q", keyword)
 		}
-	}
-}
-
-func TestJudge_BlockingGapFailsEvenWithHighScore(t *testing.T) {
-	// A P1 blocking gap must fail the verdict even when score >= 70.
-	fake := &claude.FakeClient{
-		Response: state.Verdict{
-			Score: 85,
-			Pass:  true,
-			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "tautological assertion", Blocking: true},
-			},
-		},
-	}
-
-	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if verdict.Pass {
-		t.Error("expected pass=false when a blocking gap exists, even with score 85")
-	}
-}
-
-func TestJudge_NonBlockingGapDoesNotFail(t *testing.T) {
-	// Non-blocking gaps (P2/P3) should not prevent passing when score >= 70.
-	fake := &claude.FakeClient{
-		Response: state.Verdict{
-			Score: 80,
-			Pass:  true,
-			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "magic number", Blocking: false},
-				{Severity: state.SeverityP3, Description: "long function", Blocking: false},
-			},
-		},
-	}
-
-	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !verdict.Pass {
-		t.Error("expected pass=true when only non-blocking gaps exist and score >= 70")
 	}
 }
 
@@ -628,12 +504,12 @@ func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
 
 func TestJudge_SystemPromptRequestsFileAndLine(t *testing.T) {
 	// #72: the system prompt must instruct the LLM to include file/line
-	// in gap JSON so inline PR comments can be posted.
+	// in gaps so inline PR comments can be posted.
 	for _, keyword := range []string{
 		`"file"`,
 		`"line"`,
-		"diff header",
-		"hunk header",
+		"b/ side",
+		"+ side",
 	} {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing file/line keyword %q", keyword)
@@ -642,16 +518,12 @@ func TestJudge_SystemPromptRequestsFileAndLine(t *testing.T) {
 }
 
 func TestJudge_GapWithFileAndLine(t *testing.T) {
-	// Judge must preserve file/line fields from the LLM response.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 75,
-			Pass:  true,
 			Gaps: []state.Gap{
 				{
 					Severity:    state.SeverityP2,
 					Description: "magic number",
-					Blocking:    false,
 					File:        "internal/foo/bar.go",
 					Line:        42,
 				},
@@ -673,5 +545,100 @@ func TestJudge_GapWithFileAndLine(t *testing.T) {
 	}
 	if verdict.Gaps[0].Line != 42 {
 		t.Errorf("expected line = 42, got %d", verdict.Gaps[0].Line)
+	}
+}
+
+func TestJudge_CodeFactsInjectedIntoPrompt(t *testing.T) {
+	// Issue #85: objective checks (tests pass, lint clean, build succeeds) must
+	// be sourced from the code judge and injected as facts, so the LLM does
+	// not re-evaluate them.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{Gaps: []state.Gap{}},
+	}
+
+	judge := New(fake, nil, testConfig()).WithCodeFacts("Score: 100%\nAll checks passed (lint, test, build)")
+	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(fake.Calls[0].Prompt, "## Facts (from code judge)") {
+		t.Error("expected facts section in prompt")
+	}
+	if !contains(fake.Calls[0].Prompt, "All checks passed") {
+		t.Error("expected fact body in prompt")
+	}
+}
+
+func TestJudge_SystemPromptInstructsNoRecheckOfObjectiveChecks(t *testing.T) {
+	// The judge must tell the LLM to trust the code judge's results.
+	for _, keyword := range []string{
+		"tests",
+		"lint",
+		"build",
+		"code judge",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing 'do not re-evaluate' keyword %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
+	// Issue #85 requires at least 2 few-shot examples (one pass, one fail).
+	for _, needle := range []string{"Example 1", "Example 2", "submit_verdict"} {
+		if !strings.Contains(systemPrompt, needle) {
+			t.Errorf("system prompt missing few-shot anchor %q", needle)
+		}
+	}
+}
+
+func TestJudge_BlockingGapFailsEvenWithHighScore(t *testing.T) {
+	// A single P1 gap costs only 20 points (score stays at 80), but the
+	// gap is blocking, so the verdict must still fail.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP1, Description: "tautological assertion"},
+			},
+		},
+	}
+
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if verdict.Score != 80 {
+		t.Errorf("expected score 80, got %f", verdict.Score)
+	}
+	if verdict.Pass {
+		t.Error("expected pass=false — blocking gap")
+	}
+}
+
+func TestJudge_NonBlockingGapsAllowPass(t *testing.T) {
+	// One P2 + one P3 -> 100 - 10 - 5 = 85, non-blocking, pass.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "magic number"},
+				{Severity: state.SeverityP3, Description: "long function"},
+			},
+		},
+	}
+
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if verdict.Score != 85 {
+		t.Errorf("expected score 85, got %f", verdict.Score)
+	}
+	if !verdict.Pass {
+		t.Error("expected pass=true — only non-blocking gaps, score above threshold")
 	}
 }

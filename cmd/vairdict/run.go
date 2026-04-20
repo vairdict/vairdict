@@ -144,7 +144,7 @@ type codeRunner interface {
 }
 
 type qualityRunner interface {
-	Run(ctx context.Context, task *state.Task, plan string) (*qualityphase.PhaseResult, error)
+	Run(ctx context.Context, task *state.Task, plan string, codeFacts string) (*qualityphase.PhaseResult, error)
 }
 
 // ghOrchestrator is the subset of github.Client the orchestrator needs.
@@ -199,8 +199,8 @@ type defaultQualityRunner struct {
 	r       ui.Renderer
 }
 
-func (d *defaultQualityRunner) Run(ctx context.Context, task *state.Task, plan string) (*qualityphase.PhaseResult, error) {
-	return runQualityPhase(ctx, d.cfg, d.client, d.store, task, plan, d.workDir, d.r)
+func (d *defaultQualityRunner) Run(ctx context.Context, task *state.Task, plan string, codeFacts string) (*qualityphase.PhaseResult, error) {
+	return runQualityPhase(ctx, d.cfg, d.client, d.store, task, plan, codeFacts, d.workDir, d.r)
 }
 
 func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client, issueNumber int) runDeps {
@@ -549,7 +549,7 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 	}
 
 	// --- Quality phase (gates the PR) ---
-	qualityResult, err := deps.quality.Run(ctx, task, planResult.Plan)
+	qualityResult, err := deps.quality.Run(ctx, task, planResult.Plan, codeResult.Feedback)
 	if err != nil {
 		r.Error(err)
 		return err
@@ -862,12 +862,13 @@ func runQualityPhase(
 	store *state.Store,
 	task *state.Task,
 	plan string,
+	codeFacts string,
 	workDir string,
 	r ui.Renderer,
 ) (*qualityphase.PhaseResult, error) {
 	r.PhaseStart(state.PhaseQuality)
 
-	judge := qualityjudge.New(client, &qualityjudge.ExecRunner{}, *cfg)
+	judge := qualityjudge.New(client, &qualityjudge.ExecRunner{}, *cfg).WithCodeFacts(codeFacts)
 	// Compute the unified diff once, here, so the judge gets concrete
 	// code content rather than just a working-directory path. The diff
 	// is stable across requeue loops because the quality phase never

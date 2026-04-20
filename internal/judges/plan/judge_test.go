@@ -8,6 +8,7 @@ import (
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/judges/verdictschema"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -23,12 +24,10 @@ func defaultCfg() config.PlanPhaseConfig {
 	}
 }
 
-func TestJudge_Pass(t *testing.T) {
+func TestJudge_Pass_NoGapsScoresFull(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 90,
-			Pass:  true,
-			Gaps:  []state.Gap{},
+			Gaps: []state.Gap{},
 		},
 	}
 
@@ -39,32 +38,29 @@ func TestJudge_Pass(t *testing.T) {
 	}
 
 	if !verdict.Pass {
-		t.Error("expected pass=true for score 90 with threshold 80")
+		t.Error("expected pass=true for 0 gaps (score 100)")
 	}
-	if verdict.Score != 90 {
-		t.Errorf("expected score 90, got %f", verdict.Score)
-	}
-	if len(verdict.Gaps) != 0 {
-		t.Errorf("expected no gaps, got %d", len(verdict.Gaps))
+	if verdict.Score != 100 {
+		t.Errorf("expected score 100 for 0 gaps, got %f", verdict.Score)
 	}
 
-	// Verify prompt was sent correctly.
 	if len(fake.Calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
+	}
+	if fake.Calls[0].ToolName != verdictschema.ToolName {
+		t.Errorf("expected tool name %q, got %q", verdictschema.ToolName, fake.Calls[0].ToolName)
 	}
 	if fake.Calls[0].System == "" {
 		t.Error("expected system prompt to be set")
 	}
 }
 
-func TestJudge_Fail(t *testing.T) {
+func TestJudge_Fail_BlockingGapsDriveScoreDown(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 50,
-			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "no error handling", Blocking: true},
-				{Severity: state.SeverityP1, Description: "missing auth", Blocking: true},
+				{Severity: state.SeverityP0, Description: "no error handling"},
+				{Severity: state.SeverityP1, Description: "missing auth"},
 			},
 			Questions: []state.Question{
 				{Text: "What database?", Priority: "high"},
@@ -78,32 +74,25 @@ func TestJudge_Fail(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// P0 (-40) + P1 (-20) = 40.
+	if verdict.Score != 40 {
+		t.Errorf("expected deterministic score 40, got %f", verdict.Score)
+	}
 	if verdict.Pass {
-		t.Error("expected pass=false for score 50 with threshold 80")
+		t.Error("expected pass=false with blocking gaps")
 	}
-	if verdict.Score != 50 {
-		t.Errorf("expected score 50, got %f", verdict.Score)
-	}
-	if len(verdict.Gaps) != 2 {
-		t.Fatalf("expected 2 gaps, got %d", len(verdict.Gaps))
-	}
-	if !verdict.Gaps[0].Blocking {
-		t.Error("expected P0 gap to be blocking")
-	}
-	if !verdict.Gaps[1].Blocking {
-		t.Error("expected P1 gap to be blocking")
+	if !verdict.Gaps[0].Blocking || !verdict.Gaps[1].Blocking {
+		t.Error("expected P0 and P1 gaps to be blocking")
 	}
 	if len(verdict.Questions) != 1 {
 		t.Errorf("expected 1 question, got %d", len(verdict.Questions))
 	}
 }
 
-func TestJudge_BlockingEnforcedByConfig(t *testing.T) {
-	// LLM returns P0 as non-blocking and P2 as blocking — judge overrides both.
+func TestJudge_BlockingIgnoresLLMOpinion(t *testing.T) {
+	// LLM returns stray Blocking flags — judge recomputes from severity.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 75,
-			Pass:  false,
 			Gaps: []state.Gap{
 				{Severity: state.SeverityP0, Description: "critical gap", Blocking: false},
 				{Severity: state.SeverityP2, Description: "ambiguous gap", Blocking: true},
@@ -125,12 +114,16 @@ func TestJudge_BlockingEnforcedByConfig(t *testing.T) {
 	}
 }
 
-func TestJudge_PassEnforcedByConfig(t *testing.T) {
-	// LLM says pass=true but score is below threshold.
+func TestJudge_AccumulatedP2sDragScoreBelowThreshold(t *testing.T) {
+	// Three P2 gaps: 100 - 3*10 = 70, below threshold 80.
+	// P2 is non-blocking, so pass is gated purely on the score.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 70,
-			Pass:  true,
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "a"},
+				{Severity: state.SeverityP2, Description: "b"},
+				{Severity: state.SeverityP2, Description: "c"},
+			},
 		},
 	}
 
@@ -140,16 +133,22 @@ func TestJudge_PassEnforcedByConfig(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if verdict.Score != 70 {
+		t.Errorf("expected score 70, got %f", verdict.Score)
+	}
 	if verdict.Pass {
-		t.Error("expected pass=false when score 70 < threshold 80, regardless of LLM opinion")
+		t.Error("expected pass=false when accumulated non-blocking gaps drag score below threshold")
 	}
 }
 
 func TestJudge_PassTrueAtExactThreshold(t *testing.T) {
+	// Two P2 gaps: 100 - 20 = 80, exactly equal to threshold.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 80,
-			Pass:  false,
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "a"},
+				{Severity: state.SeverityP2, Description: "b"},
+			},
 		},
 	}
 
@@ -159,6 +158,9 @@ func TestJudge_PassTrueAtExactThreshold(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if verdict.Score != 80 {
+		t.Errorf("expected score 80, got %f", verdict.Score)
+	}
 	if !verdict.Pass {
 		t.Error("expected pass=true when score equals threshold exactly")
 	}
@@ -167,9 +169,8 @@ func TestJudge_PassTrueAtExactThreshold(t *testing.T) {
 func TestJudge_P3GapsDeferred(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 85,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP3, Description: "nice to have", Blocking: true},
+				{Severity: state.SeverityP3, Description: "nice to have"},
 			},
 		},
 	}
@@ -183,8 +184,9 @@ func TestJudge_P3GapsDeferred(t *testing.T) {
 	if verdict.Gaps[0].Blocking {
 		t.Error("expected P3 gap to be non-blocking (deferred)")
 	}
+	// 100 - 5 = 95, above threshold.
 	if !verdict.Pass {
-		t.Error("expected pass=true for score 85 with threshold 80")
+		t.Error("expected pass=true for one P3 gap (score 95)")
 	}
 }
 
@@ -212,12 +214,12 @@ func TestJudge_CustomSeverityConfig(t *testing.T) {
 		},
 	}
 
+	// Only a P1 gap — with custom config it is non-blocking.
+	// Score: 100 - 20 = 80, above threshold 60, so pass.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score: 65,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "critical", Blocking: true},
-				{Severity: state.SeverityP1, Description: "important", Blocking: true},
+				{Severity: state.SeverityP1, Description: "important"},
 			},
 		},
 	}
@@ -228,22 +230,17 @@ func TestJudge_CustomSeverityConfig(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !verdict.Gaps[0].Blocking {
-		t.Error("expected P0 gap to be blocking")
-	}
-	if verdict.Gaps[1].Blocking {
+	if verdict.Gaps[0].Blocking {
 		t.Error("expected P1 gap to be non-blocking with custom config")
 	}
 	if !verdict.Pass {
-		t.Error("expected pass=true for score 65 with threshold 60")
+		t.Errorf("expected pass=true (score %f, threshold 60, non-blocking)", verdict.Score)
 	}
 }
 
 func TestJudge_EmptyGapsAndQuestions(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score:     95,
-			Pass:      true,
 			Gaps:      nil,
 			Questions: nil,
 		},
@@ -272,8 +269,6 @@ func TestJudge_SummaryRoundTrip(t *testing.T) {
 	want := "## Decided\n- Use cobra for CLI\n\n## Risks\n- dependency on gh CLI"
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
-			Score:   90,
-			Pass:    true,
 			Summary: want,
 		},
 	}
@@ -300,3 +295,15 @@ func TestJudge_SystemPromptMentionsSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
+	// Issue #85 requires at least 2 few-shot examples (one pass, one fail)
+	// to keep the model's output stable across runs.
+	examples := []string{"Example 1", "Example 2", "submit_verdict"}
+	for _, needle := range examples {
+		if !strings.Contains(systemPrompt, needle) {
+			t.Errorf("system prompt missing few-shot anchor %q", needle)
+		}
+	}
+}
+
