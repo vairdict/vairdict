@@ -72,15 +72,34 @@ func (e *APIError) Error() string {
 
 // messagesRequest is the request body for the Anthropic Messages API.
 type messagesRequest struct {
-	Model     string    `json:"model"`
-	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
-	Messages  []message `json:"messages"`
+	Model       string      `json:"model"`
+	MaxTokens   int         `json:"max_tokens"`
+	System      string      `json:"system,omitempty"`
+	Messages    []message   `json:"messages"`
+	Temperature *float64    `json:"temperature,omitempty"`
+	Tools       []Tool      `json:"tools,omitempty"`
+	ToolChoice  *ToolChoice `json:"tool_choice,omitempty"`
 }
 
 type message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+// Tool is a tool-use definition passed to the Anthropic Messages API.
+// InputSchema is a JSON Schema object describing the expected tool input shape;
+// the model's tool_use input will conform to it.
+type Tool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// ToolChoice forces the model to call a specific tool. Use type "tool" with a
+// Name to require a single structured response matching that tool's schema.
+type ToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
 }
 
 // messagesResponse is the response body from the Anthropic Messages API.
@@ -91,8 +110,10 @@ type messagesResponse struct {
 }
 
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 type usage struct {
@@ -108,10 +129,11 @@ type HTTPClient interface {
 
 // Client communicates with the Anthropic Messages API.
 type Client struct {
-	apiKey     string
-	model      string
-	endpoint   string
-	httpClient HTTPClient
+	apiKey      string
+	model       string
+	endpoint    string
+	httpClient  HTTPClient
+	temperature *float64
 }
 
 // Option configures a Client.
@@ -135,6 +157,14 @@ func WithEndpoint(endpoint string) Option {
 func WithModel(model string) Option {
 	return func(cl *Client) {
 		cl.model = model
+	}
+}
+
+// WithTemperature sets a default sampling temperature applied to every
+// request. Judges should call this with 0 for deterministic verdicts.
+func WithTemperature(t float64) Option {
+	return func(cl *Client) {
+		cl.temperature = &t
 	}
 }
 
@@ -182,14 +212,39 @@ func (c *Client) Complete(ctx context.Context, prompt string, target any) error 
 // Messages API and unmarshals the JSON response into the target struct.
 func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, target any) error {
 	reqBody := messagesRequest{
-		Model:     c.model,
-		MaxTokens: defaultMaxTokens,
-		System:    system,
-		Messages: []message{
-			{Role: "user", Content: prompt},
-		},
+		Model:       c.model,
+		MaxTokens:   defaultMaxTokens,
+		System:      system,
+		Messages:    []message{{Role: "user", Content: prompt}},
+		Temperature: c.temperature,
 	}
+	return c.sendAndParse(ctx, reqBody, func(resp *messagesResponse) error {
+		return unmarshalText(resp, target)
+	})
+}
 
+// CompleteWithTool sends a prompt that forces the model to call the given tool
+// and unmarshals the tool's input into target. This path uses the Anthropic
+// tool-use API for structured output with a strict JSON schema, avoiding
+// prose-to-JSON parsing.
+func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, tool Tool, target any) error {
+	reqBody := messagesRequest{
+		Model:       c.model,
+		MaxTokens:   defaultMaxTokens,
+		System:      system,
+		Messages:    []message{{Role: "user", Content: prompt}},
+		Temperature: c.temperature,
+		Tools:       []Tool{tool},
+		ToolChoice:  &ToolChoice{Type: "tool", Name: tool.Name},
+	}
+	return c.sendAndParse(ctx, reqBody, func(resp *messagesResponse) error {
+		return unmarshalToolInput(resp, tool.Name, target)
+	})
+}
+
+// sendAndParse drives the retry loop for a single request and hands the
+// decoded response to the caller-supplied extractor.
+func (c *Client) sendAndParse(ctx context.Context, reqBody messagesRequest, extract func(*messagesResponse) error) error {
 	var lastErr error
 	for attempt := range maxRetries {
 		if err := ctx.Err(); err != nil {
@@ -198,12 +253,15 @@ func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, 
 
 		body, err := c.doRequest(ctx, reqBody)
 		if err == nil {
-			return c.parseResponse(body, target)
+			var resp messagesResponse
+			if decodeErr := json.Unmarshal(body, &resp); decodeErr != nil {
+				return &ParseError{Body: string(body), Err: fmt.Errorf("unmarshalling response: %w", decodeErr)}
+			}
+			return extract(&resp)
 		}
 
 		lastErr = err
 
-		// Only retry on rate-limit or server errors.
 		if !isRetryable(err) {
 			return err
 		}
@@ -265,26 +323,34 @@ func (c *Client) doRequest(ctx context.Context, reqBody messagesRequest) ([]byte
 	}
 }
 
-func (c *Client) parseResponse(body []byte, target any) error {
-	var resp messagesResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return &ParseError{Body: string(body), Err: fmt.Errorf("unmarshalling response: %w", err)}
-	}
-
+func unmarshalText(resp *messagesResponse, target any) error {
 	if len(resp.Content) == 0 {
-		return &ParseError{Body: string(body), Err: fmt.Errorf("empty content in response")}
+		return &ParseError{Err: fmt.Errorf("empty content in response")}
 	}
 
 	text := resp.Content[0].Text
-
-	// Try to extract JSON from the response text if it's wrapped in markdown.
 	cleaned := extractJSON(text)
 
 	if err := json.Unmarshal([]byte(cleaned), target); err != nil {
 		return &ParseError{Body: text, Err: fmt.Errorf("unmarshalling into target: %w", err)}
 	}
-
 	return nil
+}
+
+func unmarshalToolInput(resp *messagesResponse, toolName string, target any) error {
+	for _, block := range resp.Content {
+		if block.Type != "tool_use" || block.Name != toolName {
+			continue
+		}
+		if len(block.Input) == 0 {
+			return &ParseError{Err: fmt.Errorf("tool_use block %q had empty input", toolName)}
+		}
+		if err := json.Unmarshal(block.Input, target); err != nil {
+			return &ParseError{Body: string(block.Input), Err: fmt.Errorf("unmarshalling tool input: %w", err)}
+		}
+		return nil
+	}
+	return &ParseError{Err: fmt.Errorf("no tool_use block for tool %q in response", toolName)}
 }
 
 // extractJSON tries to extract a JSON object or array from text that may be

@@ -19,6 +19,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/vairdict/vairdict/internal/agents/claude"
 )
 
 // NotInstalledError is returned when the `claude` binary cannot be found on
@@ -126,6 +128,25 @@ func IsAvailable() bool {
 // interface that expects both methods.
 func (c *Client) Complete(ctx context.Context, prompt string, target any) error {
 	return c.CompleteWithSystem(ctx, "", prompt, target)
+}
+
+// CompleteWithTool is the CLI-path implementation of the tool-use API.
+// The Claude Code CLI does not expose native tool-use with a forced schema,
+// so this falls back to embedding the tool's JSON Schema into the system
+// prompt and reusing the prose-to-JSON parser. The API client's
+// implementation enforces the schema strictly; this one is best-effort
+// structural. Judges therefore behave the same way from the caller side
+// regardless of which transport is resolved.
+func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error {
+	augmented := system
+	if augmented != "" {
+		augmented += "\n\n"
+	}
+	augmented += fmt.Sprintf(
+		"## Response tool: %s\n%s\n\nRespond with a single JSON object that conforms to this JSON Schema (no markdown, no prose outside the object):\n%s",
+		tool.Name, tool.Description, string(tool.InputSchema),
+	)
+	return c.CompleteWithSystem(ctx, augmented, prompt, target)
 }
 
 // envelope is the subset of Claude Code's `--output-format json` result that

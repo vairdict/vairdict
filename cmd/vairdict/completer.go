@@ -28,6 +28,7 @@ import (
 // satisfy it structurally.
 type completer interface {
 	CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
+	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
 }
 
 // backendKind is the resolved backend identifier returned alongside the
@@ -82,7 +83,12 @@ func resolveCompleter(cfg *config.Config) (completer, backendKind, error) {
 			claudecli.WithExtraArgs("--dangerously-skip-permissions"),
 		), kind, nil
 	case backendClaudeAPI:
-		c, err := claude.NewClient(cfg)
+		// Judges must be deterministic — temperature=0 removes sampling
+		// variance so the same (prompt, diff) pair produces the same verdict
+		// structure across runs. The planner shares this client, which is
+		// fine: its output is consumed by a judge anyway, so determinism
+		// flows through the whole pipeline.
+		c, err := claude.NewClient(cfg, claude.WithTemperature(0))
 		if err != nil {
 			return nil, "", fmt.Errorf("creating claude client: %w", err)
 		}

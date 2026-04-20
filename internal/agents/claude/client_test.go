@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -502,6 +504,141 @@ func TestErrorTypes(t *testing.T) {
 			t.Errorf("unexpected error string: %s", err.Error())
 		}
 	})
+}
+
+// --- Tool-use tests ---
+
+func TestCompleteWithTool_Success(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	tool := Tool{
+		Name:        "submit_verdict",
+		Description: "submit a verdict",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"]}`),
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req messagesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+		if len(req.Tools) != 1 || req.Tools[0].Name != "submit_verdict" {
+			t.Errorf("expected tools=[submit_verdict], got %+v", req.Tools)
+		}
+		if req.ToolChoice == nil || req.ToolChoice.Type != "tool" || req.ToolChoice.Name != "submit_verdict" {
+			t.Errorf("expected forced tool_choice for submit_verdict, got %+v", req.ToolChoice)
+		}
+
+		resp := messagesResponse{
+			Content: []contentBlock{{
+				Type:  "tool_use",
+				Name:  "submit_verdict",
+				Input: json.RawMessage(`{"answer":"structured"}`),
+			}},
+			StopReason: "tool_use",
+		}
+		data, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	if err := c.CompleteWithTool(context.Background(), "sys", "prompt", tool, &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Answer != "structured" {
+		t.Errorf("expected answer from tool_use block, got %q", result.Answer)
+	}
+}
+
+func TestCompleteWithTool_MissingToolBlock(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`plain text, no tool_use`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	err = c.CompleteWithTool(context.Background(), "", "prompt",
+		Tool{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}, &result)
+	if err == nil {
+		t.Fatal("expected ParseError when no tool_use block is returned")
+	}
+	var parseErr *ParseError
+	if !errors.As(err, &parseErr) {
+		t.Fatalf("expected ParseError, got %T: %v", err, err)
+	}
+}
+
+func TestWithTemperature_IncludedInRequest(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decoding request: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithTemperature(0))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	if err := c.Complete(context.Background(), "prompt", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if captured.Temperature == nil {
+		t.Fatal("expected temperature to be set in request")
+	}
+	if *captured.Temperature != 0 {
+		t.Errorf("expected temperature=0, got %f", *captured.Temperature)
+	}
+}
+
+func TestWithoutTemperature_OmitsField(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var bodyBytes []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodyBytes = b
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	if err := c.Complete(context.Background(), "prompt", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(string(bodyBytes), `"temperature"`) {
+		t.Errorf("expected temperature field omitted when unset, got body: %s", bodyBytes)
+	}
 }
 
 func TestExtractJSON(t *testing.T) {

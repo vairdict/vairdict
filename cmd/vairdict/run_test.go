@@ -489,16 +489,18 @@ func (f *fakeCodeRunner) Run(_ context.Context, task *state.Task, plan string) (
 }
 
 type fakeQualityRunner struct {
-	result *qualityphase.PhaseResult
-	gaps   []state.Gap
-	err    error
-	called bool
-	plan   string
+	result    *qualityphase.PhaseResult
+	gaps      []state.Gap
+	err       error
+	called    bool
+	plan      string
+	codeFacts string
 }
 
-func (f *fakeQualityRunner) Run(_ context.Context, task *state.Task, plan string) (*qualityphase.PhaseResult, error) {
+func (f *fakeQualityRunner) Run(_ context.Context, task *state.Task, plan string, codeFacts string) (*qualityphase.PhaseResult, error) {
 	f.called = true
 	f.plan = plan
+	f.codeFacts = codeFacts
 	if f.result != nil {
 		task.Attempts = append(task.Attempts, state.Attempt{
 			Phase: state.PhaseQuality, Loop: f.result.Loops,

@@ -1,6 +1,7 @@
 // Package plan implements the plan phase judge, which evaluates whether a
 // generated plan sufficiently covers the stated intent. It uses the Claude API
-// to score the plan and identify gaps at varying severity levels.
+// to identify gaps and questions, then computes a deterministic score from the
+// gap severities rather than asking the model for a number.
 package plan
 
 import (
@@ -8,14 +9,16 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
+	"github.com/vairdict/vairdict/internal/judges/verdictschema"
 )
 
-// Completer is the interface for sending prompts to an LLM and receiving
-// typed responses. Both claude.Client and claude.FakeClient satisfy this.
+// Completer is the interface for sending prompts to an LLM. Plan judge uses
+// tool-use exclusively so responses conform to a strict schema.
 type Completer interface {
-	CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
+	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
 }
 
 // PlanJudge evaluates a plan against an intent and returns a typed Verdict.
@@ -35,7 +38,9 @@ func New(client Completer, cfg config.PlanPhaseConfig) *PlanJudge {
 const systemPrompt = `You are a plan judge for a software development process engine.
 Your job is to evaluate whether a proposed plan adequately covers the stated intent.
 
-You MUST respond with valid JSON only — no markdown, no explanation outside the JSON.
+You respond by invoking the submit_verdict tool. The tool's schema is the
+single source of truth for the response shape — do not emit free-form JSON,
+markdown fences, or prose outside the tool call.
 
 Severity levels for gaps:
 - P0: next steps cannot proceed without resolving this — critical blocker
@@ -43,10 +48,8 @@ Severity levels for gaps:
 - P2: ambiguous, agent will document assumption and proceed — not blocking
 - P3: nice to have, deferred to future issue — not blocking
 
-For each gap, set "blocking" to true only for P0 and P1 severity.
-
-Score is a float from 0 to 100 representing how well the plan covers the intent.
-Higher scores mean better coverage.
+Do NOT set "blocking" on gaps and do NOT estimate a score — the orchestrator
+computes both deterministically from severities.
 
 The "summary" field is a short human-readable narrative in markdown-ish form
 that will be rendered under the plan phase header in the CLI. Use these exact
@@ -63,68 +66,91 @@ sub-section headers (omit a section if empty), with "- " bullet items:
 
 Keep each bullet to one line. Do not include any other sections or prose.
 
-Respond with this exact JSON structure:
+A concern goes in EXACTLY ONE of "gaps" or "questions". A "question" is only
+for genuine uncertainty you cannot resolve from the plan; if you can state it
+as a finding, use a gap.
+
+## Examples
+
+### Example 1 — clear pass
+
+Intent: "Add a CLI flag --quiet that suppresses non-error output."
+Plan: "Add a BoolP flag 'quiet' to the run command in cmd/vairdict/run.go.
+When set, route the renderer constructor through ui.NewQuiet() instead of
+ui.NewCLI(). Tests: new test case in run_test.go covering --quiet."
+
+submit_verdict input:
 {
-  "score": <float 0-100>,
-  "pass": <bool>,
-  "summary": "<markdown-ish narrative as described above>",
+  "summary": "## Decided\n- Thread --quiet through the existing renderer factory\n## Files to touch\n- cmd/vairdict/run.go — flag plumbing\n- cmd/vairdict/run_test.go — quiet-mode coverage",
+  "gaps": [],
+  "questions": []
+}
+
+### Example 2 — clear fail
+
+Intent: "Persist task state across restarts."
+Plan: "We will store tasks in memory and print them on exit."
+
+submit_verdict input:
+{
+  "summary": "## Risks\n- Plan does not satisfy the persistence requirement",
   "gaps": [
-    {
-      "severity": "<P0|P1|P2|P3>",
-      "description": "<what is missing or wrong>",
-      "blocking": <bool>
-    }
+    {"severity": "P0", "description": "In-memory storage is lost on restart — intent explicitly requires persistence across restarts."},
+    {"severity": "P1", "description": "No mention of a storage backend, schema, or migration strategy."}
   ],
-  "questions": [
-    {
-      "text": "<question for the planner>",
-      "priority": "<high|medium|low>"
-    }
-  ]
+  "questions": []
 }`
 
 // Judge evaluates a plan against an intent and returns a Verdict.
-// Pass is determined by whether the score meets the configured coverage threshold.
-// Blocking gaps are set based on the configured severity block-on list.
+// Pass is determined by whether the score meets the configured coverage
+// threshold AND there are no blocking gaps. Blocking is assigned from the
+// configured severity block-on list, not the LLM's opinion.
 func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string) (*state.Verdict, error) {
 	prompt := fmt.Sprintf("## Intent\n%s\n\n## Plan\n%s", intent, plan)
 
 	var verdict state.Verdict
-	if err := j.client.CompleteWithSystem(ctx, systemPrompt, prompt, &verdict); err != nil {
+	tool := verdictschema.VerdictTool("Submit the plan judge verdict as a structured object. Omit score, pass, and blocking — they are computed from the gap severities.")
+	if err := j.client.CompleteWithTool(ctx, systemPrompt, prompt, tool, &verdict); err != nil {
 		return nil, fmt.Errorf("judging plan: %w", err)
 	}
 
-	// Build lookup sets from config.
+	// Always pass a non-nil map — empty BlockOn must mean "nothing blocks",
+	// not "fall back to default P0+P1".
 	blockSet := toSet(j.cfg.Severity.BlockOn)
+	if blockSet == nil {
+		blockSet = map[string]bool{}
+	}
 	assumeSet := toSet(j.cfg.Severity.AssumeOn)
 	deferSet := toSet(j.cfg.Severity.DeferOn)
 
-	// Enforce blocking based on config, not the LLM's opinion.
-	for i := range verdict.Gaps {
-		sev := string(verdict.Gaps[i].Severity)
-		verdict.Gaps[i].Blocking = blockSet[sev]
+	verdictschema.ApplyBlocking(verdict.Gaps, blockSet)
 
+	for _, g := range verdict.Gaps {
+		sev := string(g.Severity)
 		if assumeSet[sev] {
 			slog.Info("gap logged as assumption, not blocking",
 				"severity", sev,
-				"description", verdict.Gaps[i].Description,
+				"description", g.Description,
 			)
 		}
 		if deferSet[sev] {
 			slog.Info("gap deferred to future issue",
 				"severity", sev,
-				"description", verdict.Gaps[i].Description,
+				"description", g.Description,
 			)
 		}
 	}
 
-	// Enforce pass based on config threshold, not the LLM's opinion.
-	verdict.Pass = verdict.Score >= j.cfg.CoverageThreshold
+	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
+	verdict.Pass = verdict.Score >= j.cfg.CoverageThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
 
 	return &verdict, nil
 }
 
 func toSet(items []string) map[string]bool {
+	if len(items) == 0 {
+		return nil
+	}
 	s := make(map[string]bool, len(items))
 	for _, item := range items {
 		s[item] = true

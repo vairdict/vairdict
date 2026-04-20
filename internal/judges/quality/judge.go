@@ -1,6 +1,7 @@
 // Package quality implements the quality phase judge, which evaluates whether
 // completed code fulfills the original task intent and optionally runs e2e tests.
-// It uses the Claude API for intent verification and produces a typed Verdict.
+// It uses the Claude API for intent verification via tool-use and produces a
+// typed Verdict with a deterministic score computed from gap severities.
 package quality
 
 import (
@@ -11,14 +12,16 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/judges/verdictschema"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
-// Completer is the interface for sending prompts to an LLM and receiving
-// typed responses. Both claude.Client and claude.FakeClient satisfy this.
+// Completer is the interface for sending prompts to an LLM. Quality judge uses
+// tool-use exclusively so responses conform to a strict schema.
 type Completer interface {
-	CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
+	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
 }
 
 // CommandRunner executes a command and returns its output and error.
@@ -41,13 +44,19 @@ func (e *ExecRunner) Run(ctx context.Context, workDir string, name string, args 
 	return out.Bytes(), err
 }
 
+// PassThreshold is the minimum score a quality verdict must reach to pass.
+// Because scores are computed deterministically from gap severities, this is
+// a fixed tuning knob rather than a config value.
+const PassThreshold = 70.0
+
 // QualityJudge evaluates whether completed code fulfills the original task
 // intent and optionally runs e2e tests. It combines AI-based intent
 // verification with command-based e2e testing to produce a comprehensive Verdict.
 type QualityJudge struct {
-	client Completer
-	runner CommandRunner
-	cfg    config.Config
+	client    Completer
+	runner    CommandRunner
+	cfg       config.Config
+	codeFacts string
 }
 
 // New creates a QualityJudge with the given client, command runner, and config.
@@ -59,15 +68,38 @@ func New(client Completer, runner CommandRunner, cfg config.Config) *QualityJudg
 	}
 }
 
+// WithCodeFacts returns a judge that will inject the given facts block into
+// the prompt. Facts come from the preceding code phase (lint/test/build via
+// spm ship) so the LLM does not re-evaluate objective checks.
+func (j *QualityJudge) WithCodeFacts(facts string) *QualityJudge {
+	cp := *j
+	cp.codeFacts = facts
+	return &cp
+}
+
 const systemPrompt = `You are a quality judge for a software development process engine.
 Your job is to evaluate whether implemented code fulfills the original task intent.
+
+You respond by invoking the submit_verdict tool. The tool's schema is the
+single source of truth for the response shape — do not emit free-form JSON,
+markdown fences, or prose outside the tool call.
 
 You are given the original intent, the approved plan, and the unified diff
 of the changes that were made. Evaluate whether the diff actually
 implements the intent and plan. Base every observation on what the diff
 shows — never invent file contents that are not in the diff.
 
-You MUST respond with valid JSON only — no markdown, no explanation outside the JSON.
+## Do NOT re-evaluate objective checks
+
+Tests, lint, format, and build have already been verified by the code judge
+(spm ship). If a "## Facts (from code judge)" section is provided in the user
+message, trust it. Do NOT:
+- raise gaps about tests failing / not compiling / formatting
+- speculate whether the code builds
+- suggest running the test suite
+
+Focus on: intent fulfillment, plan alignment, correctness bugs,
+security, code reuse, and style — things the code judge does not check.
 
 ## Critical: the diff is PARTIAL
 
@@ -84,7 +116,8 @@ You MUST NOT:
 
 These are NOT bugs. They are existing code that was not modified.
 
-Severity levels for gaps:
+## Severity levels for gaps
+
 - P0: intent mismatch — the code does not solve the stated problem or is fundamentally wrong
 - P1: significant gap — major feature or requirement is missing or broken.
   This includes any correctness bug in production code OR test code, such as:
@@ -96,14 +129,13 @@ Severity levels for gaps:
 - P2: minor issue — style, naming, docs, minor edge cases that do not affect correctness
 - P3: nice to have — deferred to future work
 
-For each gap, set "blocking" to true only for P0 and P1 severity.
+Do NOT set "blocking" on gaps and do NOT estimate a score — the orchestrator
+computes both deterministically from severities.
 A correctness bug is ALWAYS at least P1, never P2 — even if it is in test code.
 
 ## Additional checks
 
 In addition to intent/plan alignment, scan the diff for the following.
-These are supplementary to the intent/plan check above. Security issues
-are blocking (P1). Code-reuse and style issues are non-blocking (P2/P3).
 
 ### Security (P1 blocking)
 Flag any of these patterns visible in the diff:
@@ -118,19 +150,13 @@ Flag any of these patterns visible in the diff:
 - Use of known-insecure crypto (MD5, SHA1 for security purposes, DES, RC4)
 - Disabled TLS verification or certificate checks
 
-Security issues are blocking — set severity to P1 and blocking to true.
-Only flag what is actually visible in the diff. Do not speculate about code
-outside the diff.
+Only flag what is actually visible in the diff.
 
 ### Code reuse (P2 non-blocking)
 Flag duplicated or copy-pasted logic visible in the diff:
 - Two or more new functions/methods with near-identical bodies (>5 lines)
 - Copy-pasted blocks that differ only in variable names or literals
 - Re-implementation of logic that clearly exists in the same diff
-  (e.g. a helper is defined but not used, and the same logic is inlined)
-
-Only flag duplication within the diff itself — do not assume what exists
-in the rest of the codebase.
 
 ### Style & maintainability (P3 non-blocking)
 Flag readability and maintainability issues visible in the diff:
@@ -140,12 +166,7 @@ Flag readability and maintainability issues visible in the diff:
 - Deeply nested control flow (>3 levels) that could be simplified
 - Missing error handling where errors are silently discarded (e.g. _ = fn())
 
-These are suggestions, not requirements. Use P3 severity.
-
----
-
-Score is a float from 0 to 100 representing how well the implementation fulfills the intent.
-Set pass to true if the implementation adequately fulfills the intent (score >= 70).
+## Summary
 
 The "summary" field is a short human-readable narrative in markdown-ish form
 that will be rendered under the quality phase header in the CLI. Use these
@@ -162,38 +183,41 @@ Keep each bullet to one line. Do not include any other sections or prose.
 ## Output rules
 
 1. Each concern goes in EXACTLY ONE array — either "gaps" or "questions", never both.
-   After drafting your response, remove any question that covers the same topic as a gap.
-2. A "question" is ONLY for genuine uncertainty you cannot resolve from the diff
-   (e.g. "is this called from a hot path?"). If you can state it as a finding, use a gap.
+2. A "question" is ONLY for genuine uncertainty you cannot resolve from the diff.
 3. Never create a gap or question about a symbol not defined in the diff — it exists.
+4. For gaps tied to a specific diff line, set "file" (b/ side) and "line" (+ side).
+   Omit or set to "" / 0 for architectural gaps that span multiple files.
 
-Respond with this exact JSON structure:
+## Examples
+
+### Example 1 — clear pass
+
+Intent: "Add a --dry-run flag to vairdict run that skips PR creation."
+Facts: tests pass, lint clean, build ok.
+Diff (abridged): "+ var dryRun bool ... if !dryRun { openPR(...) }" plus test coverage.
+
+submit_verdict input:
 {
-  "score": <float 0-100>,
-  "pass": <bool>,
-  "summary": "<markdown-ish narrative as described above>",
-  "gaps": [
-    {
-      "severity": "<P0|P1|P2|P3>",
-      "description": "<what is missing or wrong>",
-      "blocking": <bool>,
-      "file": "<path from diff header, e.g. internal/foo/bar.go>",
-      "line": <line number in the new file where the issue is>
-    }
-  ],
-  "questions": [
-    {
-      "text": "<question about the implementation>",
-      "priority": "<high|medium|low>"
-    }
-  ]
+  "summary": "## Reviewed\n- --dry-run flag wiring in run.go\n- test covering the dry-run branch",
+  "gaps": [],
+  "questions": []
 }
 
-For each gap, include "file" and "line" when the issue maps to a specific
-location in the diff. Use the file path from the diff header (the b/ side)
-and the line number from the @@ hunk header (the + side). Omit "file" and
-"line" (or set to "" and 0) for gaps that are architectural or span multiple
-files.`
+### Example 2 — clear fail (intent mismatch + security)
+
+Intent: "Add basic auth to the admin endpoint."
+Facts: tests pass, lint clean, build ok.
+Diff (abridged): "+ admin.HandleFunc('/admin', handler) ... + const apiKey = \"sk-live-abc123\""
+
+submit_verdict input:
+{
+  "summary": "## Reviewed\n- admin route wiring and literal credential\n## Notes\n- Hardcoded key must move to env or config",
+  "gaps": [
+    {"severity": "P0", "description": "No authentication middleware on /admin — intent requires basic auth."},
+    {"severity": "P1", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14}
+  ],
+  "questions": []
+}`
 
 // Judge evaluates whether the given diff fulfills the original intent and plan.
 // It runs AI-based intent verification (against the diff content, not a
@@ -205,7 +229,7 @@ files.`
 // produce a low score because the LLM has nothing concrete to evaluate.
 func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error) {
 	// Step 1: AI intent verification.
-	aiVerdict, err := j.evaluateIntent(ctx, intent, plan, diff)
+	verdict, err := j.evaluateIntent(ctx, intent, plan, diff)
 	if err != nil {
 		return nil, fmt.Errorf("evaluating intent: %w", err)
 	}
@@ -214,31 +238,24 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 	// working directory — the judge no longer takes a workDir, and the
 	// orchestrator always invokes us with the project root as cwd.
 	if j.cfg.Phases.Quality.E2ERequired && j.cfg.Commands.E2E != "" {
-		e2eGap := j.runE2E(ctx, ".")
-		if e2eGap != nil {
-			aiVerdict.Gaps = append(aiVerdict.Gaps, *e2eGap)
-			// Penalize score for e2e failure: reduce by 30 points, floor at 0.
-			aiVerdict.Score = max(0, aiVerdict.Score-30)
+		if e2eGap := j.runE2E(ctx, "."); e2eGap != nil {
+			verdict.Gaps = append(verdict.Gaps, *e2eGap)
 		}
 	}
 
-	// Enforce pass threshold: score >= 70 AND no blocking gaps.
-	hasBlocking := false
-	for _, g := range aiVerdict.Gaps {
-		if g.Blocking {
-			hasBlocking = true
-			break
-		}
-	}
-	aiVerdict.Pass = aiVerdict.Score >= 70 && !hasBlocking
+	// Blocking and score are derived deterministically — the model never
+	// sets either.
+	verdictschema.ApplyBlocking(verdict.Gaps, nil)
+	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
+	verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
 
 	slog.Info("quality judge verdict",
-		"score", aiVerdict.Score,
-		"pass", aiVerdict.Pass,
-		"gaps", len(aiVerdict.Gaps),
+		"score", verdict.Score,
+		"pass", verdict.Pass,
+		"gaps", len(verdict.Gaps),
 	)
 
-	return aiVerdict, nil
+	return verdict, nil
 }
 
 // evaluateIntent uses the Claude API to assess whether the diff matches the intent.
@@ -247,11 +264,20 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	if strings.TrimSpace(diffSection) == "" {
 		diffSection = "(no diff provided — judge cannot evaluate code changes)"
 	}
-	prompt := fmt.Sprintf("## Original Intent\n%s\n\n## Approved Plan\n%s\n\n## Diff (unified format)\n```diff\n%s\n```",
-		intent, plan, diffSection)
+
+	var facts string
+	if strings.TrimSpace(j.codeFacts) != "" {
+		facts = fmt.Sprintf("\n\n## Facts (from code judge)\n%s", strings.TrimSpace(j.codeFacts))
+	}
+
+	prompt := fmt.Sprintf(
+		"## Original Intent\n%s\n\n## Approved Plan\n%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
+		intent, plan, facts, diffSection,
+	)
 
 	var verdict state.Verdict
-	if err := j.client.CompleteWithSystem(ctx, systemPrompt, prompt, &verdict); err != nil {
+	tool := verdictschema.VerdictTool("Submit the quality judge verdict as a structured object. Omit score, pass, and blocking — they are computed from the gap severities.")
+	if err := j.client.CompleteWithTool(ctx, systemPrompt, prompt, tool, &verdict); err != nil {
 		return nil, fmt.Errorf("calling completer: %w", err)
 	}
 
@@ -274,7 +300,6 @@ func (j *QualityJudge) runE2E(ctx context.Context, workDir string) *state.Gap {
 		return &state.Gap{
 			Severity:    state.SeverityP1,
 			Description: fmt.Sprintf("e2e tests failed: %s", truncate(strings.TrimSpace(outStr), 500)),
-			Blocking:    true,
 		}
 	}
 
@@ -287,11 +312,4 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
-}
-
-func max(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
 }

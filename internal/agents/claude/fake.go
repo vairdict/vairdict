@@ -20,10 +20,12 @@ type FakeClient struct {
 	Calls []FakeCall
 }
 
-// FakeCall records a single invocation of Complete or CompleteWithSystem.
+// FakeCall records a single invocation of Complete, CompleteWithSystem, or
+// CompleteWithTool. ToolName is empty for non-tool calls.
 type FakeCall struct {
-	System string
-	Prompt string
+	System   string
+	Prompt   string
+	ToolName string
 }
 
 // Complete records the call and returns the configured response or error.
@@ -34,7 +36,18 @@ func (f *FakeClient) Complete(_ context.Context, prompt string, target any) erro
 // CompleteWithSystem records the call and returns the configured response or error.
 func (f *FakeClient) CompleteWithSystem(_ context.Context, system, prompt string, target any) error {
 	f.Calls = append(f.Calls, FakeCall{System: system, Prompt: prompt})
+	return f.fill(target)
+}
 
+// CompleteWithTool records the call (including the tool name) and returns the
+// configured response or error. The configured Response is marshalled into the
+// target as if the tool had been invoked.
+func (f *FakeClient) CompleteWithTool(_ context.Context, system, prompt string, tool Tool, target any) error {
+	f.Calls = append(f.Calls, FakeCall{System: system, Prompt: prompt, ToolName: tool.Name})
+	return f.fill(target)
+}
+
+func (f *FakeClient) fill(target any) error {
 	if f.Err != nil {
 		return f.Err
 	}
