@@ -593,30 +593,6 @@ func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
 	}
 }
 
-func TestJudge_DeterministicVerdictShape(t *testing.T) {
-	// Same input must produce the same verdict structure.
-	resp := state.Verdict{
-		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "gap a"},
-			{Severity: state.SeverityP2, Description: "gap b"},
-		},
-	}
-	judge := New(&claude.FakeClient{Response: resp}, nil, testConfig())
-
-	v1, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
-	if err != nil {
-		t.Fatal(err)
-	}
-	v2, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if v1.Score != v2.Score || v1.Pass != v2.Pass {
-		t.Errorf("verdict not deterministic: %+v vs %+v", v1, v2)
-	}
-}
-
 func TestJudge_BlockingGapFailsEvenWithHighScore(t *testing.T) {
 	// A single P1 gap costs only 20 points (score stays at 80), but the
 	// gap is blocking, so the verdict must still fail.

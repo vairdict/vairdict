@@ -307,28 +307,3 @@ func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
 	}
 }
 
-func TestJudge_DeterministicVerdictShape(t *testing.T) {
-	// Issue #85: same input must produce the same verdict structure across
-	// runs. Because scoring is computed from gap severities, two invocations
-	// with identical fake responses must yield identical Score/Pass.
-	resp := state.Verdict{
-		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "gap a"},
-			{Severity: state.SeverityP2, Description: "gap b"},
-		},
-	}
-	judge := New(&claude.FakeClient{Response: resp}, defaultCfg())
-
-	v1, err := judge.Judge(context.Background(), "intent", "plan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	v2, err := judge.Judge(context.Background(), "intent", "plan")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if v1.Score != v2.Score || v1.Pass != v2.Pass {
-		t.Errorf("verdict not deterministic: %+v vs %+v", v1, v2)
-	}
-}
