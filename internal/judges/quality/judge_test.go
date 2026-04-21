@@ -546,12 +546,16 @@ func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
 
 func TestJudge_SystemPromptRequestsFileAndLine(t *testing.T) {
 	// #72: the system prompt must instruct the LLM to include file/line
-	// in gaps so inline PR comments can be posted.
+	// in gaps so inline PR comments can be posted. #100 follow-up: the
+	// prompt must also push back against omitting file/line — otherwise
+	// the judge tends to classify everything as "architectural" and
+	// gaps fall out of the inline-review path.
 	for _, keyword := range []string{
 		`"file"`,
 		`"line"`,
 		"b/ side",
 		"+ side",
+		"ANY plausible anchor",
 	} {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing file/line keyword %q", keyword)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -707,7 +708,10 @@ func TestPostVerdictWithDiff_InlineComments(t *testing.T) {
 	}
 }
 
-func TestPostVerdictWithDiff_NoInlineWhenNoFileLines(t *testing.T) {
+func TestPostVerdictWithDiff_ReviewStillPostedForUnanchoredGaps(t *testing.T) {
+	// #100 follow-up: gaps without file/line used to be dropped
+	// silently from the inline review. Now they surface in the review
+	// body so reviewers still see them in the PR's review tab.
 	diff := `diff --git a/x.go b/x.go
 --- a/x.go
 +++ b/x.go
@@ -727,17 +731,19 @@ func TestPostVerdictWithDiff_NoInlineWhenNoFileLines(t *testing.T) {
 		},
 	}
 
-	err := client.PostVerdictWithDiff(context.Background(), 5, verdict, state.PhaseQuality, 1, diff)
-	if err != nil {
+	if err := client.PostVerdictWithDiff(context.Background(), 5, verdict, state.PhaseQuality, 1, diff); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// No gaps have file/line, so no review API call should be made.
+	var sawReview bool
 	for _, call := range runner.Calls {
 		if call.Name == "gh" && len(call.Args) >= 2 &&
 			call.Args[0] == "api" && strings.Contains(strings.Join(call.Args, " "), "reviews") {
-			t.Error("did not expect gh api review call when no gaps have file/line")
+			sawReview = true
 		}
+	}
+	if !sawReview {
+		t.Error("expected review API call so unanchored gap surfaces, saw none")
 	}
 }
 
@@ -761,10 +767,11 @@ func TestPostVerdictWithDiff_EmptyDiffSkipsInline(t *testing.T) {
 }
 
 func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
-	// #72: only gaps with file+line resolvable to a diff position become
-	// inline comments. Gaps without file/line, or with file/line that
-	// don't map into the diff, are dropped from the review but still
-	// surface via FormatVerdictComment's summary table.
+	// #72: gaps with file+line resolvable to a diff position become inline
+	// comments. Gaps without file/line, or with file/line that don't map
+	// into the diff, are surfaced as bullets in the review body so they
+	// remain visible in the PR review rather than only in the verdict
+	// criteria table.
 	diff := `diff --git a/foo.go b/foo.go
 --- a/foo.go
 +++ b/foo.go
@@ -803,11 +810,20 @@ func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
 	if !contains(only.Body, "in diff") {
 		t.Errorf("expected body to include gap description, got %q", only.Body)
 	}
+	// The three non-resolvable gaps must now appear in the review body so
+	// reviewers see every concern, not just the subset with anchors.
+	for _, want := range []string{"no file info", "line outside diff", "wrong file"} {
+		if !contains(review.Body, want) {
+			t.Errorf("expected unanchored gap %q in review body, got %q", want, review.Body)
+		}
+	}
 }
 
-func TestBuildInlineReview_NilWhenNoResolvableGap(t *testing.T) {
-	// If every gap is either location-less or out-of-diff, we return nil
-	// so the client skips the gh api call entirely.
+func TestBuildInlineReview_UnanchoredGapsStillSurface(t *testing.T) {
+	// When every gap is location-less or out-of-diff we used to return
+	// nil and drop the whole review; now we still post a review whose
+	// body lists the unanchored gaps. Guards the "no gap silently
+	// disappears" invariant.
 	diff := `diff --git a/x.go b/x.go
 --- a/x.go
 +++ b/x.go
@@ -823,8 +839,34 @@ func TestBuildInlineReview_NilWhenNoResolvableGap(t *testing.T) {
 		},
 	}
 
+	review := BuildInlineReview(verdict, diff)
+	if review == nil {
+		t.Fatal("expected review payload so unanchored gaps surface, got nil")
+	}
+	if len(review.Comments) != 0 {
+		t.Errorf("expected 0 inline comments, got %d", len(review.Comments))
+	}
+	for _, want := range []string{"no location", "out of diff"} {
+		if !contains(review.Body, want) {
+			t.Errorf("expected unanchored gap %q in review body, got %q", want, review.Body)
+		}
+	}
+}
+
+func TestBuildInlineReview_NilWhenNoGapsAtAll(t *testing.T) {
+	// The only case where we skip the API call entirely is when the
+	// verdict has no gaps — no inline, no unanchored, nothing to post.
+	diff := `diff --git a/x.go b/x.go
+--- a/x.go
++++ b/x.go
+@@ -1,3 +1,4 @@
+ a
++b
+ c
+`
+	verdict := &state.Verdict{}
 	if review := BuildInlineReview(verdict, diff); review != nil {
-		t.Errorf("expected nil review when no gap resolves, got %+v", review)
+		t.Errorf("expected nil review when verdict has no gaps, got %+v", review)
 	}
 }
 
@@ -903,6 +945,102 @@ func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
 	}
 	if !contains(comment, "style nit") {
 		t.Error("expected second gap description in comment")
+	}
+}
+
+func TestSetCommitStatus_Success(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("{}")}}}
+	err := New(runner).SetCommitStatus(context.Background(), "abc123", "success", "vairdict/review", "Overridden by @alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Sanity check the gh args so a future refactor that drops the SHA or context name gets caught.
+	var apiCall *FakeCall
+	for i, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) > 0 && call.Args[0] == "api" {
+			apiCall = &runner.Calls[i]
+			break
+		}
+	}
+	if apiCall == nil {
+		t.Fatal("gh api was not called")
+	}
+	joined := ""
+	for _, a := range apiCall.Args {
+		joined += a + " "
+	}
+	if !contains(joined, "abc123") {
+		t.Errorf("args missing SHA: %q", joined)
+	}
+	if !contains(joined, "state=success") {
+		t.Errorf("args missing state: %q", joined)
+	}
+	if !contains(joined, "context=vairdict/review") {
+		t.Errorf("args missing context: %q", joined)
+	}
+	if !contains(joined, "description=Overridden by @alice") {
+		t.Errorf("args missing description: %q", joined)
+	}
+}
+
+func TestSetCommitStatus_EmptySHA(t *testing.T) {
+	runner := &FakeRunner{}
+	err := New(runner).SetCommitStatus(context.Background(), "", "success", "ctx", "desc")
+	if err == nil {
+		t.Fatal("expected error for empty SHA")
+	}
+	for _, call := range runner.Calls {
+		if call.Name == "gh" {
+			t.Error("gh should not be invoked when SHA is empty")
+		}
+	}
+}
+
+func TestSetCommitStatus_GhError(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Err: errors.New("403")}}}
+	err := New(runner).SetCommitStatus(context.Background(), "abc", "success", "ctx", "desc")
+	if err == nil {
+		t.Fatal("expected error from failing gh call")
+	}
+}
+
+func TestRecentCommentExists_True(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("2\n")}}}
+	ok, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected true when count > 0")
+	}
+}
+
+func TestRecentCommentExists_False_ZeroCount(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("0\n")}}}
+	ok, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected false when count == 0")
+	}
+}
+
+func TestRecentCommentExists_False_EmptyOutput(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("")}}}
+	ok, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected false when output is empty")
+	}
+}
+
+func TestRecentCommentExists_GhError(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Err: errors.New("api down")}}}
+	if _, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", time.Second); err == nil {
+		t.Fatal("expected error to propagate")
 	}
 }
 

@@ -13,10 +13,10 @@ Update this file when opening, completing, or blocking an issue.
 - #81 conflicts: merge conflict detection
 - #90 cmd/resume: resume interrupted run from last checkpoint
 - #91 cmd/interactive: status, notes, pause/continue during execution
-- #100 cmd: @vairdict PR mention commands (review / approve / ignore)
 
 ## In Progress
 - #80 queue: priority ordering + dependency resolution
+- #100 cmd: @vairdict PR mention commands (review / approve / ignore)
 
 ## Blocked
 - #82 perf: load test 5 concurrent tasks (depends on #77-#81)

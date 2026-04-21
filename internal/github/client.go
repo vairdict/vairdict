@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -87,6 +88,7 @@ type PRDetails struct {
 	Title       string `json:"title"`
 	Body        string `json:"body"`
 	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
 	BaseRefName string `json:"baseRefName"`
 }
 
@@ -248,7 +250,7 @@ func parsePRNumber(url string) int {
 // are deliberately limited to those needed by the review command.
 func (c *Client) FetchPR(ctx context.Context, number int) (*PRDetails, error) {
 	out, err := c.runner.Run(ctx, "gh", "pr", "view", strconv.Itoa(number),
-		"--json", "number,title,body,headRefName,baseRefName")
+		"--json", "number,title,body,headRefName,headRefOid,baseRefName")
 	if err != nil {
 		return nil, fmt.Errorf("fetching PR #%d: %w", number, err)
 	}
@@ -433,22 +435,25 @@ type InlineReviewPayload struct {
 
 // BuildInlineReview turns a verdict + diff into a review payload whose
 // comments point only at lines present in the diff. Gaps without File/Line
-// and gaps whose line does not appear in the diff are dropped — they
-// still appear in the summary comment rendered by FormatVerdictComment.
-// Returns nil when no gap resolves to a diff position; callers should
-// skip the API call in that case.
+// or whose line does not appear in the diff are collected into the review
+// body so reviewers still see every concern — previously they were dropped
+// silently and only surfaced in the verdict table.
+// Returns nil only when the verdict has no gaps at all.
 func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload {
 	positions := ParseDiffPositions(diff)
 
 	var comments []InlineComment
+	var unanchored []state.Gap
 	for _, g := range verdict.Gaps {
 		if g.File == "" || g.Line == 0 {
+			unanchored = append(unanchored, g)
 			continue
 		}
 		pos, ok := ResolveDiffPosition(positions, g.File, g.Line)
 		if !ok {
-			slog.Debug("gap line not in diff, skipping inline comment",
+			slog.Debug("gap line not in diff, surfacing as unanchored review body entry",
 				"file", g.File, "line", g.Line, "severity", g.Severity)
+			unanchored = append(unanchored, g)
 			continue
 		}
 		comments = append(comments, InlineComment{
@@ -458,15 +463,32 @@ func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload
 		})
 	}
 
-	if len(comments) == 0 {
+	if len(comments) == 0 && len(unanchored) == 0 {
 		return nil
 	}
 
 	return &InlineReviewPayload{
 		Event:    "COMMENT",
-		Body:     fmt.Sprintf("VAIrdict inline review: %d comment(s)", len(comments)),
+		Body:     formatReviewBody(len(comments), unanchored),
 		Comments: comments,
 	}
+}
+
+// formatReviewBody builds the top-level review body. When every gap has a
+// diff anchor the body is just a summary line; otherwise each unanchored
+// gap is rendered as a bullet so no concern silently disappears from the
+// PR thread. The non-inline gaps would otherwise only show up in the
+// verdict criteria table, which readers rarely scan row-by-row.
+func formatReviewBody(inlineCount int, unanchored []state.Gap) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "VAIrdict inline review: %d comment(s)", inlineCount)
+	if len(unanchored) > 0 {
+		b.WriteString("\n\n**Gaps without a diff anchor:**\n")
+		for _, g := range unanchored {
+			fmt.Fprintf(&b, "- %s\n", formatInlineComment(g))
+		}
+	}
+	return b.String()
 }
 
 // postInlineReview creates a single GitHub review with inline comments
@@ -520,6 +542,64 @@ func formatInlineComment(g state.Gap) string {
 		icon = "🚫"
 	}
 	return fmt.Sprintf("%s **[%s]** %s", icon, g.Severity, g.Description)
+}
+
+// CommitStatusContext is the context string VAIrdict uses when posting
+// override commit statuses from PR-mention commands (`approve` / `ignore`).
+// A fixed, recognisable context name means the override status is easy
+// to spot in the PR's checks list and easy to correlate in audit logs.
+const CommitStatusContext = "vairdict/review"
+
+// SetCommitStatus posts a commit status to the given SHA via the GitHub
+// statuses API. Used by the PR-mention `approve` / `ignore` handlers to
+// unblock a PR whose last VAIrdict verdict failed: a green status with
+// context `vairdict/review` overrides the prior failure for branch
+// protection rules that only require this context.
+//
+// state must be one of error|failure|pending|success (GitHub's API values).
+// The description is surfaced in the PR's checks list — keep it short.
+func (c *Client) SetCommitStatus(ctx context.Context, sha, state, statusContext, description string) error {
+	if sha == "" {
+		return fmt.Errorf("commit status requires a non-empty SHA")
+	}
+	args := []string{
+		"api", "-X", "POST",
+		fmt.Sprintf("repos/{owner}/{repo}/statuses/%s", sha),
+		"-f", "state=" + state,
+		"-f", "context=" + statusContext,
+	}
+	if description != "" {
+		args = append(args, "-f", "description="+description)
+	}
+	if _, err := c.runner.Run(ctx, "gh", args...); err != nil {
+		return fmt.Errorf("setting commit status for %s: %w", sha, err)
+	}
+	slog.Info("commit status set", "sha", sha, "state", state, "context", statusContext)
+	return nil
+}
+
+// RecentCommentExists reports whether any comment on the PR contains the
+// given marker and was created within the given window. Used for
+// rate-limiting: the `review` handler posts a marker comment when it
+// starts a re-run, and subsequent `@vairdict review` mentions within
+// the window short-circuit to avoid queuing duplicate runs.
+//
+// Errors surface to the caller rather than being swallowed — a stale
+// gh shellout should not silently disable rate-limiting.
+func (c *Client) RecentCommentExists(ctx context.Context, prNumber int, marker string, within time.Duration) (bool, error) {
+	cutoff := time.Now().Add(-within).UTC().Format(time.RFC3339)
+	// Sort descending so the comments we care about (posted in the last
+	// `within`) are on page 1; no --paginate so the --jq filter applies
+	// once to a single JSON array and the result is an unambiguous count.
+	out, err := c.runner.Run(ctx, "gh", "api",
+		fmt.Sprintf("repos/{owner}/{repo}/issues/%d/comments?sort=created&direction=desc&per_page=30", prNumber),
+		"--jq",
+		fmt.Sprintf(`[.[] | select(.created_at >= "%s") | select(.body | contains("%s"))] | length`, cutoff, marker))
+	if err != nil {
+		return false, fmt.Errorf("listing PR comments: %w", err)
+	}
+	count := strings.TrimSpace(string(out))
+	return count != "" && count != "0", nil
 }
 
 // MergePR merges a PR via `gh pr merge --squash --delete-branch`. The
