@@ -154,7 +154,10 @@ No PR is merged without a passing VAIrdict verdict.
 5. Write the code in the correct package per the architecture above
 6. Write tests alongside the code — no exceptions
 7. Update plans/PROGRESS.md — move issue to "In Progress"
-8. Open a PR linked to the issue
+8. Open a PR linked to the issue — the PR body MUST include `Closes #<issue>`
+   (or `Fixes #<issue>`) so GitHub links them and the auto-review action can
+   resolve the original intent. Use a fresh branch per issue; never reuse a
+   branch that has already been merged.
 9. Update plans/PROGRESS.md — move issue to "Done" when PR is merged
 10. Check dependency graph — move newly unblocked issues to "Ready to Start"
 
@@ -165,6 +168,8 @@ Do not open a PR without a passing verdict (M3+).
 ## What NOT to do
 
 - Do not commit directly to main — all code changes go through PRs
+- Do not open a PR without `Closes #<issue>` (or `Fixes #<issue>`) in the body
+- Do not reuse a branch that has already been merged — start a fresh branch per issue
 - Do not add dependencies without checking existing ones first
 - Do not change vairdict.yaml schema without updating config/ parser
 - Do not write judges that return raw strings — always typed structs
