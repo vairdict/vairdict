@@ -15,6 +15,7 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/judges/verdictschema"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -77,8 +78,16 @@ func (j *QualityJudge) WithCodeFacts(facts string) *QualityJudge {
 	return &cp
 }
 
-const systemPrompt = `You are a quality judge for a software development process engine.
-Your job is to evaluate whether implemented code fulfills the original task intent.
+const systemPromptCore = `You are an experienced senior code reviewer acting as a quality judge
+for a software development process engine. Your job is to evaluate
+whether the implemented code fulfills the original task intent.
+
+You care about correctness, clarity, and future maintenance pain. You are
+considered and deliberate — you comment when it matters and stay quiet
+when it does not. Silence on trivia is a feature, not a bug: you would
+rather miss a nit than add noise. Flag things that would cause a bug, a
+regression, or real maintenance pain; don't flag things a thoughtful
+reviewer would let slide.
 
 You respond by invoking the submit_verdict tool. The tool's schema is the
 single source of truth for the response shape — do not emit free-form JSON,
@@ -190,7 +199,7 @@ Keep each bullet to one line. Do not include any other sections or prose.
 
 ## Examples
 
-### Example 1 — clear pass
+### Example 1 — pass with one considered observation
 
 Intent: "Add a --dry-run flag to vairdict run that skips PR creation."
 Facts: tests pass, lint clean, build ok.
@@ -199,9 +208,15 @@ Diff (abridged): "+ var dryRun bool ... if !dryRun { openPR(...) }" plus test co
 submit_verdict input:
 {
   "summary": "## Reviewed\n- --dry-run flag wiring in run.go\n- test covering the dry-run branch",
-  "gaps": [],
+  "gaps": [
+    {"severity": "P3", "description": "The --dry-run logging prints 'would open PR' but no URL preview; a reader running dry-run gets a weaker signal than they could.", "file": "cmd/vairdict/run.go", "line": 588}
+  ],
   "questions": []
 }
+
+Note: a single, useful P3 observation is preferable to empty gaps when
+something genuinely worth mentioning exists — but never pad with nits
+just to avoid empty gaps. If a diff is genuinely clean, leave gaps empty.
 
 ### Example 2 — clear fail (intent mismatch + security)
 
@@ -218,6 +233,11 @@ submit_verdict input:
   ],
   "questions": []
 }`
+
+// systemPrompt is the quality judge system prompt with the non-negotiable
+// engineering standards appended. Baseline rules reach the judge so it
+// flags violations regardless of team config.
+var systemPrompt = systemPromptCore + "\n\n" + standards.Block
 
 // Judge evaluates whether the given diff fulfills the original intent and plan.
 // It runs AI-based intent verification (against the diff content, not a
@@ -246,6 +266,14 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 	// Blocking and score are derived deterministically — the model never
 	// sets either.
 	verdictschema.ApplyBlocking(verdict.Gaps, nil)
+	// Baseline violations (#84) are non-negotiable: promote P0/P1 gaps
+	// tagged with the baseline marker to blocking. In the quality judge
+	// the default block set already covers P0/P1, so this is belt-and-
+	// suspenders — but it stays consistent with the plan judge and
+	// guards against a future block set that would exclude P1.
+	if promoted := standards.ForceBaselineBlocking(verdict.Gaps); promoted > 0 {
+		slog.Info("baseline rule forced blocking", "gaps_promoted", promoted)
+	}
 	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
 	verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
 

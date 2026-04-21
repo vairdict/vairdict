@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -156,6 +157,9 @@ func buildCoderPrompt(intent string, plan string, feedback string, assumptions [
 	b.WriteString("## Approved Plan\n")
 	b.WriteString(plan)
 	b.WriteString("\n")
+
+	b.WriteString("\n")
+	b.WriteString(standards.Block)
 
 	b.WriteString("\n## Guidelines\n")
 	b.WriteString("- Avoid duplicating logic. Before writing a new helper, check if one already exists.\n")

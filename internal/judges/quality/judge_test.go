@@ -10,8 +10,50 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/judges/verdictschema"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
+
+func TestQualitySystemPrompt_IncludesBaseline(t *testing.T) {
+	// #84: the quality judge prompt must include the non-negotiable
+	// standards so violations can be flagged with the baseline marker.
+	if !strings.Contains(systemPrompt, standards.Block) {
+		t.Error("quality judge system prompt must include the baseline standards block")
+	}
+	for _, tag := range standards.AllRules {
+		if !strings.Contains(systemPrompt, string(tag)) {
+			t.Errorf("quality judge system prompt missing baseline rule tag %q", tag)
+		}
+	}
+}
+
+func TestQualityJudge_BaselineMarkerForcesBlocking(t *testing.T) {
+	// A P1 baseline gap is already blocking under the quality judge's
+	// default block set (P0+P1), so this test primarily guards the wiring
+	// — a regression where ForceBaselineBlocking stops being called would
+	// not show up here, but the unit test in the standards package covers
+	// the promotion logic itself. The observable behavior here is: the
+	// gap must end up Blocking=true regardless of what the LLM said.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP1, Description: "BASELINE: no-secrets: hardcoded token", Blocking: false},
+			},
+		},
+	}
+	judge := New(fake, nil, testConfig())
+
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Gaps[0].Blocking {
+		t.Error("baseline-marked gap must be blocking")
+	}
+	if verdict.Pass {
+		t.Error("pass must be false when a blocking baseline gap is present")
+	}
+}
 
 // FakeRunner returns configurable output for testing e2e commands.
 type FakeRunner struct {

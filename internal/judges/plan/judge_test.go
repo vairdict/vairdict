@@ -9,8 +9,83 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/judges/verdictschema"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
+
+func TestSystemPrompt_IncludesBaseline(t *testing.T) {
+	// #84: the judge must see the non-negotiable standards so it can flag
+	// baseline violations with the correct marker.
+	if !strings.Contains(systemPrompt, standards.Block) {
+		t.Error("plan judge system prompt must include the baseline standards block")
+	}
+	for _, tag := range standards.AllRules {
+		if !strings.Contains(systemPrompt, string(tag)) {
+			t.Errorf("plan judge system prompt missing baseline rule tag %q", tag)
+		}
+	}
+}
+
+func TestJudge_BaselineViolationForcedBlocking_UnderPermissiveConfig(t *testing.T) {
+	// Simulate a team config that only blocks P0. A baseline P1 gap would
+	// normally slip through — the judge must force it blocking anyway.
+	cfg := config.PlanPhaseConfig{
+		CoverageThreshold: 60,
+		MaxLoops:          3,
+		Severity: config.SeverityConfig{
+			BlockOn:  []string{"P0"},
+			AssumeOn: []string{"P2"},
+			DeferOn:  []string{"P3"},
+		},
+	}
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP1, Description: "BASELINE: no-secrets: literal token"},
+			},
+		},
+	}
+	judge := New(fake, cfg)
+
+	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Gaps[0].Blocking {
+		t.Error("baseline P1 gap must be blocking even when BlockOn=[P0]")
+	}
+	if verdict.Pass {
+		t.Error("pass must be false when a blocking gap is present")
+	}
+}
+
+func TestJudge_NonBaselineP1StillGovernedByConfig(t *testing.T) {
+	// Control: a plain (non-baseline) P1 under BlockOn=[P0] remains
+	// non-blocking. Guards against ForceBaselineBlocking over-promoting.
+	cfg := config.PlanPhaseConfig{
+		CoverageThreshold: 60,
+		MaxLoops:          3,
+		Severity: config.SeverityConfig{
+			BlockOn: []string{"P0"},
+		},
+	}
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP1, Description: "missing validation"},
+			},
+		},
+	}
+	judge := New(fake, cfg)
+
+	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Gaps[0].Blocking {
+		t.Error("non-baseline P1 should stay non-blocking under BlockOn=[P0]")
+	}
+}
 
 func defaultCfg() config.PlanPhaseConfig {
 	return config.PlanPhaseConfig{

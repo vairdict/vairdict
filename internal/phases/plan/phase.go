@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -56,7 +57,7 @@ func New(planner Planner, judge Judge, cfg config.PlanPhaseConfig) *PlanPhase {
 	}
 }
 
-const plannerSystemPrompt = `You are a software development planner. Your job is to take a task intent and produce a detailed requirements document and implementation plan.
+const plannerSystemPromptCore = `You are a software development planner. Your job is to take a task intent and produce a detailed requirements document and implementation plan.
 
 You MUST respond with valid JSON only — no markdown, no explanation outside the JSON.
 
@@ -67,6 +68,12 @@ Respond with this exact JSON structure:
 }
 
 If you receive feedback from a previous attempt, address every piece of feedback in your revised plan.`
+
+// plannerSystemPrompt is the planner prompt with the non-negotiable
+// engineering standards appended. Baseline rules reach the planner so it
+// plans around them from the start (e.g. names a config loader rather
+// than leaving "TODO: load secrets").
+var plannerSystemPrompt = plannerSystemPromptCore + "\n\n" + standards.Block
 
 // Run executes the plan phase for the given task. It loops up to MaxLoops
 // times, running the planner and judge on each iteration. It updates task
