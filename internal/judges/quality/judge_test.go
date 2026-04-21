@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -704,5 +705,97 @@ func TestJudge_NonBlockingGapsAllowPass(t *testing.T) {
 	}
 	if !verdict.Pass {
 		t.Error("expected pass=true — only non-blocking gaps, score above threshold")
+	}
+}
+
+func TestCheckPathHandler_ExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/sub/dir", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// chdir so the handler resolves relative to our temp dir.
+	orig, _ := os.Getwd()
+	defer func() { _ = os.Chdir(orig) }()
+	_ = os.Chdir(dir)
+
+	result, err := checkPathHandler(context.Background(), []byte(`{"path":"sub/dir"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "exists: true, type: directory" {
+		t.Errorf("expected directory exists, got %q", result)
+	}
+}
+
+func TestCheckPathHandler_ExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/test.txt", []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig, _ := os.Getwd()
+	defer func() { _ = os.Chdir(orig) }()
+	_ = os.Chdir(dir)
+
+	result, err := checkPathHandler(context.Background(), []byte(`{"path":"test.txt"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "exists: true, type: file" {
+		t.Errorf("expected file exists, got %q", result)
+	}
+}
+
+func TestCheckPathHandler_NonExistent(t *testing.T) {
+	result, err := checkPathHandler(context.Background(), []byte(`{"path":"does/not/exist"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "exists: false" {
+		t.Errorf("expected not exists, got %q", result)
+	}
+}
+
+func TestCheckPathHandler_PathTraversal(t *testing.T) {
+	result, err := checkPathHandler(context.Background(), []byte(`{"path":"../../../etc/passwd"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !contains(result, "error") {
+		t.Errorf("expected error for path traversal, got %q", result)
+	}
+}
+
+func TestCheckPathHandler_AbsolutePath(t *testing.T) {
+	result, err := checkPathHandler(context.Background(), []byte(`{"path":"/etc/passwd"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !contains(result, "error") {
+		t.Errorf("expected error for absolute path, got %q", result)
+	}
+}
+
+func TestJudge_SystemPromptMentionsCheckPath(t *testing.T) {
+	if !strings.Contains(systemPrompt, "check_path") {
+		t.Error("system prompt must mention the check_path tool")
+	}
+}
+
+func TestJudge_UsesCompleteWithTools(t *testing.T) {
+	fake := &claude.FakeClient{
+		Response: state.Verdict{Gaps: []state.Gap{}},
+	}
+
+	judge := New(fake, nil, testConfig())
+	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
+	}
+	if fake.Calls[0].ToolName != verdictschema.ToolName {
+		t.Errorf("expected final tool %q, got %q", verdictschema.ToolName, fake.Calls[0].ToolName)
 	}
 }

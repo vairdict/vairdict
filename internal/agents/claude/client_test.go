@@ -641,6 +641,125 @@ func TestWithoutTemperature_OmitsField(t *testing.T) {
 	}
 }
 
+// --- CompleteWithTools tests ---
+
+func makeToolUseResponse(id, name string, input json.RawMessage) string {
+	resp := messagesResponse{
+		Content: []contentBlock{{
+			Type:  "tool_use",
+			ID:    id,
+			Name:  name,
+			Input: input,
+		}},
+		StopReason: "tool_use",
+	}
+	data, _ := json.Marshal(resp)
+	return string(data)
+}
+
+func TestCompleteWithTools_DirectFinalTool(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeToolUseResponse("t1", "submit_verdict", json.RawMessage(`{"answer":"done"}`))))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	err = c.CompleteWithTools(context.Background(), "sys", "prompt",
+		[]Tool{{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}},
+		"submit_verdict", nil, &result)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Answer != "done" {
+		t.Errorf("expected answer 'done', got %q", result.Answer)
+	}
+}
+
+func TestCompleteWithTools_AuxiliaryThenFinal(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := callCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+		if n == 1 {
+			// First call: model calls check_path
+			_, _ = w.Write([]byte(makeToolUseResponse("t1", "check_path", json.RawMessage(`{"path":"cmd/main.go"}`))))
+			return
+		}
+		// Second call: model calls final tool
+		_, _ = w.Write([]byte(makeToolUseResponse("t2", "submit_verdict", json.RawMessage(`{"answer":"verified"}`))))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	handlerCalled := false
+	handlers := map[string]ToolHandler{
+		"check_path": func(_ context.Context, input json.RawMessage) (string, error) {
+			handlerCalled = true
+			return "exists: true, type: file", nil
+		},
+	}
+
+	var result testResult
+	err = c.CompleteWithTools(context.Background(), "sys", "prompt",
+		[]Tool{
+			{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)},
+			{Name: "check_path", InputSchema: json.RawMessage(`{}`)},
+		},
+		"submit_verdict", handlers, &result)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handlerCalled {
+		t.Error("expected handler to be called")
+	}
+	if result.Answer != "verified" {
+		t.Errorf("expected answer 'verified', got %q", result.Answer)
+	}
+	if callCount.Load() != 2 {
+		t.Errorf("expected 2 API calls, got %d", callCount.Load())
+	}
+}
+
+func TestCompleteWithTools_UnknownTool(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeToolUseResponse("t1", "unknown_tool", json.RawMessage(`{}`))))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	err = c.CompleteWithTools(context.Background(), "", "prompt",
+		[]Tool{{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}},
+		"submit_verdict", nil, &result)
+	if err == nil {
+		t.Fatal("expected error for unknown tool")
+	}
+	if !strings.Contains(err.Error(), "unknown tool") {
+		t.Errorf("expected 'unknown tool' error, got: %v", err)
+	}
+}
+
 func TestExtractJSON(t *testing.T) {
 	tests := []struct {
 		name  string

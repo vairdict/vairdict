@@ -7,9 +7,12 @@ package quality
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
@@ -20,9 +23,10 @@ import (
 )
 
 // Completer is the interface for sending prompts to an LLM. Quality judge uses
-// tool-use exclusively so responses conform to a strict schema.
+// multi-turn tool-use so the model can call auxiliary tools (like check_path)
+// before submitting the final verdict.
 type Completer interface {
-	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
+	CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, handlers map[string]claude.ToolHandler, target any) error
 }
 
 // CommandRunner executes a command and returns its output and error.
@@ -78,6 +82,51 @@ func (j *QualityJudge) WithCodeFacts(facts string) *QualityJudge {
 	return &cp
 }
 
+// checkPathSchema is the JSON Schema for the check_path auxiliary tool.
+const checkPathSchema = `{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Relative path from the project root to check (e.g. 'cmd/vairdict', 'internal/config/config.go')."
+    }
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}`
+
+// checkPathTool returns the tool definition for the check_path auxiliary tool.
+func checkPathTool() claude.Tool {
+	return claude.Tool{
+		Name:        "check_path",
+		Description: "Check whether a file or directory exists in the project repository. Returns existence status and type (file or directory).",
+		InputSchema: json.RawMessage(checkPathSchema),
+	}
+}
+
+// checkPathHandler resolves a check_path tool call by stat-ing the path
+// relative to the current working directory (project root).
+func checkPathHandler(_ context.Context, input json.RawMessage) (string, error) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &req); err != nil {
+		return "", fmt.Errorf("parsing check_path input: %w", err)
+	}
+	cleaned := filepath.Clean(req.Path)
+	if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
+		return "error: path must be relative and within the project", nil
+	}
+	info, err := os.Stat(cleaned)
+	if err != nil {
+		return "exists: false", nil
+	}
+	if info.IsDir() {
+		return "exists: true, type: directory", nil
+	}
+	return "exists: true, type: file", nil
+}
+
 const systemPromptCore = `You are an experienced senior code reviewer acting as a quality judge
 for a software development process engine. Your job is to evaluate
 whether the implemented code fulfills the original task intent.
@@ -131,6 +180,15 @@ You MUST NOT:
 - Treat a missing-from-diff symbol as a gap of ANY severity
 
 These are NOT bugs. They are existing code that was not modified.
+
+## Verifying file or directory existence
+
+If you are genuinely uncertain whether a file or directory referenced in the
+diff exists in the project, call the check_path tool with the relative path
+BEFORE raising a gap or question about it. Do NOT guess — verify first.
+Do NOT call check_path for:
+- Code symbols (functions, types, variables) — they exist if referenced in the diff
+- Paths that appear in the diff itself — they obviously exist
 
 ## Severity levels for gaps
 
@@ -351,8 +409,12 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	)
 
 	var verdict state.Verdict
-	tool := verdictschema.VerdictTool("Submit the quality judge verdict as a structured object. Omit score, pass, and blocking — they are computed from the gap severities.")
-	if err := j.client.CompleteWithTool(ctx, systemPrompt, prompt, tool, &verdict); err != nil {
+	verdictTool := verdictschema.VerdictTool("Submit the quality judge verdict as a structured object. Omit score, pass, and blocking — they are computed from the gap severities.")
+	tools := []claude.Tool{verdictTool, checkPathTool()}
+	handlers := map[string]claude.ToolHandler{
+		"check_path": checkPathHandler,
+	}
+	if err := j.client.CompleteWithTools(ctx, systemPrompt, prompt, tools, verdictschema.ToolName, handlers, &verdict); err != nil {
 		return nil, fmt.Errorf("calling completer: %w", err)
 	}
 
