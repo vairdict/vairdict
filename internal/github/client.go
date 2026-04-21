@@ -435,22 +435,25 @@ type InlineReviewPayload struct {
 
 // BuildInlineReview turns a verdict + diff into a review payload whose
 // comments point only at lines present in the diff. Gaps without File/Line
-// and gaps whose line does not appear in the diff are dropped — they
-// still appear in the summary comment rendered by FormatVerdictComment.
-// Returns nil when no gap resolves to a diff position; callers should
-// skip the API call in that case.
+// or whose line does not appear in the diff are collected into the review
+// body so reviewers still see every concern — previously they were dropped
+// silently and only surfaced in the verdict table.
+// Returns nil only when the verdict has no gaps at all.
 func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload {
 	positions := ParseDiffPositions(diff)
 
 	var comments []InlineComment
+	var unanchored []state.Gap
 	for _, g := range verdict.Gaps {
 		if g.File == "" || g.Line == 0 {
+			unanchored = append(unanchored, g)
 			continue
 		}
 		pos, ok := ResolveDiffPosition(positions, g.File, g.Line)
 		if !ok {
-			slog.Debug("gap line not in diff, skipping inline comment",
+			slog.Debug("gap line not in diff, surfacing as unanchored review body entry",
 				"file", g.File, "line", g.Line, "severity", g.Severity)
+			unanchored = append(unanchored, g)
 			continue
 		}
 		comments = append(comments, InlineComment{
@@ -460,15 +463,32 @@ func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload
 		})
 	}
 
-	if len(comments) == 0 {
+	if len(comments) == 0 && len(unanchored) == 0 {
 		return nil
 	}
 
 	return &InlineReviewPayload{
 		Event:    "COMMENT",
-		Body:     fmt.Sprintf("VAIrdict inline review: %d comment(s)", len(comments)),
+		Body:     formatReviewBody(len(comments), unanchored),
 		Comments: comments,
 	}
+}
+
+// formatReviewBody builds the top-level review body. When every gap has a
+// diff anchor the body is just a summary line; otherwise each unanchored
+// gap is rendered as a bullet so no concern silently disappears from the
+// PR thread. The non-inline gaps would otherwise only show up in the
+// verdict criteria table, which readers rarely scan row-by-row.
+func formatReviewBody(inlineCount int, unanchored []state.Gap) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "VAIrdict inline review: %d comment(s)", inlineCount)
+	if len(unanchored) > 0 {
+		b.WriteString("\n\n**Gaps without a diff anchor:**\n")
+		for _, g := range unanchored {
+			fmt.Fprintf(&b, "- %s\n", formatInlineComment(g))
+		}
+	}
+	return b.String()
 }
 
 // postInlineReview creates a single GitHub review with inline comments

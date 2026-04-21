@@ -202,7 +202,11 @@ Keep each bullet to one line. Do not include any other sections or prose.
 2. A "question" is ONLY for genuine uncertainty you cannot resolve from the diff.
 3. Never create a gap or question about a symbol not defined in the diff — it exists.
 4. For gaps tied to a specific diff line, set "file" (b/ side) and "line" (+ side).
-   Omit or set to "" / 0 for architectural gaps that span multiple files.
+   Always provide file/line when ANY plausible anchor exists — a function,
+   a filter condition, a config key. Omit (set to "" / 0) ONLY for genuinely
+   repo-wide gaps (e.g. "missing CI workflow", "no README section"). Gaps
+   without an anchor cannot be posted as inline PR comments, so defaulting
+   to file/line keeps reviewers' feedback visible where it belongs.
 
 ## Examples
 
