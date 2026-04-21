@@ -628,9 +628,27 @@ func TestJudge_SystemPromptInstructsNoRecheckOfObjectiveChecks(t *testing.T) {
 
 func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
 	// Issue #85 requires at least 2 few-shot examples (one pass, one fail).
-	for _, needle := range []string{"Example 1", "Example 2", "submit_verdict"} {
+	// Post-#79 we add Example 3 — a false-positive the judge must NOT
+	// produce — so keep all three anchors asserted.
+	for _, needle := range []string{"Example 1", "Example 2", "Example 3", "submit_verdict"} {
 		if !strings.Contains(systemPrompt, needle) {
 			t.Errorf("system prompt missing few-shot anchor %q", needle)
+		}
+	}
+}
+
+func TestJudge_SystemPromptHasPartialDiffFalsePositiveExample(t *testing.T) {
+	// The judge violated the partial-diff rule on PR #99 by flagging an
+	// existing same-package function as "undefined". Keep a concrete
+	// false-positive example + its correction in the prompt so the model
+	// sees the mistake pattern explicitly, not just the abstract rule.
+	for _, needle := range []string{
+		"INCORRECT submit_verdict",
+		"CORRECT submit_verdict",
+		"same-package symbols do not need imports",
+	} {
+		if !strings.Contains(systemPrompt, needle) {
+			t.Errorf("system prompt missing partial-diff false-positive anchor %q", needle)
 		}
 	}
 }
