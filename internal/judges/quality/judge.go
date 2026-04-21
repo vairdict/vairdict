@@ -207,6 +207,16 @@ Keep each bullet to one line. Do not include any other sections or prose.
    repo-wide gaps (e.g. "missing CI workflow", "no README section"). Gaps
    without an anchor cannot be posted as inline PR comments, so defaulting
    to file/line keeps reviewers' feedback visible where it belongs.
+5. For gaps with file/line, you may also set "suggestion" — the exact replacement
+   code for the line(s) at that location. The suggestion is rendered as a GitHub
+   suggestion block that the author can apply with one click. Rules:
+   - Only set when you can offer a concrete, correct, complete replacement.
+   - The suggestion replaces the ENTIRE line referenced by "line". Include
+     the full corrected line(s), preserving indentation.
+   - Omit for design concerns, architectural observations, or when the fix
+     spans many lines or requires changes in multiple locations.
+   - Good candidates: renamed variables, added nil checks, fixed format strings,
+     corrected function signatures, small refactors (1–3 lines).
 
 ## Examples
 
@@ -245,7 +255,7 @@ submit_verdict input:
   "summary": "## Reviewed\n- admin route wiring and literal credential\n## Notes\n- Hardcoded key must move to env or config",
   "gaps": [
     {"severity": "P0", "description": "No authentication middleware on /admin — intent requires basic auth."},
-    {"severity": "P1", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14}
+    {"severity": "P1", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14, "suggestion": "\tapiKey := os.Getenv(\"ADMIN_API_KEY\")"}
   ],
   "questions": []
 }

@@ -99,6 +99,7 @@ type Gap struct {
 	Blocking    bool     `json:"blocking"`
 	File        string   `json:"file,omitempty"`
 	Line        int      `json:"line,omitempty"`
+	Suggestion  string   `json:"suggestion,omitempty"`
 }
 
 // Question represents a question raised by a judge.

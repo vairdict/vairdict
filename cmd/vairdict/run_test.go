@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/conflicts"
 	"github.com/vairdict/vairdict/internal/escalation"
 	"github.com/vairdict/vairdict/internal/github"
 	codephase "github.com/vairdict/vairdict/internal/phases/code"
@@ -845,6 +846,148 @@ func TestRunOrchestration_AutoMerge_FailureDoesNotFailRun(t *testing.T) {
 	}
 	if !b.gh.mergeCalled {
 		t.Error("MergePR should have been attempted")
+	}
+}
+
+// --- Conflict detection orchestration tests ---
+
+// fakeConflictChecker implements conflictChecker for testing.
+type fakeConflictChecker struct {
+	result *conflicts.Result
+	err    error
+	called bool
+}
+
+func (f *fakeConflictChecker) DetectAndResolve(context.Context, string, string) (*conflicts.Result, error) {
+	f.called = true
+	return f.result, f.err
+}
+
+func TestRunOrchestration_ConflictDetection_Clean(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	cc := &fakeConflictChecker{result: &conflicts.Result{Diverged: false}}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.conflicts = cc
+	deps.workDir = "/fake/work"
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cc.called {
+		t.Error("conflict checker should be called")
+	}
+	if !b.gh.prCalled {
+		t.Error("PR should be created when no conflicts")
+	}
+}
+
+func TestRunOrchestration_ConflictDetection_Rebased(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	cc := &fakeConflictChecker{result: &conflicts.Result{Diverged: true, Rebased: true}}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.conflicts = cc
+	deps.workDir = "/fake/work"
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !b.gh.prCalled {
+		t.Error("PR should be created after successful rebase")
+	}
+}
+
+func TestRunOrchestration_ConflictDetection_Conflicts_Escalate(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	cc := &fakeConflictChecker{result: &conflicts.Result{
+		Diverged:      true,
+		HasConflicts:  true,
+		ConflictFiles: []string{"main.go", "util.go"},
+	}}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.conflicts = cc
+	deps.workDir = "/fake/work"
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if !errors.Is(err, errEscalated) {
+		t.Fatalf("expected errEscalated, got %v", err)
+	}
+	if !b.escalationCalled {
+		t.Error("escalation should be called on merge conflict")
+	}
+	if b.gh.prCalled {
+		t.Error("PR should NOT be created when conflicts exist")
+	}
+	// Verify escalation gaps include conflict files.
+	if len(b.escalationResult.Gaps) != 2 {
+		t.Fatalf("expected 2 conflict gaps, got %d", len(b.escalationResult.Gaps))
+	}
+	for _, g := range b.escalationResult.Gaps {
+		if g.Severity != state.SeverityP0 {
+			t.Errorf("conflict gap should be P0, got %s", g.Severity)
+		}
+		if !g.Blocking {
+			t.Error("conflict gap should be blocking")
+		}
+		if !strings.Contains(g.Description, "merge conflict") {
+			t.Errorf("gap description should mention merge conflict: %s", g.Description)
+		}
+	}
+}
+
+func TestRunOrchestration_ConflictDetection_Error(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	cc := &fakeConflictChecker{err: fmt.Errorf("network timeout")}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	deps := b.deps()
+	deps.conflicts = cc
+	deps.workDir = "/fake/work"
+	err := runOrchestration(context.Background(), deps, task, r)
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "merge conflicts") {
+		t.Errorf("error should mention merge conflicts: %v", err)
+	}
+	if b.gh.prCalled {
+		t.Error("PR should not be created when conflict check fails")
+	}
+	if b.escalationCalled {
+		t.Error("conflict check error should not trigger escalation")
+	}
+}
+
+func TestRunOrchestration_ConflictDetection_NilSkipped(t *testing.T) {
+	t.Parallel()
+	b := newOrchBundle()
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	// deps.conflicts is nil (default) — should skip conflict detection.
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !b.gh.prCalled {
+		t.Error("PR should be created when conflict checker is nil")
 	}
 }
 
