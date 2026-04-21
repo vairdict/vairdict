@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -903,6 +904,102 @@ func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
 	}
 	if !contains(comment, "style nit") {
 		t.Error("expected second gap description in comment")
+	}
+}
+
+func TestSetCommitStatus_Success(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("{}")}}}
+	err := New(runner).SetCommitStatus(context.Background(), "abc123", "success", "vairdict/review", "Overridden by @alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Sanity check the gh args so a future refactor that drops the SHA or context name gets caught.
+	var apiCall *FakeCall
+	for i, call := range runner.Calls {
+		if call.Name == "gh" && len(call.Args) > 0 && call.Args[0] == "api" {
+			apiCall = &runner.Calls[i]
+			break
+		}
+	}
+	if apiCall == nil {
+		t.Fatal("gh api was not called")
+	}
+	joined := ""
+	for _, a := range apiCall.Args {
+		joined += a + " "
+	}
+	if !contains(joined, "abc123") {
+		t.Errorf("args missing SHA: %q", joined)
+	}
+	if !contains(joined, "state=success") {
+		t.Errorf("args missing state: %q", joined)
+	}
+	if !contains(joined, "context=vairdict/review") {
+		t.Errorf("args missing context: %q", joined)
+	}
+	if !contains(joined, "description=Overridden by @alice") {
+		t.Errorf("args missing description: %q", joined)
+	}
+}
+
+func TestSetCommitStatus_EmptySHA(t *testing.T) {
+	runner := &FakeRunner{}
+	err := New(runner).SetCommitStatus(context.Background(), "", "success", "ctx", "desc")
+	if err == nil {
+		t.Fatal("expected error for empty SHA")
+	}
+	for _, call := range runner.Calls {
+		if call.Name == "gh" {
+			t.Error("gh should not be invoked when SHA is empty")
+		}
+	}
+}
+
+func TestSetCommitStatus_GhError(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Err: errors.New("403")}}}
+	err := New(runner).SetCommitStatus(context.Background(), "abc", "success", "ctx", "desc")
+	if err == nil {
+		t.Fatal("expected error from failing gh call")
+	}
+}
+
+func TestRecentCommentExists_True(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("2\n")}}}
+	ok, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected true when count > 0")
+	}
+}
+
+func TestRecentCommentExists_False_ZeroCount(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("0\n")}}}
+	ok, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected false when count == 0")
+	}
+}
+
+func TestRecentCommentExists_False_EmptyOutput(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Output: []byte("")}}}
+	ok, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", 30*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected false when output is empty")
+	}
+}
+
+func TestRecentCommentExists_GhError(t *testing.T) {
+	runner := &FakeRunner{Responses: map[string]fakeResponse{"gh api": {Err: errors.New("api down")}}}
+	if _, err := New(runner).RecentCommentExists(context.Background(), 1, "marker", time.Second); err == nil {
+		t.Fatal("expected error to propagate")
 	}
 }
 

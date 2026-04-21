@@ -1,0 +1,53 @@
+name: VAIrdict Mentions
+
+# Listen for PR comments containing @vairdict <command>. The action
+# itself (`vairdict handle-comment <pr>`) is a no-op for comments
+# without a recognised mention, so filtering here is just an
+# optimisation to skip the job entirely for unrelated chatter.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+  checks: write
+
+jobs:
+  mention:
+    # Skip comments on regular issues — only PR comments carry
+    # `issue.pull_request`. The body check short-circuits the most
+    # common case (comments without `@vairdict`) without starting
+    # a runner.
+    if: github.event.issue.pull_request != null && contains(github.event.comment.body, '@vairdict')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          # Fetch the PR's head so `vairdict review` evaluates the
+          # same tree a pushed review would.
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+
+      - name: Install VAIrdict
+        shell: bash
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/vairdict/vairdict/main/scripts/install.sh | INSTALL_DIR="${{ runner.temp }}" sh
+
+      - name: Dispatch @vairdict command
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          # The handler reads these three env vars to decide what to
+          # do. Keeping them here (rather than passing CLI flags) lets
+          # the action/yaml layer own the webhook-payload shape and
+          # the Go CLI stay transport-agnostic.
+          VAIRDICT_COMMENT_BODY: ${{ github.event.comment.body }}
+          VAIRDICT_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          VAIRDICT_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          "${{ runner.temp }}/vairdict" handle-comment "${{ github.event.issue.number }}"
