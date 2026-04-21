@@ -34,11 +34,13 @@ const (
 )
 
 var (
-	issueFlags []int
-	outputFlag string
-	colorsFlag string
-	asciiFlag  bool
-	envFlag    string
+	issueFlags      []int
+	outputFlag      string
+	colorsFlag      string
+	asciiFlag       bool
+	envFlag         string
+	manifestFlag    string
+	dependsOnFlag   []string
 )
 
 var runCmd = &cobra.Command{
@@ -64,6 +66,20 @@ Use --issue to fetch intents from GitHub issues:
 			return err
 		}
 
+		// Manifest path: one or more named tasks with declared deps.
+		// Mutually exclusive with positional args / --issue / --depends-on,
+		// since the manifest is the complete source of truth.
+		if manifestFlag != "" {
+			if len(args) > 0 || len(issueFlags) > 0 || len(dependsOnFlag) > 0 {
+				return fmt.Errorf("--manifest is mutually exclusive with positional intents, --issue, and --depends-on")
+			}
+			manifest, err := LoadManifest(manifestFlag)
+			if err != nil {
+				return err
+			}
+			return runManifest(manifest, mode, colors, asciiFlag)
+		}
+
 		// Collect intents from positional args and --issue flags.
 		var intents []string
 		var issues []int
@@ -80,7 +96,7 @@ Use --issue to fetch intents from GitHub issues:
 		intents = append(intents, args...)
 
 		if len(intents) == 0 {
-			return fmt.Errorf("provide an intent argument or use --issue")
+			return fmt.Errorf("provide an intent argument or use --issue or --manifest")
 		}
 
 		// Single intent: run exactly as before (backward compatible).
@@ -89,10 +105,14 @@ Use --issue to fetch intents from GitHub issues:
 			if len(issues) > 0 {
 				issueNum = issues[0]
 			}
-			return runTask(intents[0], issueNum, mode, colors, asciiFlag)
+			return runTask(intents[0], issueNum, mode, colors, asciiFlag, dependsOnFlag)
 		}
 
-		// Multiple intents: concurrent execution.
+		if len(dependsOnFlag) > 0 {
+			return fmt.Errorf("--depends-on can only be used with a single intent; use --manifest for inter-task dependencies")
+		}
+
+		// Multiple intents without deps: concurrent execution.
 		return runTasks(intents, issues, mode, colors, asciiFlag)
 	},
 }
@@ -103,6 +123,8 @@ func init() {
 	runCmd.Flags().StringVar(&colorsFlag, "colors", "", "color scheme: default|accessible|no-color (default: auto-detect)")
 	runCmd.Flags().BoolVar(&asciiFlag, "ascii", false, "use ASCII glyphs instead of unicode emoji")
 	runCmd.Flags().StringVar(&envFlag, "env", "", "config environment to load (e.g. dev, test, ci) — loads vairdict.<env>.yaml on top of vairdict.yaml. Defaults to ci when CI=true and vairdict.ci.yaml exists.")
+	runCmd.Flags().StringVar(&manifestFlag, "manifest", "", "path to a YAML manifest declaring multiple tasks with dependencies (see docs for format)")
+	runCmd.Flags().StringSliceVar(&dependsOnFlag, "depends-on", nil, "task ID(s) this run depends on. The new task will wait (or start blocked) until each listed task is StateDone in the store.")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -220,7 +242,7 @@ func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, wo
 	}
 }
 
-func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
+func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme, ascii bool, dependsOn []string) error {
 	// Resolve overlay path from --env / CI auto-detect.
 	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
 	if err != nil {
@@ -255,6 +277,24 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	// Create task.
 	taskID := uuid.New().String()[:8]
 	task := state.NewTask(taskID, intent)
+	task.DependsOn = dependsOn
+
+	// If the task declares deps, gate its admission on the current state
+	// of those deps in the store. We don't cross-process synchronise —
+	// any dep that hasn't reached StateDone makes this task blocked so
+	// the human can re-run after the upstream settles.
+	if len(dependsOn) > 0 {
+		if blocked, err := maybeBlockOnDeps(store, task, dependsOn); err != nil {
+			return err
+		} else if blocked {
+			if err := store.CreateTask(task); err != nil {
+				return fmt.Errorf("creating task: %w", err)
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "[%s] task entered blocked state: one or more dependencies are not done. Re-run once %v have settled.\n",
+				task.ID, dependsOn)
+			return nil
+		}
+	}
 
 	if err := store.CreateTask(task); err != nil {
 		return fmt.Errorf("creating task: %w", err)

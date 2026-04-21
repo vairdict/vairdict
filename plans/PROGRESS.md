@@ -10,16 +10,15 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #79 deps: task dependency graph
+- #80 queue: priority ordering + dependency resolution
 - #81 conflicts: merge conflict detection
 - #90 cmd/resume: resume interrupted run from last checkpoint
 - #91 cmd/interactive: status, notes, pause/continue during execution
 
 ## In Progress
-- #84 judge/baseline: hardcoded non-negotiable engineering standards
+- #79 deps: task dependency graph
 
 ## Blocked
-- #80 queue: priority ordering + dependency resolution (depends on #79)
 - #82 perf: load test 5 concurrent tasks (depends on #77-#81)
 - #86 state/rewind: verdict ReturnTo field + phase rewind in outer loop
 - #87 state/rewind-context: structured failure context propagation (depends on #86)
@@ -66,6 +65,7 @@ Update this file when opening, completing, or blocking an issue.
 - #78 parallel: concurrent task runner
 - #85 judge/consistency: tool-use schema, temperature 0, deterministic scoring
 - #72 judge/review: inline PR review comments on specific diff lines
+- #84 judge/baseline: hardcoded non-negotiable engineering standards
 
 ---
 
@@ -161,6 +161,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 4/11        |
+| M5        | in progress | 5/11        |
 | M6        | not started | 0/7         |
 | M7+       | not started | —           |

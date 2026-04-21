@@ -70,6 +70,7 @@ func (s *Store) migrate() error {
 		loop_count TEXT NOT NULL DEFAULT '{}',
 		assumptions TEXT NOT NULL DEFAULT '[]',
 		attempts   TEXT NOT NULL DEFAULT '[]',
+		depends_on TEXT NOT NULL DEFAULT '[]',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	);
@@ -78,7 +79,28 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("creating tasks table: %w", err)
 	}
+	// Additive migration for databases that predate the depends_on column.
+	// SQLite ALTER TABLE ADD COLUMN is idempotent via a duplicate-column
+	// check in the error message.
+	if _, err := s.db.Exec(`ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		if !isDuplicateColumnErr(err) {
+			return fmt.Errorf("adding depends_on column: %w", err)
+		}
+	}
 	return nil
+}
+
+func isDuplicateColumnErr(err error) bool {
+	return err != nil && (contains(err.Error(), "duplicate column") || contains(err.Error(), "already exists"))
+}
+
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateTask persists a new task. Returns an error if a task with the same ID exists.
@@ -95,12 +117,16 @@ func (s *Store) CreateTask(t *Task) error {
 	if err != nil {
 		return fmt.Errorf("marshaling attempts: %w", err)
 	}
+	dependsOnJSON, err := json.Marshal(t.DependsOn)
+	if err != nil {
+		return fmt.Errorf("marshaling depends_on: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO tasks (id, intent, state, phase, loop_count, assumptions, attempts, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (id, intent, state, phase, loop_count, assumptions, attempts, depends_on, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Intent, string(t.State), string(t.Phase),
-		string(loopJSON), string(assumptionsJSON), string(attemptsJSON),
+		string(loopJSON), string(assumptionsJSON), string(attemptsJSON), string(dependsOnJSON),
 		t.CreatedAt.Format(time.RFC3339Nano), t.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -112,7 +138,7 @@ func (s *Store) CreateTask(t *Task) error {
 // GetTask retrieves a task by ID. Returns sql.ErrNoRows if not found.
 func (s *Store) GetTask(id string) (*Task, error) {
 	row := s.db.QueryRow(
-		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, created_at, updated_at
+		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, created_at, updated_at
 		 FROM tasks WHERE id = ?`, id,
 	)
 	return s.scanTask(row)
@@ -132,12 +158,16 @@ func (s *Store) UpdateTask(t *Task) error {
 	if err != nil {
 		return fmt.Errorf("marshaling attempts: %w", err)
 	}
+	dependsOnJSON, err := json.Marshal(t.DependsOn)
+	if err != nil {
+		return fmt.Errorf("marshaling depends_on: %w", err)
+	}
 
 	result, err := s.db.Exec(
-		`UPDATE tasks SET intent=?, state=?, phase=?, loop_count=?, assumptions=?, attempts=?, updated_at=?
+		`UPDATE tasks SET intent=?, state=?, phase=?, loop_count=?, assumptions=?, attempts=?, depends_on=?, updated_at=?
 		 WHERE id=?`,
 		t.Intent, string(t.State), string(t.Phase),
-		string(loopJSON), string(assumptionsJSON), string(attemptsJSON),
+		string(loopJSON), string(assumptionsJSON), string(attemptsJSON), string(dependsOnJSON),
 		t.UpdatedAt.Format(time.RFC3339Nano), t.ID,
 	)
 	if err != nil {
@@ -162,12 +192,12 @@ func (s *Store) ListTasks(filterState TaskState) ([]*Task, error) {
 
 	if filterState == "" {
 		rows, err = s.db.Query(
-			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, created_at, updated_at
+			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, created_at, updated_at
 			 FROM tasks ORDER BY created_at ASC`,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, created_at, updated_at
+			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, created_at, updated_at
 			 FROM tasks WHERE state = ? ORDER BY created_at ASC`,
 			string(filterState),
 		)
@@ -211,12 +241,13 @@ func (s *Store) scanFromScanner(sc scanner) (*Task, error) {
 		loopJSON        string
 		assumptionsJSON string
 		attemptsJSON    string
+		dependsOnJSON   string
 		createdAt       string
 		updatedAt       string
 	)
 
 	err := sc.Scan(&t.ID, &t.Intent, &state, &phase,
-		&loopJSON, &assumptionsJSON, &attemptsJSON,
+		&loopJSON, &assumptionsJSON, &attemptsJSON, &dependsOnJSON,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scanning task: %w", err)
@@ -236,6 +267,12 @@ func (s *Store) scanFromScanner(sc scanner) (*Task, error) {
 
 	if err := json.Unmarshal([]byte(attemptsJSON), &t.Attempts); err != nil {
 		return nil, fmt.Errorf("unmarshaling attempts: %w", err)
+	}
+
+	if dependsOnJSON != "" {
+		if err := json.Unmarshal([]byte(dependsOnJSON), &t.DependsOn); err != nil {
+			return nil, fmt.Errorf("unmarshaling depends_on: %w", err)
+		}
 	}
 
 	t.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
