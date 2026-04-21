@@ -63,8 +63,8 @@ func listTasks(store *state.Store) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tSTATE\tPHASE\tLOOPS\tLAST SCORE\tDEPS\tINTENT")
-	_, _ = fmt.Fprintln(w, "--\t-----\t-----\t-----\t----------\t----\t------")
+	_, _ = fmt.Fprintln(w, "ID\tSTATE\tPHASE\tLOOPS\tLAST SCORE\tPRIORITY\tDEPS\tINTENT")
+	_, _ = fmt.Fprintln(w, "--\t-----\t-----\t-----\t----------\t--------\t----\t------")
 
 	for _, t := range tasks {
 		loops := totalLoops(t)
@@ -74,8 +74,12 @@ func listTasks(store *state.Store) error {
 		if len(t.DependsOn) > 0 {
 			deps = strings.Join(t.DependsOn, ",")
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-			t.ID, t.State, t.Phase, loops, score, deps, intent)
+		priority := t.Priority
+		if priority == "" {
+			priority = "normal"
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			t.ID, t.State, t.Phase, loops, score, priority, deps, intent)
 	}
 
 	return w.Flush()
@@ -91,6 +95,11 @@ func showTaskDetail(store *state.Store, id string) error {
 	fmt.Printf("Intent: %s\n", task.Intent)
 	fmt.Printf("State: %s\n", task.State)
 	fmt.Printf("Phase: %s\n", task.Phase)
+	priority := task.Priority
+	if priority == "" {
+		priority = "normal"
+	}
+	fmt.Printf("Priority: %s\n", priority)
 	if len(task.DependsOn) > 0 {
 		fmt.Printf("Depends on: %s\n", strings.Join(task.DependsOn, ", "))
 	}

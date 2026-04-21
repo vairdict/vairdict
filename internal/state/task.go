@@ -140,7 +140,11 @@ type Task struct {
 	// DependsOn lists task IDs this task waits on. The scheduler in
 	// internal/deps uses it to build the DAG; vairdict status reads it
 	// to render the graph. Empty for tasks without dependencies.
-	DependsOn []string  `json:"depends_on,omitempty"`
+	DependsOn []string `json:"depends_on,omitempty"`
+	// Priority is one of "high", "normal", "low". Drives dispatch order
+	// in the scheduler when multiple tasks are ready at once. Empty or
+	// missing is treated as normal.
+	Priority  string    `json:"priority,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

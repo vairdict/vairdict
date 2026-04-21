@@ -44,6 +44,44 @@ const (
 	StatusBlocked
 )
 
+// Priority controls the order in which ready nodes are dispatched. Higher
+// values go first. Defaults to PriorityNormal when unset.
+type Priority int
+
+const (
+	PriorityLow    Priority = 10
+	PriorityNormal Priority = 50
+	PriorityHigh   Priority = 100
+)
+
+// ParsePriority maps user-facing strings (what the CLI flag and YAML
+// manifest accept) to the internal Priority values. An empty string maps
+// to PriorityNormal so "no priority specified" is always well-defined.
+func ParsePriority(s string) (Priority, error) {
+	switch s {
+	case "", "normal":
+		return PriorityNormal, nil
+	case "high":
+		return PriorityHigh, nil
+	case "low":
+		return PriorityLow, nil
+	default:
+		return 0, fmt.Errorf("unknown priority %q (want high|normal|low)", s)
+	}
+}
+
+// String returns the canonical lowercase label for a Priority.
+func (p Priority) String() string {
+	switch {
+	case p >= PriorityHigh:
+		return "high"
+	case p <= PriorityLow:
+		return "low"
+	default:
+		return "normal"
+	}
+}
+
 func (s NodeStatus) String() string {
 	switch s {
 	case StatusPending:
@@ -82,6 +120,12 @@ type node struct {
 	deps     []string // upstream: this node depends on these
 	children []string // downstream: these nodes depend on this
 	status   NodeStatus
+	priority Priority
+	// seq is the zero-based insertion order. Used as a stable tiebreak
+	// so FIFO holds within a priority bucket and starvation is bounded
+	// (an older low-priority node eventually gets picked over a newer
+	// equal-priority one).
+	seq int
 }
 
 // New creates an empty Graph.
@@ -89,11 +133,21 @@ func New() *Graph {
 	return &Graph{nodes: make(map[string]*node)}
 }
 
-// Add registers a node. Dependencies must reference IDs that are also
-// added (order does not matter; Validate catches missing deps). Calling
-// Add with an ID that already exists returns an error to prevent silent
-// overwrites — the graph is built once per invocation.
+// Add registers a node with PriorityNormal. Dependencies must reference
+// IDs that are also added (order does not matter; Validate catches
+// missing deps). Calling Add with an ID that already exists returns an
+// error to prevent silent overwrites — the graph is built once per
+// invocation.
 func (g *Graph) Add(id string, depsOn []string) error {
+	return g.AddWithPriority(id, depsOn, PriorityNormal)
+}
+
+// AddWithPriority registers a node with a caller-supplied priority. The
+// scheduler dispatches higher priorities first when the Ready set has
+// more entries than available concurrency slots. Insertion order is
+// preserved within a priority bucket to prevent starvation of older
+// low-priority tasks.
+func (g *Graph) AddWithPriority(id string, depsOn []string, priority Priority) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -104,7 +158,13 @@ func (g *Graph) Add(id string, depsOn []string) error {
 		return errors.New("node ID cannot be empty")
 	}
 
-	g.nodes[id] = &node{id: id, deps: append([]string(nil), depsOn...), status: StatusPending}
+	g.nodes[id] = &node{
+		id:       id,
+		deps:     append([]string(nil), depsOn...),
+		status:   StatusPending,
+		priority: priority,
+		seq:      len(g.nodes),
+	}
 	return nil
 }
 
@@ -132,13 +192,16 @@ func (g *Graph) Validate() error {
 }
 
 // Ready returns all nodes currently eligible to run: StatusPending with
-// every dep in StatusDone. The list is sorted by ID for deterministic
-// ordering so test assertions and CLI output are stable.
+// every dep in StatusDone. The list is sorted primarily by Priority
+// DESC so high-priority nodes are dispatched first, with insertion
+// order as a stable tiebreaker — older entries in the same bucket win,
+// which bounds starvation to "finite concurrent high-priority burst"
+// rather than "unbounded if new high-priority keeps arriving".
 func (g *Graph) Ready() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	var ready []string
+	var ready []*node
 	for _, n := range g.nodes {
 		if n.status != StatusPending {
 			continue
@@ -151,11 +214,20 @@ func (g *Graph) Ready() []string {
 			}
 		}
 		if allDepsDone {
-			ready = append(ready, n.id)
+			ready = append(ready, n)
 		}
 	}
-	sort.Strings(ready)
-	return ready
+	sort.Slice(ready, func(i, j int) bool {
+		if ready[i].priority != ready[j].priority {
+			return ready[i].priority > ready[j].priority
+		}
+		return ready[i].seq < ready[j].seq
+	})
+	out := make([]string, len(ready))
+	for i, n := range ready {
+		out[i] = n.id
+	}
+	return out
 }
 
 // MarkRunning flips a node from pending to running. The scheduler calls
@@ -257,9 +329,10 @@ func (g *Graph) Snapshot() []NodeView {
 	out := make([]NodeView, 0, len(g.nodes))
 	for _, n := range g.nodes {
 		out = append(out, NodeView{
-			ID:       n.id,
+			ID:        n.id,
 			DependsOn: append([]string(nil), n.deps...),
-			Status:   n.status,
+			Status:    n.status,
+			Priority:  n.priority,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -271,6 +344,7 @@ type NodeView struct {
 	ID        string
 	DependsOn []string
 	Status    NodeStatus
+	Priority  Priority
 }
 
 // findCycle walks the graph with DFS and returns the IDs of a cycle if

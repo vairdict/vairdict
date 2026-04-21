@@ -2,6 +2,8 @@ package deps
 
 import (
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -9,8 +11,16 @@ import (
 func buildGraph(t *testing.T, edges map[string][]string) *Graph {
 	t.Helper()
 	g := New()
-	for id, depsOn := range edges {
-		if err := g.Add(id, depsOn); err != nil {
+	// Add in sorted-key order so insertion seq is deterministic across
+	// runs — Go map iteration is randomised, and seq is Ready()'s
+	// tiebreak since #80.
+	ids := make([]string, 0, len(edges))
+	for id := range edges {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if err := g.Add(id, edges[id]); err != nil {
 			t.Fatalf("Add(%q): %v", id, err)
 		}
 	}
@@ -234,6 +244,165 @@ func TestSnapshot_ReturnsSortedProjection(t *testing.T) {
 	}
 	if !equal(snap[0].DependsOn, []string{"zeta"}) {
 		t.Errorf("alpha.DependsOn = %v, want [zeta]", snap[0].DependsOn)
+	}
+}
+
+func TestPriority_HigherGoesFirst(t *testing.T) {
+	g := New()
+	// Add in reverse priority order to confirm the sort doesn't rely on
+	// insertion order.
+	_ = g.AddWithPriority("low",    nil, PriorityLow)
+	_ = g.AddWithPriority("normal", nil, PriorityNormal)
+	_ = g.AddWithPriority("high",   nil, PriorityHigh)
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	got := g.Ready()
+	want := []string{"high", "normal", "low"}
+	if !equal(got, want) {
+		t.Errorf("Ready() priority order = %v, want %v", got, want)
+	}
+}
+
+func TestPriority_EqualFallsBackToInsertionOrder(t *testing.T) {
+	// Two high-priority tasks added in a specific order must come out
+	// in that order — insertion seq is the stable tiebreaker, not ID
+	// alphabetic order.
+	g := New()
+	_ = g.AddWithPriority("zeta",  nil, PriorityHigh)
+	_ = g.AddWithPriority("alpha", nil, PriorityHigh)
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	got := g.Ready()
+	want := []string{"zeta", "alpha"}
+	if !equal(got, want) {
+		t.Errorf("Ready() insertion-order tiebreak = %v, want %v", got, want)
+	}
+}
+
+func TestPriority_InteractsWithDeps_HighDepOnLowWaitsForLow(t *testing.T) {
+	// Even a high-priority node must wait for its dependency. Priority
+	// sorts within the ready set; it cannot skip the graph structure.
+	g := New()
+	_ = g.AddWithPriority("low_root", nil,                  PriorityLow)
+	_ = g.AddWithPriority("high_dep", []string{"low_root"}, PriorityHigh)
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	// low_root is the only ready node even though high_dep has higher
+	// priority — high_dep depends on low_root.
+	if got := g.Ready(); !equal(got, []string{"low_root"}) {
+		t.Fatalf("before low_root done: ready = %v, want [low_root]", got)
+	}
+
+	_ = g.MarkRunning("low_root")
+	_ = g.MarkDone("low_root")
+	if got := g.Ready(); !equal(got, []string{"high_dep"}) {
+		t.Errorf("after low_root done: ready = %v, want [high_dep]", got)
+	}
+}
+
+func TestPriority_StarvationIsBounded(t *testing.T) {
+	// Starvation scenario: many high-priority tasks alongside a low. Once
+	// the low is in Ready() it must eventually be returned — it does not
+	// get permanently shadowed by equal-or-higher-priority siblings.
+	// With a static ready set, the low task appears in every poll until
+	// it is taken; we assert it is never silently filtered out.
+	g := New()
+	_ = g.AddWithPriority("low", nil, PriorityLow)
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("hi%d", i)
+		_ = g.AddWithPriority(id, nil, PriorityHigh)
+	}
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	ready := g.Ready()
+	// low must appear; it is the last entry because all 5 highs come first.
+	if got := ready[len(ready)-1]; got != "low" {
+		t.Errorf("low should be last (not missing) in priority-sorted ready; got last=%q, full=%v", got, ready)
+	}
+	// And it must be present even after running each high in sequence.
+	for i, id := range ready[:5] {
+		_ = g.MarkRunning(id)
+		_ = g.MarkDone(id)
+		leftover := g.Ready()
+		wantLowPresent := true
+		for _, lid := range leftover {
+			if lid == "low" {
+				wantLowPresent = true
+				break
+			}
+		}
+		if !wantLowPresent {
+			t.Errorf("after %d highs done, low must still be ready; got %v", i+1, leftover)
+		}
+	}
+}
+
+func TestSnapshot_IncludesPriority(t *testing.T) {
+	g := New()
+	_ = g.AddWithPriority("a", nil, PriorityHigh)
+	_ = g.AddWithPriority("b", nil, PriorityLow)
+	_ = g.Validate()
+
+	snap := g.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("snapshot len = %d, want 2", len(snap))
+	}
+	if snap[0].Priority != PriorityHigh || snap[1].Priority != PriorityLow {
+		t.Errorf("snapshot priorities = %v,%v; want high,low",
+			snap[0].Priority, snap[1].Priority)
+	}
+}
+
+func TestParsePriority_Values(t *testing.T) {
+	cases := []struct {
+		in   string
+		want Priority
+		err  bool
+	}{
+		{"", PriorityNormal, false},
+		{"normal", PriorityNormal, false},
+		{"high", PriorityHigh, false},
+		{"low", PriorityLow, false},
+		{"HIGH", 0, true},     // case-sensitive on purpose — YAML is lowercase
+		{"critical", 0, true}, // not a defined level
+	}
+	for _, c := range cases {
+		got, err := ParsePriority(c.in)
+		if c.err {
+			if err == nil {
+				t.Errorf("ParsePriority(%q): expected error, got nil", c.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParsePriority(%q): unexpected error %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ParsePriority(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestPriority_StringRoundTrip(t *testing.T) {
+	// Round-trip: ParsePriority then String should return the canonical
+	// lowercase label. Protects the status-command rendering path.
+	for _, label := range []string{"high", "normal", "low"} {
+		p, err := ParsePriority(label)
+		if err != nil {
+			t.Fatalf("ParsePriority(%q): %v", label, err)
+		}
+		if p.String() != label {
+			t.Errorf("Priority(%q).String() = %q, want %q", label, p.String(), label)
+		}
 	}
 }
 

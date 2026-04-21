@@ -71,8 +71,14 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 	tasks := make(map[string]*state.Task, len(manifest.Tasks))
 	issueByID := make(map[string]int, len(manifest.Tasks))
 	for _, mt := range manifest.Tasks {
+		// Validate the priority string once at the manifest layer so we
+		// fail before persisting anything if the user typoed.
+		if _, err := deps.ParsePriority(mt.Priority); err != nil {
+			return fmt.Errorf("task %q: %w", mt.Name, err)
+		}
 		t := state.NewTask(nameToID[mt.Name], mt.Intent)
 		t.DependsOn = mapNames(mt.DependsOn, nameToID)
+		t.Priority = mt.Priority
 		if err := store.CreateTask(t); err != nil {
 			return fmt.Errorf("creating task %q: %w", mt.Name, err)
 		}
@@ -83,7 +89,11 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 	// Build and validate the graph.
 	g := deps.New()
 	for _, t := range tasks {
-		if err := g.Add(t.ID, t.DependsOn); err != nil {
+		prio, err := deps.ParsePriority(t.Priority)
+		if err != nil {
+			return fmt.Errorf("task %q: %w", idToName[t.ID], err)
+		}
+		if err := g.AddWithPriority(t.ID, t.DependsOn, prio); err != nil {
 			return fmt.Errorf("adding %q to graph: %w", idToName[t.ID], err)
 		}
 	}
@@ -99,25 +109,27 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 	sem := make(chan struct{}, cfg.Parallel.MaxTasks)
 	var wg sync.WaitGroup
 
-	// Scheduler loop: dispatch every ready node, then wait for one to
-	// settle before polling again. This keeps lock scope tight without
-	// needing a condition variable.
+	// Scheduler loop: acquire the semaphore BEFORE launching each
+	// goroutine so dispatch order follows g.Ready() (priority DESC,
+	// then insertion seq). Launching all goroutines up front and letting
+	// them race the semaphore would lose the priority guarantee.
 	settled := make(chan struct{}, len(tasks))
 	for {
 		ready := g.Ready()
 		for _, id := range ready {
+			sem <- struct{}{}
 			if err := g.MarkRunning(id); err != nil {
 				slog.Warn("failed to mark running", "id", id, "error", err)
+				<-sem
 				continue
 			}
 			wg.Add(1)
 			go func(id string) {
 				defer wg.Done()
-				sem <- struct{}{}
 				defer func() { <-sem }()
 
 				t := tasks[id]
-				res := runSingleTask(ctx, cfg, client, store, repoRoot, t.Intent, issueByID[id])
+				res := runSingleTask(ctx, cfg, client, store, repoRoot, t.Intent, issueByID[id], t.Priority)
 				// runSingleTask generated its own task ID for the run; we
 				// want the manifest ID to be the authoritative record
 				// surfaced to the user. The per-goroutine subtask ID is

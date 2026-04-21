@@ -10,13 +10,13 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #80 queue: priority ordering + dependency resolution
 - #81 conflicts: merge conflict detection
 - #90 cmd/resume: resume interrupted run from last checkpoint
 - #91 cmd/interactive: status, notes, pause/continue during execution
+- #100 cmd: @vairdict PR mention commands (review / approve / ignore)
 
 ## In Progress
-- #79 deps: task dependency graph
+- #80 queue: priority ordering + dependency resolution
 
 ## Blocked
 - #82 perf: load test 5 concurrent tasks (depends on #77-#81)
@@ -66,6 +66,7 @@ Update this file when opening, completing, or blocking an issue.
 - #85 judge/consistency: tool-use schema, temperature 0, deterministic scoring
 - #72 judge/review: inline PR review comments on specific diff lines
 - #84 judge/baseline: hardcoded non-negotiable engineering standards
+- #79 deps: task dependency graph
 
 ---
 
@@ -161,6 +162,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 5/11        |
+| M5        | in progress | 6/11        |
 | M6        | not started | 0/7         |
 | M7+       | not started | —           |
