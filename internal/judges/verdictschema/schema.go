@@ -39,7 +39,8 @@ const inputSchema = `{
           },
           "description": {"type": "string"},
           "file": {"type": "string", "description": "Optional file path when the gap maps to a specific diff location."},
-          "line": {"type": "integer", "description": "Optional line number in the new file when the gap maps to a specific diff location."}
+          "line": {"type": "integer", "description": "Optional line number in the new file when the gap maps to a specific diff location."},
+          "suggestion": {"type": "string", "description": "Optional replacement code for the line(s) at file:line. When provided, rendered as a GitHub suggestion block that the author can apply with one click. Only set when you can offer a concrete, correct fix — omit for design concerns or when the fix is non-trivial."}
         },
         "required": ["severity", "description"],
         "additionalProperties": false
