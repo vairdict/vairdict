@@ -232,6 +232,37 @@ submit_verdict input:
     {"severity": "P1", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14}
   ],
   "questions": []
+}
+
+### Example 3 — mistake to avoid: flagging a symbol that is not in the diff
+
+Intent: "Wire the new scheduler through the run command."
+Facts: tests pass, lint clean, build ok.
+Diff (abridged):
+  "cmd/vairdict/run.go
+    @@ ...
+    +   res := runSingleTask(ctx, cfg, client, t.Intent)
+    +   results[id] = res"
+
+INCORRECT submit_verdict (do NOT produce this):
+{
+  "gaps": [
+    {"severity": "P1", "description": "runSingleTask is called but not defined or imported — compilation error"}
+  ]
+}
+
+Why this is wrong: runSingleTask is an existing function in the same
+package, and same-package symbols do not need imports. The diff is a
+patch, not a complete program; the definition lives in another file
+that was not modified. The build facts above confirm the code compiles.
+Treating a missing-from-diff symbol as a gap of ANY severity violates
+the partial-diff rule — stay silent on it.
+
+CORRECT submit_verdict for this diff:
+{
+  "summary": "## Reviewed\n- runSingleTask invocation wired into the new scheduler path",
+  "gaps": [],
+  "questions": []
 }`
 
 // systemPrompt is the quality judge system prompt with the non-negotiable

@@ -42,11 +42,18 @@ const (
 	StateQualityReview TaskState = "quality_review"
 	StateDone          TaskState = "done"
 	StateEscalated     TaskState = "escalated"
+	// StateBlocked marks a task that cannot run because a prerequisite
+	// dependency failed. Terminal for the current invocation; the human
+	// fixes the upstream and re-runs. Never transitioned out of
+	// automatically. See internal/deps.
+	StateBlocked TaskState = "blocked"
 )
 
 // validTransitions defines which state transitions are allowed.
 var validTransitions = map[TaskState][]TaskState{
-	StatePending:       {StatePlanning},
+	// Pending can go into the normal pipeline or straight to blocked if
+	// a dependency already failed at submission time.
+	StatePending:       {StatePlanning, StateBlocked},
 	StatePlanning:      {StatePlanReview},
 	StatePlanReview:    {StatePlanning, StateCoding, StateEscalated},
 	StateCoding:        {StateCodeReview},
@@ -55,6 +62,7 @@ var validTransitions = map[TaskState][]TaskState{
 	StateQualityReview: {StateQuality, StateDone, StateEscalated},
 	StateDone:          {},
 	StateEscalated:     {},
+	StateBlocked:       {},
 }
 
 // phaseForState maps each active state to its phase.
@@ -129,8 +137,12 @@ type Task struct {
 	LoopCount   map[Phase]int `json:"loop_count"`
 	Assumptions []Assumption  `json:"assumptions"`
 	Attempts    []Attempt     `json:"attempts"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
+	// DependsOn lists task IDs this task waits on. The scheduler in
+	// internal/deps uses it to build the DAG; vairdict status reads it
+	// to render the graph. Empty for tasks without dependencies.
+	DependsOn []string  `json:"depends_on,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ErrInvalidTransition is returned when an invalid state transition is attempted.
