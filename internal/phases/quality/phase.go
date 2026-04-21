@@ -26,6 +26,10 @@ type PhaseResult struct {
 	Loops         int
 	LastScore     float64
 	Feedback      string
+	// Diff is the unified diff the judge evaluated. The orchestrator
+	// threads it through to PostVerdictWithDiff so gaps with file/line
+	// can be rendered as inline PR review comments (#72).
+	Diff string
 }
 
 // Judge is the interface for the quality judge. The real implementation lives
@@ -110,6 +114,7 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 				Loops:     loop + 1,
 				LastScore: lastScore,
 				Feedback:  buildQualityFeedback(verdict),
+				Diff:      p.diff,
 			}, nil
 		}
 
@@ -130,6 +135,7 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 				Loops:         loop + 1,
 				LastScore:     lastScore,
 				Feedback:      lastFeedback,
+				Diff:          p.diff,
 			}, nil
 		}
 
@@ -145,6 +151,7 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 					Loops:     loop + 1,
 					LastScore: lastScore,
 					Feedback:  lastFeedback,
+					Diff:      p.diff,
 				}, nil
 			}
 			return nil, fmt.Errorf("requeueing quality phase: %w", err)
@@ -156,6 +163,7 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 		Loops:     p.cfg.MaxLoops,
 		LastScore: lastScore,
 		Feedback:  lastFeedback,
+		Diff:      p.diff,
 	}, nil
 }
 

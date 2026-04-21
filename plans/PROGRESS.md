@@ -10,7 +10,6 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #72 judge/review: inline PR review comments on specific diff lines
 - #79 deps: task dependency graph
 - #81 conflicts: merge conflict detection
 - #84 judge/baseline: hardcoded non-negotiable engineering standards
@@ -18,7 +17,7 @@ Update this file when opening, completing, or blocking an issue.
 - #91 cmd/interactive: status, notes, pause/continue during execution
 
 ## In Progress
-- #85 judge/consistency: tool-use schema, temperature 0, deterministic scoring
+- #72 judge/review: inline PR review comments on specific diff lines
 
 ## Blocked
 - #80 queue: priority ordering + dependency resolution (depends on #79)
@@ -66,6 +65,7 @@ Update this file when opening, completing, or blocking an issue.
 - #62 judge/style: maintainability + readability checks in quality judge
 - #77 workspace: isolated git worktree per task
 - #78 parallel: concurrent task runner
+- #85 judge/consistency: tool-use schema, temperature 0, deterministic scoring
 
 ---
 
@@ -161,6 +161,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 2/11        |
+| M5        | in progress | 3/11        |
 | M6        | not started | 0/7         |
 | M7+       | not started | —           |

@@ -522,6 +522,7 @@ type fakeGHOrch struct {
 	prCalled      bool
 	verdictCalled bool
 	mergeCalled   bool
+	verdictDiff   string // captured diff argument
 }
 
 func (f *fakeGHOrch) CreateBranch(context.Context, string, string) (string, error) {
@@ -534,8 +535,9 @@ func (f *fakeGHOrch) CreatePR(context.Context, github.CreatePROpts) (*github.PR,
 	return f.pr, f.prErr
 }
 
-func (f *fakeGHOrch) PostVerdict(context.Context, int, *state.Verdict, state.Phase, int) error {
+func (f *fakeGHOrch) PostVerdictWithDiff(_ context.Context, _ int, _ *state.Verdict, _ state.Phase, _ int, diff string) error {
 	f.verdictCalled = true
+	f.verdictDiff = diff
 	return f.verdictErr
 }
 
@@ -567,7 +569,7 @@ func newOrchBundle() *orchBundle {
 			Pass: true, Loops: 1, LastScore: 100,
 		}},
 		quality: &fakeQualityRunner{result: &qualityphase.PhaseResult{
-			Pass: true, Loops: 1, LastScore: 95,
+			Pass: true, Loops: 1, LastScore: 95, Diff: "fake-diff",
 		}},
 		gh: &fakeGHOrch{
 			branchName: "vairdict/test-abc",
@@ -633,6 +635,11 @@ func TestRunOrchestration_HappyPath(t *testing.T) {
 	}
 	if !b.gh.verdictCalled {
 		t.Error("PostVerdict not called")
+	}
+	// #72: the quality phase's diff must be threaded through so inline
+	// review comments can be posted. Verify it reaches PostVerdictWithDiff.
+	if b.gh.verdictDiff != "fake-diff" {
+		t.Errorf("PostVerdictWithDiff got diff %q, want %q", b.gh.verdictDiff, "fake-diff")
 	}
 	if b.escalationCalled {
 		t.Error("escalation should not be called on happy path")

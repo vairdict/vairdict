@@ -324,6 +324,28 @@ func TestNeedsCodeRework(t *testing.T) {
 	}
 }
 
+func TestRun_DiffExposedOnResult(t *testing.T) {
+	// #72: PhaseResult must expose the diff the judge evaluated so the
+	// orchestrator can forward it to PostVerdictWithDiff for inline
+	// review comments. The diff field is stable across the pass, escalate,
+	// and requeue paths.
+	const diff = "diff --git a/foo.go b/foo.go\n+hello\n"
+	judge := &fakeJudge{verdicts: []*state.Verdict{
+		{Score: 95, Pass: true},
+	}}
+
+	task := qualityTask(t)
+	phase := New(judge, defaultCfg(), diff)
+
+	result, err := phase.Run(context.Background(), task, "plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Diff != diff {
+		t.Errorf("expected result.Diff to round-trip the phase diff, got %q", result.Diff)
+	}
+}
+
 func TestBuildQualityFeedback(t *testing.T) {
 	v := &state.Verdict{
 		Score: 72.5,
