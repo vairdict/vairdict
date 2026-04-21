@@ -11,8 +11,9 @@ import (
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
-	"github.com/vairdict/vairdict/internal/state"
 	"github.com/vairdict/vairdict/internal/judges/verdictschema"
+	"github.com/vairdict/vairdict/internal/standards"
+	"github.com/vairdict/vairdict/internal/state"
 )
 
 // Completer is the interface for sending prompts to an LLM. Plan judge uses
@@ -35,7 +36,7 @@ func New(client Completer, cfg config.PlanPhaseConfig) *PlanJudge {
 	}
 }
 
-const systemPrompt = `You are a plan judge for a software development process engine.
+const systemPromptCore = `You are a plan judge for a software development process engine.
 Your job is to evaluate whether a proposed plan adequately covers the stated intent.
 
 You respond by invoking the submit_verdict tool. The tool's schema is the
@@ -101,6 +102,11 @@ submit_verdict input:
   "questions": []
 }`
 
+// systemPrompt is the plan judge system prompt with the non-negotiable
+// engineering standards appended. Baseline rules reach the judge so it
+// flags violations regardless of team config.
+var systemPrompt = systemPromptCore + "\n\n" + standards.Block
+
 // Judge evaluates a plan against an intent and returns a Verdict.
 // Pass is determined by whether the score meets the configured coverage
 // threshold AND there are no blocking gaps. Blocking is assigned from the
@@ -124,6 +130,13 @@ func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string) (*sta
 	deferSet := toSet(j.cfg.Severity.DeferOn)
 
 	verdictschema.ApplyBlocking(verdict.Gaps, blockSet)
+
+	// Baseline violations (#84) are non-negotiable: promote P0/P1 gaps
+	// tagged with the baseline marker to blocking even when team config
+	// would have allowed them through.
+	if promoted := standards.ForceBaselineBlocking(verdict.Gaps); promoted > 0 {
+		slog.Info("baseline rule forced blocking", "gaps_promoted", promoted)
+	}
 
 	for _, g := range verdict.Gaps {
 		sev := string(g.Severity)

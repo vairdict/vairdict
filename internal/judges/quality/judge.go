@@ -15,6 +15,7 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/judges/verdictschema"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
 
@@ -77,7 +78,7 @@ func (j *QualityJudge) WithCodeFacts(facts string) *QualityJudge {
 	return &cp
 }
 
-const systemPrompt = `You are a quality judge for a software development process engine.
+const systemPromptCore = `You are a quality judge for a software development process engine.
 Your job is to evaluate whether implemented code fulfills the original task intent.
 
 You respond by invoking the submit_verdict tool. The tool's schema is the
@@ -219,6 +220,11 @@ submit_verdict input:
   "questions": []
 }`
 
+// systemPrompt is the quality judge system prompt with the non-negotiable
+// engineering standards appended. Baseline rules reach the judge so it
+// flags violations regardless of team config.
+var systemPrompt = systemPromptCore + "\n\n" + standards.Block
+
 // Judge evaluates whether the given diff fulfills the original intent and plan.
 // It runs AI-based intent verification (against the diff content, not a
 // directory path) and optionally e2e tests, returning a combined Verdict.
@@ -246,6 +252,14 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 	// Blocking and score are derived deterministically — the model never
 	// sets either.
 	verdictschema.ApplyBlocking(verdict.Gaps, nil)
+	// Baseline violations (#84) are non-negotiable: promote P0/P1 gaps
+	// tagged with the baseline marker to blocking. In the quality judge
+	// the default block set already covers P0/P1, so this is belt-and-
+	// suspenders — but it stays consistent with the plan judge and
+	// guards against a future block set that would exclude P1.
+	if promoted := standards.ForceBaselineBlocking(verdict.Gaps); promoted > 0 {
+		slog.Info("baseline rule forced blocking", "gaps_promoted", promoted)
+	}
 	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
 	verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
 

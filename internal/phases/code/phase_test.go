@@ -3,11 +3,27 @@ package code
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
+
+func TestBuildCoderPrompt_IncludesBaseline(t *testing.T) {
+	// #84: the coder must see the non-negotiable standards so it doesn't
+	// write code that would be flagged during quality.
+	prompt := buildCoderPrompt("do stuff", "step 1", "", nil)
+	if !strings.Contains(prompt, standards.Block) {
+		t.Error("coder prompt must include the baseline standards block")
+	}
+	for _, tag := range standards.AllRules {
+		if !strings.Contains(prompt, string(tag)) {
+			t.Errorf("coder prompt missing baseline rule tag %q", tag)
+		}
+	}
+}
 
 // fakeCoder returns configurable results.
 type fakeCoder struct {

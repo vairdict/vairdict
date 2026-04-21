@@ -8,8 +8,22 @@ import (
 	"testing"
 
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/standards"
 	"github.com/vairdict/vairdict/internal/state"
 )
+
+func TestPlannerSystemPrompt_IncludesBaseline(t *testing.T) {
+	// #84: every agent prompt must carry the non-negotiable standards. A
+	// missing block would let the planner design around violations silently.
+	if !strings.Contains(plannerSystemPrompt, standards.Block) {
+		t.Error("planner system prompt must include the baseline standards block")
+	}
+	for _, tag := range standards.AllRules {
+		if !strings.Contains(plannerSystemPrompt, string(tag)) {
+			t.Errorf("planner system prompt missing baseline rule tag %q", tag)
+		}
+	}
+}
 
 // multiResponseClient is a test double that returns different responses on
 // successive calls. It wraps a slice of responses and an optional slice of
