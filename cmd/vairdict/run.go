@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/vairdict/vairdict/internal/agents/claudecode"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/deps"
 	"github.com/vairdict/vairdict/internal/escalation"
 	"github.com/vairdict/vairdict/internal/github"
 	codejudge "github.com/vairdict/vairdict/internal/judges/code"
@@ -41,6 +42,7 @@ var (
 	envFlag         string
 	manifestFlag    string
 	dependsOnFlag   []string
+	priorityFlag    string
 )
 
 var runCmd = &cobra.Command{
@@ -99,21 +101,28 @@ Use --issue to fetch intents from GitHub issues:
 			return fmt.Errorf("provide an intent argument or use --issue or --manifest")
 		}
 
+		// Validate priority once here so typos fail before any
+		// workspace / store side effects.
+		if _, err := deps.ParsePriority(priorityFlag); err != nil {
+			return err
+		}
+
 		// Single intent: run exactly as before (backward compatible).
 		if len(intents) == 1 {
 			issueNum := 0
 			if len(issues) > 0 {
 				issueNum = issues[0]
 			}
-			return runTask(intents[0], issueNum, mode, colors, asciiFlag, dependsOnFlag)
+			return runTask(intents[0], issueNum, mode, colors, asciiFlag, dependsOnFlag, priorityFlag)
 		}
 
 		if len(dependsOnFlag) > 0 {
 			return fmt.Errorf("--depends-on can only be used with a single intent; use --manifest for inter-task dependencies")
 		}
 
-		// Multiple intents without deps: concurrent execution.
-		return runTasks(intents, issues, mode, colors, asciiFlag)
+		// Multiple intents without deps: concurrent execution. They all
+		// share priorityFlag if provided.
+		return runTasks(intents, issues, mode, colors, asciiFlag, priorityFlag)
 	},
 }
 
@@ -125,6 +134,7 @@ func init() {
 	runCmd.Flags().StringVar(&envFlag, "env", "", "config environment to load (e.g. dev, test, ci) — loads vairdict.<env>.yaml on top of vairdict.yaml. Defaults to ci when CI=true and vairdict.ci.yaml exists.")
 	runCmd.Flags().StringVar(&manifestFlag, "manifest", "", "path to a YAML manifest declaring multiple tasks with dependencies (see docs for format)")
 	runCmd.Flags().StringSliceVar(&dependsOnFlag, "depends-on", nil, "task ID(s) this run depends on. The new task will wait (or start blocked) until each listed task is StateDone in the store.")
+	runCmd.Flags().StringVar(&priorityFlag, "priority", "", "task priority: high|normal|low (default: normal). Higher-priority tasks are dispatched first when multiple are ready.")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -242,7 +252,7 @@ func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, wo
 	}
 }
 
-func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme, ascii bool, dependsOn []string) error {
+func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme, ascii bool, dependsOn []string, priority string) error {
 	// Resolve overlay path from --env / CI auto-detect.
 	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
 	if err != nil {
@@ -278,6 +288,7 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	taskID := uuid.New().String()[:8]
 	task := state.NewTask(taskID, intent)
 	task.DependsOn = dependsOn
+	task.Priority = priority
 
 	// If the task declares deps, gate its admission on the current state
 	// of those deps in the store. We don't cross-process synchronise —
@@ -373,7 +384,7 @@ type taskResult struct {
 // controlling the degree of parallelism. Shared resources (config, store,
 // completer) are created once; per-task resources (workspace, log file,
 // renderer, deps) are created inside each goroutine.
-func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorScheme, ascii bool) error {
+func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorScheme, ascii bool, priority string) error {
 	// Resolve overlay path from --env / CI auto-detect.
 	overlayPath, err := config.ResolveOverlayPath(envFlag, config.IsCI(), ".", fileExistsFunc)
 	if err != nil {
@@ -429,7 +440,7 @@ func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorSchem
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			results[idx] = runSingleTask(ctx, cfg, client, store, repoRoot, intent, issueNum)
+			results[idx] = runSingleTask(ctx, cfg, client, store, repoRoot, intent, issueNum, priority)
 			r := results[idx]
 			status := "pass"
 			if r.Err != nil {
@@ -473,9 +484,11 @@ func runSingleTask(
 	repoRoot string,
 	intent string,
 	issueNumber int,
+	priority string,
 ) taskResult {
 	taskID := uuid.New().String()[:8]
 	task := state.NewTask(taskID, intent)
+	task.Priority = priority
 	res := taskResult{TaskID: taskID, Intent: intent}
 
 	if err := store.CreateTask(task); err != nil {

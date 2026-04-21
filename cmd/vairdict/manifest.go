@@ -22,6 +22,9 @@ type ManifestTask struct {
 	Issue int `yaml:"issue,omitempty"`
 	// DependsOn is the list of sibling task names this task waits for.
 	DependsOn []string `yaml:"depends_on,omitempty"`
+	// Priority is one of "high", "normal", "low" (default: "normal").
+	// Drives dispatch order among ready tasks (see internal/deps).
+	Priority string `yaml:"priority,omitempty"`
 }
 
 // Manifest is the top-level YAML structure accepted by --manifest.

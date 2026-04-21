@@ -108,6 +108,32 @@ tasks:
 	}
 }
 
+func TestLoadManifest_PriorityField_Parses(t *testing.T) {
+	// Priority round-trips through YAML onto ManifestTask so downstream
+	// (runManifest → deps.ParsePriority) sees the user's value.
+	path := writeManifest(t, `
+tasks:
+  - name: urgent
+    intent: ship
+    priority: high
+  - name: normal
+    intent: nothing special
+  - name: later
+    intent: cleanup
+    priority: low
+`)
+	m, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]string{"urgent": "high", "normal": "", "later": "low"}
+	for _, mt := range m.Tasks {
+		if mt.Priority != want[mt.Name] {
+			t.Errorf("task %q priority = %q, want %q", mt.Name, mt.Priority, want[mt.Name])
+		}
+	}
+}
+
 func TestLoadManifest_MissingIntent_Rejected(t *testing.T) {
 	path := writeManifest(t, `
 tasks:
