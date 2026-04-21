@@ -760,6 +760,111 @@ func TestPostVerdictWithDiff_EmptyDiffSkipsInline(t *testing.T) {
 	}
 }
 
+func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
+	// #72: only gaps with file+line resolvable to a diff position become
+	// inline comments. Gaps without file/line, or with file/line that
+	// don't map into the diff, are dropped from the review but still
+	// surface via FormatVerdictComment's summary table.
+	diff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -10,3 +10,5 @@
+ ctx0
++added11
++added12
+ ctx1
+`
+	verdict := &state.Verdict{
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP1, Description: "in diff", Blocking: true, File: "foo.go", Line: 11},
+			{Severity: state.SeverityP2, Description: "no file info"},
+			{Severity: state.SeverityP3, Description: "line outside diff", File: "foo.go", Line: 999},
+			{Severity: state.SeverityP0, Description: "wrong file", File: "bar.go", Line: 11},
+		},
+	}
+
+	review := BuildInlineReview(verdict, diff)
+	if review == nil {
+		t.Fatal("expected review payload, got nil")
+	}
+	if review.Event != "COMMENT" {
+		t.Errorf("expected event=COMMENT (batched, no notification spam), got %q", review.Event)
+	}
+	if len(review.Comments) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(review.Comments))
+	}
+	only := review.Comments[0]
+	if only.Path != "foo.go" {
+		t.Errorf("expected path foo.go, got %q", only.Path)
+	}
+	if only.Position <= 0 {
+		t.Errorf("expected positive diff position, got %d", only.Position)
+	}
+	if !contains(only.Body, "in diff") {
+		t.Errorf("expected body to include gap description, got %q", only.Body)
+	}
+}
+
+func TestBuildInlineReview_NilWhenNoResolvableGap(t *testing.T) {
+	// If every gap is either location-less or out-of-diff, we return nil
+	// so the client skips the gh api call entirely.
+	diff := `diff --git a/x.go b/x.go
+--- a/x.go
++++ b/x.go
+@@ -1,3 +1,4 @@
+ a
++b
+ c
+`
+	verdict := &state.Verdict{
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP2, Description: "no location"},
+			{Severity: state.SeverityP3, Description: "out of diff", File: "x.go", Line: 99},
+		},
+	}
+
+	if review := BuildInlineReview(verdict, diff); review != nil {
+		t.Errorf("expected nil review when no gap resolves, got %+v", review)
+	}
+}
+
+func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
+	// A gap with a resolvable location produces an inline comment; a
+	// location-less gap alongside is dropped from the inline payload but
+	// still appears in the summary rendered by FormatVerdictComment. This
+	// test pins both halves to guard the "additive, not replacement" rule
+	// in the issue.
+	diff := `diff --git a/p.go b/p.go
+--- a/p.go
++++ b/p.go
+@@ -1,2 +1,3 @@
+ a
++b
+ c
+`
+	verdict := &state.Verdict{
+		Score: 60,
+		Pass:  false,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP1, Description: "bad on added line", Blocking: true, File: "p.go", Line: 2},
+			{Severity: state.SeverityP2, Description: "architectural concern"},
+		},
+	}
+
+	review := BuildInlineReview(verdict, diff)
+	if review == nil || len(review.Comments) != 1 {
+		t.Fatalf("expected exactly 1 inline comment, got %+v", review)
+	}
+
+	summary := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+	if !contains(summary, "bad on added line") {
+		t.Error("summary must still list the inline-eligible gap")
+	}
+	if !contains(summary, "architectural concern") {
+		t.Error("summary must list the location-less gap that has no inline counterpart")
+	}
+}
+
 func TestFormatInlineComment_Blocking(t *testing.T) {
 	g := state.Gap{Severity: state.SeverityP1, Description: "security issue", Blocking: true}
 	body := formatInlineComment(g)

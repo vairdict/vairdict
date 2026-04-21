@@ -151,7 +151,7 @@ type qualityRunner interface {
 type ghOrchestrator interface {
 	CreateBranch(ctx context.Context, taskID, intent string) (string, error)
 	CreatePR(ctx context.Context, opts github.CreatePROpts) (*github.PR, error)
-	PostVerdict(ctx context.Context, prNumber int, v *state.Verdict, phase state.Phase, loop int) error
+	PostVerdictWithDiff(ctx context.Context, prNumber int, v *state.Verdict, phase state.Phase, loop int, diff string) error
 	MergePR(ctx context.Context, prNumber int) error
 }
 
@@ -591,7 +591,7 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 	if pr.Number > 0 {
 		lastVerdict := lastVerdictForPhase(task, state.PhaseQuality)
 		if lastVerdict != nil {
-			if err := deps.gh.PostVerdict(ctx, pr.Number, lastVerdict, state.PhaseQuality, qualityResult.Loops); err != nil {
+			if err := deps.gh.PostVerdictWithDiff(ctx, pr.Number, lastVerdict, state.PhaseQuality, qualityResult.Loops, qualityResult.Diff); err != nil {
 				// Log but don't fail the whole run for a comment posting failure.
 				slog.Warn("failed to post verdict comment", "error", err)
 			} else {

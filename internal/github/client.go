@@ -420,10 +420,24 @@ func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict 
 	return nil
 }
 
-// postInlineReview creates a single GitHub review with inline comments
-// for gaps that have resolvable file:line positions. Best-effort — errors
-// are logged but do not block the summary verdict from being posted.
-func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *state.Verdict, diff string) {
+// InlineReviewPayload is the JSON body sent to GitHub's
+// POST /repos/{owner}/{repo}/pulls/{n}/reviews endpoint. Kept as a named
+// type (instead of an anonymous struct inside postInlineReview) so unit
+// tests can assert its shape directly, and so operators reading slogs see
+// a meaningful type name.
+type InlineReviewPayload struct {
+	Event    string          `json:"event"`
+	Body     string          `json:"body"`
+	Comments []InlineComment `json:"comments"`
+}
+
+// BuildInlineReview turns a verdict + diff into a review payload whose
+// comments point only at lines present in the diff. Gaps without File/Line
+// and gaps whose line does not appear in the diff are dropped — they
+// still appear in the summary comment rendered by FormatVerdictComment.
+// Returns nil when no gap resolves to a diff position; callers should
+// skip the API call in that case.
+func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload {
 	positions := ParseDiffPositions(diff)
 
 	var comments []InlineComment
@@ -445,19 +459,23 @@ func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *st
 	}
 
 	if len(comments) == 0 {
-		return
+		return nil
 	}
 
-	// Build the review payload. Use COMMENT event to batch all inline
-	// comments into a single review (avoids notification spam).
-	review := struct {
-		Event    string          `json:"event"`
-		Body     string          `json:"body"`
-		Comments []InlineComment `json:"comments"`
-	}{
+	return &InlineReviewPayload{
 		Event:    "COMMENT",
 		Body:     fmt.Sprintf("VAIrdict inline review: %d comment(s)", len(comments)),
 		Comments: comments,
+	}
+}
+
+// postInlineReview creates a single GitHub review with inline comments
+// for gaps that have resolvable file:line positions. Best-effort — errors
+// are logged but do not block the summary verdict from being posted.
+func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *state.Verdict, diff string) {
+	review := BuildInlineReview(verdict, diff)
+	if review == nil {
+		return
 	}
 
 	payload, err := json.Marshal(review)
@@ -492,7 +510,7 @@ func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *st
 		slog.Debug("failed to post inline review", "pr", prNumber, "error", err)
 		return
 	}
-	slog.Info("inline review posted", "pr", prNumber, "comments", len(comments))
+	slog.Info("inline review posted", "pr", prNumber, "comments", len(review.Comments))
 }
 
 // formatInlineComment builds the markdown body for a single inline comment.
