@@ -255,15 +255,15 @@ func TestPostVerdict_Pass_ActionsTokenDenied_FallsBackToComment(t *testing.T) {
 	}
 }
 
-func TestPostVerdict_Pass_OtherApprovalError_Propagates(t *testing.T) {
+func TestPostVerdict_Pass_ApprovalError_FallsBackToComment(t *testing.T) {
 	runner := successRunner()
 	runner.Responses["gh pr review"] = fakeResponse{Err: errors.New("network error")}
 	client := New(runner)
 
 	verdict := &state.Verdict{Score: 92, Pass: true}
 	err := client.PostVerdict(context.Background(), 7, verdict, state.PhaseQuality, 1)
-	if err == nil {
-		t.Fatal("expected non-self-PR approval errors to propagate")
+	if err != nil {
+		t.Fatalf("expected fallback to comment, got error: %v", err)
 	}
 }
 
