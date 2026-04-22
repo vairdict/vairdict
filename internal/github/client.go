@@ -345,15 +345,6 @@ func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error
 	return nil
 }
 
-// cannotApprovePRRe matches GitHub API errors when the authenticated
-// user/token is not permitted to approve a PR. Two known cases:
-//  1. Self-authored PR: "Can not approve your own pull request"
-//  2. GitHub Actions token: "GitHub Actions is not permitted to approve pull requests"
-//
-// We detect these (rather than failing the run) so PostVerdict can
-// gracefully fall back to a regular comment.
-var cannotApprovePRRe = regexp.MustCompile(`(?i)(can ?not approve your own pull request|is not permitted to approve pull requests)`)
-
 // verdictMarker is the string that appears in every verdict comment.
 // Used to identify and clean up previous verdicts before posting a new one.
 const verdictMarker = "Posted by @vairdict-judge"
@@ -439,30 +430,32 @@ func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict 
 			Comments: inlineComments,
 		}
 		err := c.postReviewPayload(ctx, prNumber, review)
-		if err != nil && verdict.Pass && cannotApprovePRRe.MatchString(err.Error()) {
+		if err != nil && verdict.Pass {
 			// Approval denied — retry as COMMENT.
 			slog.Info("approval rejected, falling back to comment review", "pr", prNumber, "reason", err)
 			review.Event = "COMMENT"
 			err = c.postReviewPayload(ctx, prNumber, review)
 		}
 		if err != nil {
-			return fmt.Errorf("posting verdict review: %w", err)
+			// Inline comments failed (likely invalid positions) — fall back
+			// to posting the verdict as a plain comment so it's never lost.
+			slog.Warn("review with inline comments failed, falling back to plain comment",
+				"pr", prNumber, "inline_comments", len(inlineComments), "error", err)
+		} else {
+			slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "review", "inline_comments", len(inlineComments))
+			return nil
 		}
-		slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "review", "inline_comments", len(inlineComments))
-		return nil
 	}
 
-	// No inline comments — use the simpler approval/comment path.
+	// No inline comments, or inline review failed — use the simpler
+	// approval/comment path.
 	if verdict.Pass {
 		err := c.ApprovePR(ctx, prNumber, comment)
 		if err == nil {
 			slog.Info("verdict posted", "pr", prNumber, "pass", true, "score", verdict.Score, "mode", "approval")
 			return nil
 		}
-		if !cannotApprovePRRe.MatchString(err.Error()) {
-			return fmt.Errorf("posting verdict approval: %w", err)
-		}
-		// Approval denied (self-authored PR or Actions token restriction).
+		// Approval denied (self-authored PR, Actions token, etc).
 		// Fall through to a plain comment so the verdict still gets posted.
 		slog.Info("approval rejected, falling back to comment", "pr", prNumber, "reason", err)
 	}
@@ -706,11 +699,11 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 	return b.String()
 }
 
-// logoURL is the raw GitHub URL for the VAIrdict logo asset. Must be a
+// LogoURL is the raw GitHub URL for the VAIrdict logo asset. Must be a
 // PNG, not SVG: GitHub's camo image proxy strips SVGs from user content
 // (XSS hardening) so an <img> pointing at a .svg renders as a broken
 // image in PR comments. PNG renders fine.
-const logoURL = "https://raw.githubusercontent.com/vairdict/vairdict/main/assets/logo.png"
+const LogoURL = "https://raw.githubusercontent.com/vairdict/vairdict/main/assets/logo.png"
 
 // FormatVerdictComment builds a structured markdown comment from a Verdict.
 // inlineGapIndices contains the indices of gaps that were already posted as
@@ -722,9 +715,9 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 
 	// Header with logo and pass/fail status.
 	if verdict.Pass {
-		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ✅ PASS</h2>\n\n", logoURL)
+		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ✅ PASS</h2>\n\n", LogoURL)
 	} else {
-		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ❌ FAIL</h2>\n\n", logoURL)
+		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ❌ FAIL</h2>\n\n", LogoURL)
 	}
 
 	// Summary line.

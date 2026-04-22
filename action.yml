@@ -57,7 +57,7 @@ runs:
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ env.GH_TOKEN || github.token }}
         VAIRDICT_INTENT: ${{ inputs.intent }}
       run: |
         INTENT_FLAG=""

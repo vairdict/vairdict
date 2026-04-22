@@ -334,7 +334,8 @@ func runHandleCommentWith(ctx context.Context, prNumber int, deps handleCommentD
 // error, not a system failure.
 func replyUnknown(ctx context.Context, deps handleCommentDeps, prNumber int, res parseResult) error {
 	var body strings.Builder
-	body.WriteString("👋 Hi — I didn't recognise that command.\n\n")
+	fmt.Fprintf(&body, "<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> ", github.LogoURL)
+	body.WriteString("Hi — I didn't recognise that command.\n\n")
 	if res.Raw == "" {
 		body.WriteString("Usage: mention `@vairdict` followed by one of: ")
 	} else if res.DidYouMean != cmdNone {
@@ -362,9 +363,9 @@ func replyUnknown(ctx context.Context, deps handleCommentDeps, prNumber int, res
 // is a requirement of #100 — the audit trail must record every attempt.
 func replyUnauthorized(ctx context.Context, deps handleCommentDeps, prNumber int, cmd commentCommand) error {
 	body := fmt.Sprintf(
-		"🔒 `@vairdict %s` is only available to repository owners, members, "+
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> `@vairdict %s` is only available to repository owners, members, "+
 			"or collaborators. If you need the judge re-run, please ask a "+
-			"maintainer to comment for you.\n", cmd)
+			"maintainer to comment for you.\n", github.LogoURL, cmd)
 	if err := deps.gh.AddComment(ctx, prNumber, body); err != nil {
 		return fmt.Errorf("posting auth denial reply: %w", err)
 	}
@@ -382,9 +383,9 @@ func handleReviewMention(ctx context.Context, deps handleCommentDeps, prNumber i
 		slog.Warn("rate-limit check failed, continuing", "pr", prNumber, "error", err)
 	} else if recent {
 		body := fmt.Sprintf(
-			"⏳ A review is already running for this PR (mention by @%s ignored). "+
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> A review is already running for this PR (mention by @%s ignored). "+
 				"Please wait for the current verdict before re-requesting.\n",
-			deps.author)
+			github.LogoURL, deps.author)
 		if addErr := deps.gh.AddComment(ctx, prNumber, body); addErr != nil {
 			return fmt.Errorf("posting rate-limit reply: %w", addErr)
 		}
@@ -392,8 +393,8 @@ func handleReviewMention(ctx context.Context, deps handleCommentDeps, prNumber i
 	}
 
 	startBody := fmt.Sprintf(
-		"🔁 Re-running VAIrdict review on @%s's request…\n\n%s\n",
-		deps.author, reviewStartMarker)
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Re-running VAIrdict review on @%s's request…\n\n%s\n",
+		github.LogoURL, deps.author, reviewStartMarker)
 	if err := deps.gh.AddComment(ctx, prNumber, startBody); err != nil {
 		return fmt.Errorf("posting review start comment: %w", err)
 	}
@@ -427,10 +428,10 @@ func handleApproveMention(ctx context.Context, deps handleCommentDeps, prNumber 
 	}
 
 	body := fmt.Sprintf(
-		"✅ VAIrdict verdict **overridden by @%s**. "+
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> VAIrdict verdict **overridden by @%s**. "+
 			"The `%s` status has been set to success on commit `%s`. "+
 			"This does not merge the PR — merge manually or enable `auto-vairdict`.\n\n%s\n",
-		deps.author, github.CommitStatusContext, shortSHA(pr.HeadRefOid), overrideMarker)
+		github.LogoURL, deps.author, github.CommitStatusContext, shortSHA(pr.HeadRefOid), overrideMarker)
 	if err := deps.gh.AddComment(ctx, prNumber, body); err != nil {
 		return fmt.Errorf("posting override confirmation: %w", err)
 	}
@@ -457,9 +458,9 @@ func handleIgnoreMention(ctx context.Context, deps handleCommentDeps, prNumber i
 	}
 
 	body := fmt.Sprintf(
-		"🙈 Current VAIrdict verdict **dismissed by @%s** (no override claimed). "+
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Current VAIrdict verdict **dismissed by @%s** (no override claimed). "+
 			"The next push to this branch will re-run the judge.\n\n%s\n",
-		deps.author, ignoreMarker)
+		github.LogoURL, deps.author, ignoreMarker)
 	if err := deps.gh.AddComment(ctx, prNumber, body); err != nil {
 		return fmt.Errorf("posting dismissal confirmation: %w", err)
 	}
