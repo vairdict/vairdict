@@ -251,9 +251,9 @@ func TestPriority_HigherGoesFirst(t *testing.T) {
 	g := New()
 	// Add in reverse priority order to confirm the sort doesn't rely on
 	// insertion order.
-	_ = g.AddWithPriority("low",    nil, PriorityLow)
+	_ = g.AddWithPriority("low", nil, PriorityLow)
 	_ = g.AddWithPriority("normal", nil, PriorityNormal)
-	_ = g.AddWithPriority("high",   nil, PriorityHigh)
+	_ = g.AddWithPriority("high", nil, PriorityHigh)
 	if err := g.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestPriority_EqualFallsBackToInsertionOrder(t *testing.T) {
 	// in that order — insertion seq is the stable tiebreaker, not ID
 	// alphabetic order.
 	g := New()
-	_ = g.AddWithPriority("zeta",  nil, PriorityHigh)
+	_ = g.AddWithPriority("zeta", nil, PriorityHigh)
 	_ = g.AddWithPriority("alpha", nil, PriorityHigh)
 	if err := g.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -287,7 +287,7 @@ func TestPriority_InteractsWithDeps_HighDepOnLowWaitsForLow(t *testing.T) {
 	// Even a high-priority node must wait for its dependency. Priority
 	// sorts within the ready set; it cannot skip the graph structure.
 	g := New()
-	_ = g.AddWithPriority("low_root", nil,                  PriorityLow)
+	_ = g.AddWithPriority("low_root", nil, PriorityLow)
 	_ = g.AddWithPriority("high_dep", []string{"low_root"}, PriorityHigh)
 	if err := g.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)

@@ -381,4 +381,3 @@ func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
 		}
 	}
 }
-

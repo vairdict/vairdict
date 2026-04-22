@@ -36,14 +36,14 @@ const (
 )
 
 var (
-	issueFlags      []int
-	outputFlag      string
-	colorsFlag      string
-	asciiFlag       bool
-	envFlag         string
-	manifestFlag    string
-	dependsOnFlag   []string
-	priorityFlag    string
+	issueFlags    []int
+	outputFlag    string
+	colorsFlag    string
+	asciiFlag     bool
+	envFlag       string
+	manifestFlag  string
+	dependsOnFlag []string
+	priorityFlag  string
 )
 
 var runCmd = &cobra.Command{

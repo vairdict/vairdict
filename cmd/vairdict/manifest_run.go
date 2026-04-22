@@ -101,7 +101,7 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 		return fmt.Errorf("manifest: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Running %d tasks from manifest (max %d concurrent)\n\n",
+	_, _ = fmt.Fprintf(os.Stdout, "Running %d tasks from manifest (max %d concurrent)\n\n",
 		len(manifest.Tasks), cfg.Parallel.MaxTasks)
 
 	results := make(map[string]taskResult, len(tasks))
@@ -179,7 +179,7 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 	wg.Wait()
 
 	// Print summary table: manifest name, state, verdict.
-	fmt.Fprintln(os.Stdout, "\n--- Summary ---")
+	_, _ = fmt.Fprintln(os.Stdout, "\n--- Summary ---")
 	var failures []string
 	for _, mt := range manifest.Tasks {
 		id := nameToID[mt.Name]
@@ -240,4 +240,3 @@ func maybeBlockOnDeps(store *state.Store, t *state.Task, depIDs []string) (bool,
 	}
 	return false, nil
 }
-
