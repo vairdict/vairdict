@@ -91,6 +91,8 @@ func outcomeName(o PhaseOutcome) string {
 		return "escalate"
 	case OutcomeRequeueToCode:
 		return "requeue_to_code"
+	case OutcomeRequeueToPlan:
+		return "requeue_to_plan"
 	}
 	return "unknown"
 }

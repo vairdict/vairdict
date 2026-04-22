@@ -557,79 +557,165 @@ func runSingleTask(
 	return res
 }
 
+// maxOuterCycles bounds the number of plan→code→quality outer loops a
+// task may go through. Each cycle gives every phase its own fresh
+// per-phase budget (see state.Task.Rewind); this constant only exists to
+// stop pathological verdicts from looping forever. Three cycles is enough
+// to exercise every rewind path (quality→code, quality→plan→code→quality)
+// with one spare attempt.
+const maxOuterCycles = 3
+
 // runOrchestration is the testable core of runTask. It receives all
 // dependencies via deps so tests can substitute fakes for every
 // external interaction (phases, GitHub, git commit, escalation).
+//
+// The outer loop runs plan → code → quality up to maxOuterCycles times.
+// Each cycle re-uses the previous plan unless the quality judge rewound
+// to Plan, in which case HardConstraints capture the quality failure and
+// the plan phase runs again to produce a new plan that addresses them.
 func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.Renderer) error {
-	// --- Plan phase ---
-	planResult, err := deps.plan.Run(ctx, task)
-	if err != nil {
-		r.Error(err)
-		return err
-	}
+	var (
+		planResult    *planphase.PhaseResult
+		branch        string
+		branchCreated bool
+		qualityResult *qualityphase.PhaseResult
+	)
 
-	if planResult.Escalate {
-		gaps := lastGapsForPhase(task, state.PhasePlan)
-		r.Escalation(task.ID, state.PhasePlan, planResult.Loops, planResult.LastScore, gaps)
-		return deps.onEscalation(ctx, task, escalation.Result{
-			Phase:     state.PhasePlan,
-			Loops:     planResult.Loops,
-			LastScore: planResult.LastScore,
-			Gaps:      gaps,
-		})
-	}
+	for cycle := 0; cycle < maxOuterCycles; cycle++ {
+		// --- Plan phase (first cycle, or after rewind to plan) ---
+		if planResult == nil {
+			pr, err := deps.plan.Run(ctx, task)
+			if err != nil {
+				r.Error(err)
+				return err
+			}
+			planResult = pr
 
-	// --- Create branch before code phase so commits land on it ---
-	branch, err := deps.gh.CreateBranch(ctx, task.ID, task.Intent)
-	if err != nil {
-		r.Error(err)
-		return fmt.Errorf("creating branch: %w", err)
-	}
-	r.Note("branch", branch)
+			if planResult.Escalate {
+				gaps := lastGapsForPhase(task, state.PhasePlan)
+				r.Escalation(task.ID, state.PhasePlan, planResult.Loops, planResult.LastScore, gaps)
+				return deps.onEscalation(ctx, task, escalation.Result{
+					Phase:     state.PhasePlan,
+					Loops:     planResult.Loops,
+					LastScore: planResult.LastScore,
+					Gaps:      gaps,
+				})
+			}
+		}
 
-	// --- Code phase ---
-	codeResult, err := deps.code.Run(ctx, task, planResult.Plan)
-	if err != nil {
-		r.Error(err)
-		return err
-	}
+		// --- Create branch once, before the first code phase ---
+		if !branchCreated {
+			b, err := deps.gh.CreateBranch(ctx, task.ID, task.Intent)
+			if err != nil {
+				r.Error(err)
+				return fmt.Errorf("creating branch: %w", err)
+			}
+			branch = b
+			r.Note("branch", branch)
+			branchCreated = true
+		}
 
-	if codeResult.Escalate {
-		gaps := lastGapsForPhase(task, state.PhaseCode)
-		r.Escalation(task.ID, state.PhaseCode, codeResult.Loops, codeResult.LastScore, gaps)
-		return deps.onEscalation(ctx, task, escalation.Result{
-			Phase:     state.PhaseCode,
-			Loops:     codeResult.Loops,
-			LastScore: codeResult.LastScore,
-			Gaps:      gaps,
-		})
-	}
+		// --- Code phase ---
+		codeResult, err := deps.code.Run(ctx, task, planResult.Plan)
+		if err != nil {
+			r.Error(err)
+			return err
+		}
 
-	// --- Commit any changes the coder made ---
-	if err := deps.commit(ctx, task); err != nil {
-		r.Error(err)
-		return err
-	}
+		if codeResult.Escalate {
+			gaps := lastGapsForPhase(task, state.PhaseCode)
+			r.Escalation(task.ID, state.PhaseCode, codeResult.Loops, codeResult.LastScore, gaps)
+			return deps.onEscalation(ctx, task, escalation.Result{
+				Phase:     state.PhaseCode,
+				Loops:     codeResult.Loops,
+				LastScore: codeResult.LastScore,
+				Gaps:      gaps,
+			})
+		}
 
-	// --- Quality phase (gates the PR) ---
-	qualityResult, err := deps.quality.Run(ctx, task, planResult.Plan, codeResult.Feedback)
-	if err != nil {
-		r.Error(err)
-		return err
-	}
+		// --- Commit any changes the coder made ---
+		if err := deps.commit(ctx, task); err != nil {
+			r.Error(err)
+			return err
+		}
 
-	if qualityResult.Escalate || qualityResult.RequeueToCode {
-		// RequeueToCode is currently treated as escalation: cross-phase
-		// routing back into the code phase is intentionally deferred to
-		// a follow-up issue (see plans/PROGRESS.md). The escalation summary
-		// includes the blocking gaps so the human knows code rework is
-		// needed.
+		// --- Quality phase (gates the PR) ---
+		qResult, err := deps.quality.Run(ctx, task, planResult.Plan, codeResult.Feedback)
+		if err != nil {
+			r.Error(err)
+			return err
+		}
+		qualityResult = qResult
+
+		if qualityResult.Pass {
+			break
+		}
+
+		// Quality failed. Route based on the judge's root-cause
+		// diagnosis. ReturnToEscalate and the judge's own Escalate flag
+		// (local loop budget exhausted) both terminate the outer loop.
+		if qualityResult.Escalate || qualityResult.ReturnTo == state.ReturnToEscalate {
+			gaps := lastGapsForPhase(task, state.PhaseQuality)
+			r.Escalation(task.ID, state.PhaseQuality, qualityResult.Loops, qualityResult.LastScore, gaps)
+			return deps.onEscalation(ctx, task, escalation.Result{
+				Phase:     state.PhaseQuality,
+				Loops:     qualityResult.Loops,
+				LastScore: qualityResult.LastScore,
+				Gaps:      gaps,
+			})
+		}
+
+		switch qualityResult.ReturnTo {
+		case state.ReturnToCode:
+			if err := task.Rewind(state.PhaseCode); err != nil {
+				r.Error(err)
+				return fmt.Errorf("rewinding to code: %w", err)
+			}
+			slog.Info("outer loop rewinding to code",
+				"task_id", task.ID, "cycle", cycle+1,
+			)
+			continue
+		case state.ReturnToPlan:
+			task.HardConstraints = append(task.HardConstraints,
+				buildQualityHardConstraints(lastVerdictForPhase(task, state.PhaseQuality))...)
+			if err := task.Rewind(state.PhasePlan); err != nil {
+				r.Error(err)
+				return fmt.Errorf("rewinding to plan: %w", err)
+			}
+			planResult = nil
+			slog.Info("outer loop rewinding to plan",
+				"task_id", task.ID, "cycle", cycle+1,
+				"hard_constraints", len(task.HardConstraints),
+			)
+			continue
+		}
+
+		// ReturnTo is empty on a non-blocking quality failure — the
+		// quality phase exhausted its own budget without finding a
+		// rewind target, so escalate.
 		gaps := lastGapsForPhase(task, state.PhaseQuality)
 		r.Escalation(task.ID, state.PhaseQuality, qualityResult.Loops, qualityResult.LastScore, gaps)
 		return deps.onEscalation(ctx, task, escalation.Result{
 			Phase:     state.PhaseQuality,
 			Loops:     qualityResult.Loops,
 			LastScore: qualityResult.LastScore,
+			Gaps:      gaps,
+		})
+	}
+
+	if qualityResult == nil || !qualityResult.Pass {
+		// Exceeded maxOuterCycles without a passing verdict — escalate.
+		gaps := lastGapsForPhase(task, state.PhaseQuality)
+		loops, lastScore := 0, 0.0
+		if qualityResult != nil {
+			loops = qualityResult.Loops
+			lastScore = qualityResult.LastScore
+		}
+		r.Escalation(task.ID, state.PhaseQuality, loops, lastScore, gaps)
+		return deps.onEscalation(ctx, task, escalation.Result{
+			Phase:     state.PhaseQuality,
+			Loops:     loops,
+			LastScore: lastScore,
 			Gaps:      gaps,
 		})
 	}
@@ -704,6 +790,32 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 	return nil
 }
 
+// buildQualityHardConstraints extracts the blocking gaps from the last
+// quality verdict and turns each into a single-line constraint for the
+// planner. The planner uses them as non-negotiable requirements on the
+// next plan — it must call out concrete steps to resolve each one.
+func buildQualityHardConstraints(v *state.Verdict) []string {
+	if v == nil {
+		return nil
+	}
+	constraints := make([]string, 0, len(v.Gaps))
+	for _, g := range v.Gaps {
+		if !g.Blocking {
+			continue
+		}
+		c := fmt.Sprintf("[quality judge, %s] %s", g.Severity, g.Description)
+		if g.File != "" {
+			if g.Line > 0 {
+				c = fmt.Sprintf("%s (ref: %s:%d)", c, g.File, g.Line)
+			} else {
+				c = fmt.Sprintf("%s (ref: %s)", c, g.File)
+			}
+		}
+		constraints = append(constraints, c)
+	}
+	return constraints
+}
+
 // dispatchEscalation routes a phase failure through the escalation module
 // without touching the process exit code. Pure-ish wrapper that exists
 // purely so escalateAndExit's behavior can be unit-tested in isolation
@@ -769,7 +881,7 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, client completer, sto
 	}
 
 	emitPhaseAttempts(r, task, state.PhasePlan, cfg.Phases.Plan.MaxLoops)
-	emitPhaseDone(r, task, state.PhasePlan, result.Pass, result.Escalate, false, result.LastScore, result.Loops)
+	emitPhaseDone(r, task, state.PhasePlan, result.Pass, result.Escalate, state.ReturnToNone, result.LastScore, result.Loops)
 	return result, nil
 }
 
@@ -803,7 +915,7 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 	}
 
 	emitPhaseAttempts(r, task, state.PhaseCode, cfg.Phases.Code.MaxLoops)
-	emitPhaseDone(r, task, state.PhaseCode, result.Pass, result.Escalate, false, result.LastScore, result.Loops)
+	emitPhaseDone(r, task, state.PhaseCode, result.Pass, result.Escalate, state.ReturnToNone, result.LastScore, result.Loops)
 	return result, nil
 }
 
@@ -882,15 +994,19 @@ func emitPhaseAttempts(r ui.Renderer, task *state.Task, phase state.Phase, maxLo
 
 // emitPhaseDone emits the closing block for a phase, pulling the summary
 // and gaps from the last verdict. Outcome is derived from the phase
-// result flags.
-func emitPhaseDone(r ui.Renderer, task *state.Task, phase state.Phase, pass, escalate, requeueToCode bool, score float64, loops int) {
+// result flags; returnTo (quality phase only) selects between rewind
+// outcomes and wins over `escalate` so a ReturnToPlan shows as a
+// plan-rewind rather than a generic fail.
+func emitPhaseDone(r ui.Renderer, task *state.Task, phase state.Phase, pass, escalate bool, returnTo state.ReturnTo, score float64, loops int) {
 	outcome := ui.OutcomeFail
 	switch {
 	case pass:
 		outcome = ui.OutcomePass
-	case requeueToCode:
+	case returnTo == state.ReturnToCode:
 		outcome = ui.OutcomeRequeueToCode
-	case escalate:
+	case returnTo == state.ReturnToPlan:
+		outcome = ui.OutcomeRequeueToPlan
+	case escalate, returnTo == state.ReturnToEscalate:
 		outcome = ui.OutcomeEscalate
 	}
 	v := lastVerdictForPhase(task, phase)
@@ -980,7 +1096,7 @@ func runQualityPhase(
 	}
 
 	emitPhaseAttempts(r, task, state.PhaseQuality, cfg.Phases.Quality.MaxLoops)
-	emitPhaseDone(r, task, state.PhaseQuality, result.Pass, result.Escalate, result.RequeueToCode, result.LastScore, result.Loops)
+	emitPhaseDone(r, task, state.PhaseQuality, result.Pass, result.Escalate, result.ReturnTo, result.LastScore, result.Loops)
 
 	return result, nil
 }

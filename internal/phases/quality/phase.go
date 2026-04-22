@@ -15,17 +15,21 @@ import (
 
 // PhaseResult is the typed output of a quality phase run.
 //
-// Exactly one of Pass, RequeueToCode, or Escalate is true on a successful
-// (non-error) return. RequeueToCode signals the orchestrator to route the
-// task back to the code phase because the failing gaps cannot be resolved
-// by re-judging the same workdir.
+// On a successful (non-error) return exactly one of these is true:
+//   - Pass: verdict met the threshold; advance to PR creation.
+//   - Escalate: local max-loops exhausted and the verdict can't be routed
+//     elsewhere. The orchestrator still consults ReturnTo so an
+//     explicit ReturnToEscalate from the judge is honoured.
+//   - ReturnTo != "": cross-phase rewind. The orchestrator routes the
+//     task back to ReturnToCode or ReturnToPlan (and starts a new outer
+//     cycle) or escalates if ReturnToEscalate.
 type PhaseResult struct {
-	Pass          bool
-	Escalate      bool
-	RequeueToCode bool
-	Loops         int
-	LastScore     float64
-	Feedback      string
+	Pass      bool
+	Escalate  bool
+	ReturnTo  state.ReturnTo
+	Loops     int
+	LastScore float64
+	Feedback  string
 	// Diff is the unified diff the judge evaluated. The orchestrator
 	// threads it through to PostVerdictWithDiff so gaps with file/line
 	// can be rendered as inline PR review comments (#72).
@@ -120,23 +124,29 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 
 		lastFeedback = buildQualityFeedback(verdict)
 
-		// Code-level gaps cannot be resolved by re-judging the same workdir.
-		// Stop looping inside quality and signal cross-phase routing back
-		// to the code phase. The orchestrator (cmd/vairdict/run.go) is
-		// responsible for actually moving the task back.
-		if needsCodeRework(verdict) {
-			slog.Info("quality phase requeue to code",
+		// Cross-phase rewind: the quality judge's ReturnTo diagnoses
+		// whether the failure is a code-, plan-, or intent-level problem.
+		// Re-judging the same workdir can't fix any of those — stop
+		// looping inside quality and let the orchestrator route the task
+		// to the right phase (or escalate on ReturnToEscalate).
+		if verdict.ReturnTo != state.ReturnToNone {
+			slog.Info("quality phase rewind requested",
 				"task_id", task.ID,
 				"loops", loop+1,
 				"last_score", lastScore,
+				"return_to", string(verdict.ReturnTo),
 			)
-			return &PhaseResult{
-				RequeueToCode: true,
-				Loops:         loop + 1,
-				LastScore:     lastScore,
-				Feedback:      lastFeedback,
-				Diff:          p.diff,
-			}, nil
+			res := &PhaseResult{
+				ReturnTo:  verdict.ReturnTo,
+				Loops:     loop + 1,
+				LastScore: lastScore,
+				Feedback:  lastFeedback,
+				Diff:      p.diff,
+			}
+			if verdict.ReturnTo == state.ReturnToEscalate {
+				res.Escalate = true
+			}
+			return res, nil
 		}
 
 		if err := task.Requeue(p.cfg.MaxLoops); err != nil {
@@ -165,21 +175,6 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 		Feedback:  lastFeedback,
 		Diff:      p.diff,
 	}, nil
-}
-
-// needsCodeRework returns true if any blocking gap indicates a code-level
-// problem (intent mismatch or missing/broken feature). These cannot be fixed
-// by re-judging the same workdir — only by re-running the code phase.
-func needsCodeRework(v *state.Verdict) bool {
-	for _, g := range v.Gaps {
-		if !g.Blocking {
-			continue
-		}
-		if g.Severity == state.SeverityP0 || g.Severity == state.SeverityP1 {
-			return true
-		}
-	}
-	return false
 }
 
 func buildQualityFeedback(v *state.Verdict) string {

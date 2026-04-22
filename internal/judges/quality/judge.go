@@ -280,6 +280,33 @@ exact sub-section headers (omit a section if empty), with "- " bullet items:
 
 Keep each bullet to one line. Do not include any other sections or prose.
 
+## Root-cause diagnosis (return_to)
+
+On a FAILING verdict you MUST set "return_to" so the outer loop can rewind
+to the phase that can actually fix it. Diagnose the root cause, not the
+symptom:
+
+- "code" — the plan is fine but the code doesn't realise it. Tests fail,
+  acceptance criteria aren't met, the diff implements something other
+  than what the plan called for, a bug slipped in. Re-running the code
+  phase can fix it.
+- "plan" — the code faithfully implements the plan, but the plan itself
+  was too shallow to catch this class of problem (missing a requirement,
+  wrong architecture, no handling for a whole category of input). A
+  code retry against the same plan will reproduce the failure. The
+  quality failure will be injected as a hard constraint into replanning.
+- "escalate" — the task intent is fundamentally ambiguous or requires
+  judgement this process cannot make. Neither replanning nor recoding
+  can resolve it without human input.
+
+On a PASSING verdict, omit "return_to" or set it to "". Never set
+"return_to" to a value that is not one of {code, plan, escalate, ""}.
+
+If a failing verdict has only non-blocking (P2/P3) gaps, it may get
+another in-phase retry; in that case omit "return_to" or set it to "".
+If ANY gap is P0 or P1 blocking, "return_to" must be one of code/plan/
+escalate.
+
 ## Output rules
 
 1. Each concern goes in EXACTLY ONE array — either "gaps" or "questions", never both.
@@ -320,7 +347,8 @@ submit_verdict input:
     {"severity": "P2", "description": "queryHelpers.go now has 6 near-identical 'WHERE tenant_id = ?' clauses — extract a tenantScope() helper once a second table needs the same pattern.", "file": "internal/db/queryHelpers.go", "line": 18},
     {"severity": "P3", "description": "Tenant is threaded through function signatures rather than context.Context; fine for now, but as the set of tenant-scoped calls grows, context propagation will reduce parameter churn."}
   ],
-  "questions": []
+  "questions": [],
+  "return_to": ""
 }
 
 Note: on a substantive diff, 2–3 design observations (P3/P2) is the
@@ -343,8 +371,12 @@ submit_verdict input:
     {"severity": "P0", "description": "No authentication middleware on /admin — intent requires basic auth."},
     {"severity": "P1", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14, "suggestion": "\tapiKey := os.Getenv(\"ADMIN_API_KEY\")"}
   ],
-  "questions": []
+  "questions": [],
+  "return_to": "code"
 }
+
+Note: return_to is "code" because the plan called for basic auth — the
+code just didn't wire it. A code retry against the same plan can fix it.
 
 ### Example 3 — mistake to avoid: flagging a symbol that is not in the diff
 
@@ -374,8 +406,34 @@ CORRECT submit_verdict for this diff:
 {
   "summary": "## Reviewed\n- runSingleTask invocation wired into the new scheduler path",
   "gaps": [],
-  "questions": []
-}`
+  "questions": [],
+  "return_to": ""
+}
+
+### Example 4 — rewind to plan (root cause is plan-level)
+
+Intent: "Add basic auth to the admin endpoint. Must protect every
+admin route."
+Plan (abridged): "1. Wrap /admin with a basic-auth handler."
+Facts: tests pass, lint clean, build ok.
+Diff (abridged): correctly wraps /admin with basic-auth middleware.
+But the repo also exposes /admin/users and /admin/logs under separate
+handlers that are NOT covered by the wrapper.
+
+submit_verdict input:
+{
+  "summary": "## Reviewed\n- /admin wrap is correct\n## Notes\n- /admin/users and /admin/logs are unprotected sibling routes",
+  "gaps": [
+    {"severity": "P0", "description": "Plan only covered /admin, but the intent says 'every admin route' — /admin/users and /admin/logs remain unauthenticated. The plan is too narrow to satisfy the intent."}
+  ],
+  "questions": [],
+  "return_to": "plan"
+}
+
+Note: return_to is "plan" — the code correctly implemented the plan, but
+the plan itself missed the scope. Re-running code against the same plan
+would just re-produce the same gap. Replanning with the intent re-read
+will add the missing routes.`
 
 // systemPrompt is the quality judge system prompt with the non-negotiable
 // engineering standards appended. Baseline rules reach the judge so it
@@ -419,6 +477,7 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 	}
 	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
 	verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
+	verdict.ReturnTo = normaliseReturnTo(verdict.ReturnTo, verdict.Pass, verdict.Gaps)
 
 	slog.Info("quality judge verdict",
 		"score", verdict.Score,
@@ -480,6 +539,34 @@ func (j *QualityJudge) runE2E(ctx context.Context, workDir string) *state.Gap {
 
 	slog.Debug("e2e tests passed")
 	return nil
+}
+
+// normaliseReturnTo clamps the LLM-supplied ReturnTo to a sane value given
+// the final (deterministic) verdict shape. The LLM emits ReturnTo as a
+// best-effort diagnosis, but scoring and blocking are decided here — so
+// we enforce the invariants the outer loop relies on:
+//
+//   - A passing verdict never rewinds; clear ReturnTo.
+//   - A failing verdict with a blocking gap (P0/P1) must rewind. If the
+//     LLM forgot to set ReturnTo we default to ReturnToCode — that matches
+//     the pre-ReturnTo heuristic (see the removed needsCodeRework) and is
+//     the safer default: code retries are cheaper than replans.
+//   - Unknown values collapse to code for the same reason.
+//
+// Non-blocking failures (score below threshold but no P0/P1) keep an
+// empty ReturnTo so the quality phase can retry in-place.
+func normaliseReturnTo(in state.ReturnTo, pass bool, gaps []state.Gap) state.ReturnTo {
+	if pass {
+		return state.ReturnToNone
+	}
+	switch in {
+	case state.ReturnToCode, state.ReturnToPlan, state.ReturnToEscalate:
+		return in
+	}
+	if verdictschema.HasBlockingGap(gaps) {
+		return state.ReturnToCode
+	}
+	return state.ReturnToNone
 }
 
 func truncate(s string, max int) string {

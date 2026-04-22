@@ -508,7 +508,7 @@ func TestPlanPhase_ContextCancellation(t *testing.T) {
 }
 
 func TestBuildPlannerPrompt_NoFeedback(t *testing.T) {
-	prompt := buildPlannerPrompt("build an API", "", nil)
+	prompt := buildPlannerPrompt("build an API", "", nil, nil)
 
 	if !strings.Contains(prompt, "## Task Intent") {
 		t.Error("expected intent header")
@@ -522,10 +522,13 @@ func TestBuildPlannerPrompt_NoFeedback(t *testing.T) {
 	if strings.Contains(prompt, "Assumptions") {
 		t.Error("did not expect assumptions section")
 	}
+	if strings.Contains(prompt, "Hard Constraints") {
+		t.Error("did not expect hard-constraints section")
+	}
 }
 
 func TestBuildPlannerPrompt_WithFeedback(t *testing.T) {
-	prompt := buildPlannerPrompt("build an API", "missing auth", nil)
+	prompt := buildPlannerPrompt("build an API", "missing auth", nil, nil)
 
 	if !strings.Contains(prompt, "Previous Attempt Feedback") {
 		t.Error("expected feedback section")
@@ -539,13 +542,34 @@ func TestBuildPlannerPrompt_WithAssumptions(t *testing.T) {
 	assumptions := []state.Assumption{
 		{Description: "using PostgreSQL", Severity: state.SeverityP2, Phase: state.PhasePlan},
 	}
-	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions)
+	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions, nil)
 
 	if !strings.Contains(prompt, "Assumptions from Previous Loops") {
 		t.Error("expected assumptions section")
 	}
 	if !strings.Contains(prompt, "using PostgreSQL") {
 		t.Error("expected assumption in prompt")
+	}
+}
+
+func TestBuildPlannerPrompt_WithHardConstraints(t *testing.T) {
+	// When rewinding to plan, the quality judge's failing gaps are
+	// forwarded as hard constraints — the planner must address each one
+	// concretely, not just acknowledge it.
+	constraints := []string{
+		"[quality judge, P0] /admin/users is not protected by auth middleware",
+		"[quality judge, P1] /admin/logs bypasses the same middleware",
+	}
+	prompt := buildPlannerPrompt("build an API", "", nil, constraints)
+
+	if !strings.Contains(prompt, "Hard Constraints") {
+		t.Error("expected hard constraints section")
+	}
+	if !strings.Contains(prompt, "non-negotiable") {
+		t.Error("expected 'non-negotiable' framing so the planner doesn't treat constraints as optional")
+	}
+	if !strings.Contains(prompt, "/admin/users") || !strings.Contains(prompt, "/admin/logs") {
+		t.Error("expected every constraint to be rendered as its own bullet")
 	}
 }
 

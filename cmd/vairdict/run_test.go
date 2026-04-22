@@ -373,23 +373,27 @@ func TestEmitPhaseDone_OutcomeMapping(t *testing.T) {
 	}
 
 	cases := []struct {
-		name          string
-		pass          bool
-		escalate      bool
-		requeueToCode bool
-		want          ui.PhaseOutcome
+		name     string
+		pass     bool
+		escalate bool
+		returnTo state.ReturnTo
+		want     ui.PhaseOutcome
 	}{
-		{"pass", true, false, false, ui.OutcomePass},
-		{"fail", false, false, false, ui.OutcomeFail},
-		{"escalate", false, true, false, ui.OutcomeEscalate},
-		{"requeue_to_code", false, false, true, ui.OutcomeRequeueToCode},
-		// requeue_to_code wins over escalate when both are set
-		{"requeue_before_escalate", false, true, true, ui.OutcomeRequeueToCode},
+		{"pass", true, false, state.ReturnToNone, ui.OutcomePass},
+		{"fail", false, false, state.ReturnToNone, ui.OutcomeFail},
+		{"escalate", false, true, state.ReturnToNone, ui.OutcomeEscalate},
+		{"return_to_code", false, false, state.ReturnToCode, ui.OutcomeRequeueToCode},
+		{"return_to_plan", false, false, state.ReturnToPlan, ui.OutcomeRequeueToPlan},
+		{"return_to_escalate", false, false, state.ReturnToEscalate, ui.OutcomeEscalate},
+		// rewind wins over the escalate flag when both are set — a
+		// plan-level diagnosis outranks "local loops exhausted" because
+		// retrying the same phase would just reproduce the failure.
+		{"rewind_before_escalate", false, true, state.ReturnToPlan, ui.OutcomeRequeueToPlan},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &fakeRenderer{}
-			emitPhaseDone(r, task, state.PhasePlan, tc.pass, tc.escalate, tc.requeueToCode, 92, 1)
+			emitPhaseDone(r, task, state.PhasePlan, tc.pass, tc.escalate, tc.returnTo, 92, 1)
 			if len(r.dones) != 1 {
 				t.Fatalf("expected 1 done event, got %d", len(r.dones))
 			}
@@ -410,7 +414,7 @@ func TestEmitPhaseDone_NoVerdictEmitsEmpty(t *testing.T) {
 	task := state.NewTask("t-1", "intent")
 	r := &fakeRenderer{}
 
-	emitPhaseDone(r, task, state.PhasePlan, false, true, false, 0, 3)
+	emitPhaseDone(r, task, state.PhasePlan, false, true, state.ReturnToNone, 0, 3)
 
 	if len(r.dones) != 1 {
 		t.Fatalf("expected 1 done event, got %d", len(r.dones))
@@ -449,66 +453,227 @@ func TestDispatchEscalation_AlreadyEscalatedNoOp(t *testing.T) {
 	}
 }
 
+func TestBuildQualityHardConstraints_OnlyBlockingGaps(t *testing.T) {
+	// HardConstraints are what the planner must satisfy on the next
+	// cycle — non-blocking observations would dilute that signal, so
+	// the builder must filter them out.
+	v := &state.Verdict{
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP0, Description: "critical gap", Blocking: true},
+			{Severity: state.SeverityP1, Description: "another gap", Blocking: true, File: "foo.go", Line: 42},
+			{Severity: state.SeverityP3, Description: "just a nit", Blocking: false},
+		},
+	}
+	got := buildQualityHardConstraints(v)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 blocking constraints, got %d: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "P0") || !strings.Contains(got[0], "critical gap") {
+		t.Errorf("first constraint should carry severity + description, got %q", got[0])
+	}
+	// File/line anchor should be preserved so the planner can reference
+	// the specific site the quality judge flagged.
+	if !strings.Contains(got[1], "foo.go") || !strings.Contains(got[1], "42") {
+		t.Errorf("second constraint should carry file:line anchor, got %q", got[1])
+	}
+}
+
+func TestBuildQualityHardConstraints_NilVerdict(t *testing.T) {
+	if got := buildQualityHardConstraints(nil); got != nil {
+		t.Errorf("nil verdict should yield no constraints, got %v", got)
+	}
+}
+
 // --- Orchestration test fakes ---
+//
+// Each fake runner supports a default single-result mode (via `result`
+// and `gaps`) and a sequential mode (via `results` + `gapsByCall`) so
+// rewind tests can assert that a phase returns different outcomes across
+// outer cycles. `calls` is incremented on every invocation; when
+// `results` is set, the i-th call returns results[i], falling back to
+// the last entry once exhausted.
 
 type fakePlanRunner struct {
-	result *planphase.PhaseResult
-	gaps   []state.Gap
-	err    error
-	called bool
+	result     *planphase.PhaseResult
+	gaps       []state.Gap
+	results    []*planphase.PhaseResult
+	gapsByCall [][]state.Gap
+	err        error
+	called     bool
+	calls      int
+	lastTask   *state.Task
 }
 
 func (f *fakePlanRunner) Run(_ context.Context, task *state.Task) (*planphase.PhaseResult, error) {
 	f.called = true
-	if f.result != nil {
+	f.calls++
+	f.lastTask = task
+	result, gaps := f.pick()
+	if result != nil {
+		// Mimic the production plan phase's state transitions so the
+		// state machine stays realistic across rewind-driven calls.
+		advancePhaseState(task, state.PhasePlan, result.Pass, result.Escalate)
 		task.Attempts = append(task.Attempts, state.Attempt{
-			Phase: state.PhasePlan, Loop: f.result.Loops,
-			Verdict: &state.Verdict{Score: f.result.LastScore, Pass: f.result.Pass, Gaps: f.gaps},
+			Phase: state.PhasePlan, Loop: result.Loops,
+			Verdict: &state.Verdict{Score: result.LastScore, Pass: result.Pass, Gaps: gaps},
 		})
 	}
-	return f.result, f.err
+	return result, f.err
+}
+
+func (f *fakePlanRunner) pick() (*planphase.PhaseResult, []state.Gap) {
+	if len(f.results) > 0 {
+		idx := f.calls - 1
+		if idx >= len(f.results) {
+			idx = len(f.results) - 1
+		}
+		var g []state.Gap
+		if idx < len(f.gapsByCall) {
+			g = f.gapsByCall[idx]
+		}
+		return f.results[idx], g
+	}
+	return f.result, f.gaps
 }
 
 type fakeCodeRunner struct {
-	result *codephase.PhaseResult
-	gaps   []state.Gap
-	err    error
-	called bool
-	plan   string
+	result     *codephase.PhaseResult
+	gaps       []state.Gap
+	results    []*codephase.PhaseResult
+	gapsByCall [][]state.Gap
+	err        error
+	called     bool
+	calls      int
+	plan       string
+	plans      []string
 }
 
 func (f *fakeCodeRunner) Run(_ context.Context, task *state.Task, plan string) (*codephase.PhaseResult, error) {
 	f.called = true
+	f.calls++
 	f.plan = plan
-	if f.result != nil {
+	f.plans = append(f.plans, plan)
+	result, gaps := f.pick()
+	if result != nil {
+		advancePhaseState(task, state.PhaseCode, result.Pass, result.Escalate)
 		task.Attempts = append(task.Attempts, state.Attempt{
-			Phase: state.PhaseCode, Loop: f.result.Loops,
-			Verdict: &state.Verdict{Score: f.result.LastScore, Pass: f.result.Pass, Gaps: f.gaps},
+			Phase: state.PhaseCode, Loop: result.Loops,
+			Verdict: &state.Verdict{Score: result.LastScore, Pass: result.Pass, Gaps: gaps},
 		})
 	}
-	return f.result, f.err
+	return result, f.err
+}
+
+func (f *fakeCodeRunner) pick() (*codephase.PhaseResult, []state.Gap) {
+	if len(f.results) > 0 {
+		idx := f.calls - 1
+		if idx >= len(f.results) {
+			idx = len(f.results) - 1
+		}
+		var g []state.Gap
+		if idx < len(f.gapsByCall) {
+			g = f.gapsByCall[idx]
+		}
+		return f.results[idx], g
+	}
+	return f.result, f.gaps
 }
 
 type fakeQualityRunner struct {
-	result    *qualityphase.PhaseResult
-	gaps      []state.Gap
-	err       error
-	called    bool
-	plan      string
-	codeFacts string
+	result     *qualityphase.PhaseResult
+	gaps       []state.Gap
+	results    []*qualityphase.PhaseResult
+	gapsByCall [][]state.Gap
+	err        error
+	called     bool
+	calls      int
+	plan       string
+	plans      []string
+	codeFacts  string
 }
 
 func (f *fakeQualityRunner) Run(_ context.Context, task *state.Task, plan string, codeFacts string) (*qualityphase.PhaseResult, error) {
 	f.called = true
+	f.calls++
 	f.plan = plan
+	f.plans = append(f.plans, plan)
 	f.codeFacts = codeFacts
-	if f.result != nil {
+	result, gaps := f.pick()
+	if result != nil {
+		// Quality phase advances into QualityReview on entry; on pass
+		// it goes to Done, on failure it stays in QualityReview so the
+		// orchestrator can Rewind from there.
+		escalate := result.Escalate
+		advancePhaseState(task, state.PhaseQuality, result.Pass, escalate)
 		task.Attempts = append(task.Attempts, state.Attempt{
-			Phase: state.PhaseQuality, Loop: f.result.Loops,
-			Verdict: &state.Verdict{Score: f.result.LastScore, Pass: f.result.Pass, Gaps: f.gaps},
+			Phase: state.PhaseQuality, Loop: result.Loops,
+			Verdict: &state.Verdict{
+				Score: result.LastScore, Pass: result.Pass, Gaps: gaps,
+				ReturnTo: result.ReturnTo,
+			},
 		})
 	}
-	return f.result, f.err
+	return result, f.err
+}
+
+// advancePhaseState mimics the state transitions that the production
+// phase runners apply as they progress. The orchestration tests never
+// exercise the real producer agents, so the fakes handle state machine
+// bookkeeping themselves to keep tests grounded in realistic state.
+func advancePhaseState(task *state.Task, phase state.Phase, pass, escalate bool) {
+	switch phase {
+	case state.PhasePlan:
+		if task.State == state.StatePending {
+			_ = task.Transition(state.StatePlanning)
+		}
+		if task.State == state.StatePlanning {
+			_ = task.Transition(state.StatePlanReview)
+		}
+		if escalate {
+			_ = task.Transition(state.StateEscalated)
+			return
+		}
+		if pass && task.State == state.StatePlanReview {
+			_ = task.Transition(state.StateCoding)
+		}
+	case state.PhaseCode:
+		if task.State == state.StateCoding {
+			_ = task.Transition(state.StateCodeReview)
+		}
+		if escalate {
+			_ = task.Transition(state.StateEscalated)
+			return
+		}
+		if pass && task.State == state.StateCodeReview {
+			_ = task.Transition(state.StateQuality)
+		}
+	case state.PhaseQuality:
+		if task.State == state.StateQuality {
+			_ = task.Transition(state.StateQualityReview)
+		}
+		if escalate {
+			_ = task.Transition(state.StateEscalated)
+			return
+		}
+		if pass && task.State == state.StateQualityReview {
+			_ = task.Transition(state.StateDone)
+		}
+	}
+}
+
+func (f *fakeQualityRunner) pick() (*qualityphase.PhaseResult, []state.Gap) {
+	if len(f.results) > 0 {
+		idx := f.calls - 1
+		if idx >= len(f.results) {
+			idx = len(f.results) - 1
+		}
+		var g []state.Gap
+		if idx < len(f.gapsByCall) {
+			g = f.gapsByCall[idx]
+		}
+		return f.results[idx], g
+	}
+	return f.result, f.gaps
 }
 
 type fakeGHOrch struct {
@@ -730,11 +895,108 @@ func TestRunOrchestration_QualityEscalates(t *testing.T) {
 	}
 }
 
-func TestRunOrchestration_QualityRequeueToCode(t *testing.T) {
+func TestRunOrchestration_QualityReturnToCode_RetriesAndPasses(t *testing.T) {
 	t.Parallel()
+	// Cycle 1: quality says ReturnTo=code. The outer loop rewinds, the
+	// code phase runs again, then quality passes on cycle 2.
 	b := newOrchBundle()
-	b.quality.result = &qualityphase.PhaseResult{RequeueToCode: true, Loops: 2, LastScore: 50}
-	b.quality.gaps = []state.Gap{{Severity: state.SeverityP0, Description: "code broken", Blocking: true}}
+	b.quality.results = []*qualityphase.PhaseResult{
+		{ReturnTo: state.ReturnToCode, Loops: 1, LastScore: 50, Diff: "diff-1"},
+		{Pass: true, Loops: 1, LastScore: 95, Diff: "diff-2"},
+	}
+	b.quality.gapsByCall = [][]state.Gap{
+		{{Severity: state.SeverityP0, Description: "code broken", Blocking: true}},
+		nil,
+	}
+	b.code.results = []*codephase.PhaseResult{
+		{Pass: true, Loops: 1, LastScore: 100},
+		{Pass: true, Loops: 1, LastScore: 100},
+	}
+	task := state.NewTask("t-1", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b.escalationCalled {
+		t.Error("should not escalate — quality passed on cycle 2")
+	}
+	if b.code.calls != 2 {
+		t.Errorf("code should have run twice (once per cycle), got %d calls", b.code.calls)
+	}
+	if b.quality.calls != 2 {
+		t.Errorf("quality should have run twice, got %d calls", b.quality.calls)
+	}
+	if b.plan.calls != 1 {
+		t.Errorf("plan should run once — rewind was to code, not plan; got %d", b.plan.calls)
+	}
+	if !b.gh.prCalled {
+		t.Error("PR should be created after quality passes")
+	}
+	if b.gh.verdictDiff != "diff-2" {
+		t.Errorf("PostVerdictWithDiff should receive the latest cycle's diff, got %q", b.gh.verdictDiff)
+	}
+}
+
+func TestRunOrchestration_QualityReturnToPlan_Replans(t *testing.T) {
+	t.Parallel()
+	// Cycle 1: quality rewinds to plan with a blocking P0 gap. The
+	// orchestrator must: (a) call plan again, (b) inject the quality
+	// gap as a HardConstraint before the replanning, (c) let the
+	// following code+quality pass.
+	b := newOrchBundle()
+	b.plan.results = []*planphase.PhaseResult{
+		{Pass: true, Loops: 1, LastScore: 90, Plan: "plan v1"},
+		{Pass: true, Loops: 1, LastScore: 92, Plan: "plan v2"},
+	}
+	b.quality.results = []*qualityphase.PhaseResult{
+		{ReturnTo: state.ReturnToPlan, Loops: 1, LastScore: 30, Diff: "diff-1"},
+		{Pass: true, Loops: 1, LastScore: 95, Diff: "diff-2"},
+	}
+	b.quality.gapsByCall = [][]state.Gap{
+		{{Severity: state.SeverityP0, Description: "plan too narrow", Blocking: true}},
+		nil,
+	}
+	task := state.NewTask("t-rewind-plan", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if b.plan.calls != 2 {
+		t.Errorf("plan should run twice (once + rewind), got %d", b.plan.calls)
+	}
+	if b.code.calls != 2 {
+		t.Errorf("code should run twice, got %d", b.code.calls)
+	}
+	if len(task.HardConstraints) == 0 {
+		t.Fatal("expected task.HardConstraints populated from quality verdict")
+	}
+	joined := strings.Join(task.HardConstraints, "\n")
+	if !strings.Contains(joined, "plan too narrow") {
+		t.Errorf("expected quality gap description in HardConstraints, got %v", task.HardConstraints)
+	}
+	// Second code call must see the replanned plan.
+	if len(b.code.plans) < 2 || b.code.plans[1] != "plan v2" {
+		t.Errorf("code's second invocation should receive replanned plan, got plans=%v", b.code.plans)
+	}
+	if !b.gh.prCalled {
+		t.Error("PR should be created after replan+quality pass")
+	}
+}
+
+func TestRunOrchestration_QualityReturnToEscalate(t *testing.T) {
+	t.Parallel()
+	// ReturnTo=escalate stops the loop immediately — no rewind.
+	b := newOrchBundle()
+	b.quality.result = &qualityphase.PhaseResult{
+		ReturnTo: state.ReturnToEscalate,
+		Escalate: true,
+		Loops:    1, LastScore: 10,
+	}
+	b.quality.gaps = []state.Gap{{Severity: state.SeverityP0, Description: "intent ambiguous", Blocking: true}}
 	task := state.NewTask("t-1", "intent")
 	r := &fakeRenderer{}
 
@@ -746,8 +1008,40 @@ func TestRunOrchestration_QualityRequeueToCode(t *testing.T) {
 	if b.escalationResult.Phase != state.PhaseQuality {
 		t.Errorf("escalation phase = %s, want quality", b.escalationResult.Phase)
 	}
+	if b.code.calls != 1 {
+		t.Errorf("code should only run once before escalate, got %d", b.code.calls)
+	}
 	if b.gh.prCalled {
-		t.Error("PR should not be created on requeue")
+		t.Error("PR should not be created on escalate")
+	}
+}
+
+func TestRunOrchestration_CycleBudgetExhausted(t *testing.T) {
+	t.Parallel()
+	// Every cycle's quality says ReturnTo=code. After maxOuterCycles
+	// the orchestrator escalates rather than looping forever.
+	b := newOrchBundle()
+	b.quality.result = &qualityphase.PhaseResult{
+		ReturnTo: state.ReturnToCode,
+		Loops:    1, LastScore: 40,
+	}
+	b.quality.gaps = []state.Gap{{Severity: state.SeverityP0, Description: "still broken", Blocking: true}}
+	task := state.NewTask("t-budget", "intent")
+	r := &fakeRenderer{}
+
+	err := runOrchestration(context.Background(), b.deps(), task, r)
+
+	if !errors.Is(err, errEscalated) {
+		t.Fatalf("expected errEscalated after cycle budget exhausted, got %v", err)
+	}
+	if b.code.calls != maxOuterCycles {
+		t.Errorf("code should run maxOuterCycles (%d) times, got %d", maxOuterCycles, b.code.calls)
+	}
+	if b.quality.calls != maxOuterCycles {
+		t.Errorf("quality should run maxOuterCycles (%d) times, got %d", maxOuterCycles, b.quality.calls)
+	}
+	if b.gh.prCalled {
+		t.Error("PR should not be created when cycle budget is exhausted")
 	}
 }
 

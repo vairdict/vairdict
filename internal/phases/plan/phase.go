@@ -102,7 +102,7 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 		}
 
 		// Build the planner prompt.
-		prompt := buildPlannerPrompt(task.Intent, lastFeedback, task.Assumptions)
+		prompt := buildPlannerPrompt(task.Intent, lastFeedback, task.Assumptions, task.HardConstraints)
 
 		// Call the planner agent.
 		var resp plannerResponse
@@ -215,12 +215,21 @@ func (p *PlanPhase) processGaps(task *state.Task, gaps []state.Gap) {
 }
 
 // buildPlannerPrompt constructs the prompt for the planner agent.
-func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assumption) string {
+func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assumption, hardConstraints []string) string {
 	var b strings.Builder
 
 	b.WriteString("## Task Intent\n")
 	b.WriteString(intent)
 	b.WriteString("\n")
+
+	if len(hardConstraints) > 0 {
+		b.WriteString("\n## Hard Constraints (non-negotiable)\n")
+		b.WriteString("These were identified by the quality judge on a previous outer cycle. ")
+		b.WriteString("Your new plan MUST address each one — acknowledging is not enough, the plan must call out concrete steps that resolve them:\n")
+		for _, c := range hardConstraints {
+			fmt.Fprintf(&b, "- %s\n", c)
+		}
+	}
 
 	if feedback != "" {
 		b.WriteString("\n## Previous Attempt Feedback\n")
