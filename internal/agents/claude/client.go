@@ -120,7 +120,7 @@ type contentBlock struct {
 // toolResultBlock is a content block sent in a user message to return the
 // result of a tool call back to the model during a multi-turn conversation.
 type toolResultBlock struct {
-	Type      string `json:"type"`       // always "tool_result"
+	Type      string `json:"type"` // always "tool_result"
 	ToolUseID string `json:"tool_use_id"`
 	Content   string `json:"content"`
 }
