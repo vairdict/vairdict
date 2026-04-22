@@ -44,10 +44,12 @@ jobs:
 
       - name: Install golangci-lint
         env:
-          # Force the project's Go toolchain so the binary is built with a
-          # Go version >= the one targeted by go.mod. The upstream releases
-          # are built with Go 1.25, which cannot analyse code targeting 1.26.
-          GOTOOLCHAIN: go1.26.1
+          # Force the Go toolchain installed by setup-go (which reads go.mod)
+          # instead of letting Go auto-download golangci-lint's preferred
+          # toolchain. Upstream releases are built with an older Go than this
+          # project targets, and the resulting binary refuses to analyse
+          # newer code. "local" stays version-agnostic as go.mod evolves.
+          GOTOOLCHAIN: local
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
 
       - name: Run golangci-lint
