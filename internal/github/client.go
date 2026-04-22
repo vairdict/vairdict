@@ -448,6 +448,8 @@ func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict 
 		if !cannotApprovePRRe.MatchString(err.Error()) {
 			return fmt.Errorf("posting verdict approval: %w", err)
 		}
+		// Approval denied (self-authored PR or Actions token restriction).
+		// Fall through to a plain comment so the verdict still gets posted.
 		slog.Info("approval rejected, falling back to comment", "pr", prNumber, "reason", err)
 	}
 
