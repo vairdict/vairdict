@@ -536,6 +536,38 @@ func TestJudge_SecurityChecksAreBlocking(t *testing.T) {
 	}
 }
 
+func TestJudge_SystemPromptForbidsSilenceOnSubstantiveDiff(t *testing.T) {
+	// PR #107 was a 1200-line / 16-file diff that the judge passed with
+	// zero gaps. The prompt must keep an explicit hard rule against that
+	// failure mode so a future prompt edit cannot silently soften it.
+	for _, keyword := range []string{
+		"Substantive-diff rule",
+		"MUST produce at least one entry",
+		">200 lines",
+		">3 files",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing substantive-diff rule marker %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptEstablishesFreshReviewerMindset(t *testing.T) {
+	// When judge and coder are backed by the same model family, the judge
+	// can carry an implicit self-defense bias. The prompt must instruct
+	// it to review as a fresh reviewer with no prior reasoning about the
+	// change.
+	for _, keyword := range []string{
+		"Reviewer mindset",
+		"no prior",
+		"NOT the author",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing fresh-reviewer marker %q", keyword)
+		}
+	}
+}
+
 func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
 	if !strings.Contains(systemPrompt, "P2 non-blocking") {
 		t.Error("system prompt should mark code-reuse checks as P2 non-blocking")
