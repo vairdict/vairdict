@@ -926,6 +926,80 @@ func TestFormatInlineComment_NonBlocking(t *testing.T) {
 	}
 }
 
+func TestFormatInlineComment_WithSuggestion(t *testing.T) {
+	g := state.Gap{
+		Severity:    state.SeverityP1,
+		Description: "hardcoded key",
+		Blocking:    true,
+		Suggestion:  "\tapiKey := os.Getenv(\"API_KEY\")",
+	}
+	body := formatInlineComment(g)
+	if !contains(body, "```suggestion") {
+		t.Errorf("expected suggestion block, got %q", body)
+	}
+	if !contains(body, "os.Getenv") {
+		t.Errorf("expected suggestion content, got %q", body)
+	}
+	if !contains(body, "[P1]") {
+		t.Errorf("expected severity prefix, got %q", body)
+	}
+	if !contains(body, "hardcoded key") {
+		t.Errorf("expected description, got %q", body)
+	}
+}
+
+func TestFormatInlineComment_NoSuggestion(t *testing.T) {
+	g := state.Gap{
+		Severity:    state.SeverityP2,
+		Description: "design concern",
+		Blocking:    false,
+		Suggestion:  "",
+	}
+	body := formatInlineComment(g)
+	if contains(body, "suggestion") {
+		t.Errorf("should not contain suggestion block when empty, got %q", body)
+	}
+}
+
+func TestBuildInlineReview_SuggestionPreserved(t *testing.T) {
+	diff := "diff --git a/foo.go b/foo.go\n" +
+		"--- a/foo.go\n" +
+		"+++ b/foo.go\n" +
+		"@@ -1,3 +1,3 @@\n" +
+		" package foo\n" +
+		"-var old = 1\n" +
+		"+var secret = \"sk-live-abc\"\n"
+
+	verdict := &state.Verdict{
+		Score: 80,
+		Pass:  false,
+		Gaps: []state.Gap{
+			{
+				Severity:    state.SeverityP1,
+				Description: "hardcoded secret",
+				Blocking:    true,
+				File:        "foo.go",
+				Line:        2,
+				Suggestion:  "var secret = os.Getenv(\"SECRET\")",
+			},
+		},
+	}
+
+	review := BuildInlineReview(verdict, diff)
+	if review == nil {
+		t.Fatal("expected review payload")
+	}
+	if len(review.Comments) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(review.Comments))
+	}
+	if !contains(review.Comments[0].Body, "```suggestion") {
+		t.Errorf("inline comment should contain suggestion block, got %q", review.Comments[0].Body)
+	}
+	if !contains(review.Comments[0].Body, "os.Getenv") {
+		t.Errorf("suggestion should contain replacement code, got %q", review.Comments[0].Body)
+	}
+}
+
 func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
 	// Gaps with file/line should show the location in the criteria table.
 	verdict := &state.Verdict{

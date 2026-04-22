@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/vairdict/vairdict/internal/agents/claudecode"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/conflicts"
 	"github.com/vairdict/vairdict/internal/deps"
 	"github.com/vairdict/vairdict/internal/escalation"
 	"github.com/vairdict/vairdict/internal/github"
@@ -187,12 +188,19 @@ type ghOrchestrator interface {
 	MergePR(ctx context.Context, prNumber int) error
 }
 
+// conflictChecker detects and resolves merge conflicts before PR creation.
+type conflictChecker interface {
+	DetectAndResolve(ctx context.Context, workDir, baseBranch string) (*conflicts.Result, error)
+}
+
 // runDeps bundles all dependencies the orchestration loop needs.
 type runDeps struct {
 	plan         planRunner
 	code         codeRunner
 	quality      qualityRunner
 	gh           ghOrchestrator
+	conflicts    conflictChecker
+	workDir      string
 	commit       func(ctx context.Context, task *state.Task) error
 	onEscalation func(ctx context.Context, task *state.Task, result escalation.Result) error
 	issueNumber  int
@@ -237,10 +245,12 @@ func (d *defaultQualityRunner) Run(ctx context.Context, task *state.Task, plan s
 
 func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client, issueNumber int) runDeps {
 	return runDeps{
-		plan:    &defaultPlanRunner{cfg: cfg, client: client, store: store, r: r},
-		code:    &defaultCodeRunner{cfg: cfg, store: store, workDir: workDir, r: r},
-		quality: &defaultQualityRunner{cfg: cfg, client: client, store: store, workDir: workDir, r: r},
-		gh:      ghClient,
+		plan:      &defaultPlanRunner{cfg: cfg, client: client, store: store, r: r},
+		code:      &defaultCodeRunner{cfg: cfg, store: store, workDir: workDir, r: r},
+		quality:   &defaultQualityRunner{cfg: cfg, client: client, store: store, workDir: workDir, r: r},
+		gh:        ghClient,
+		conflicts: conflicts.New(&workspace.ExecRunner{}),
+		workDir:   workDir,
 		commit: func(ctx context.Context, task *state.Task) error {
 			return commitChanges(ctx, task, workDir, r)
 		},
@@ -622,6 +632,34 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 			LastScore: qualityResult.LastScore,
 			Gaps:      gaps,
 		})
+	}
+
+	// --- Detect and resolve merge conflicts before PR creation ---
+	if deps.conflicts != nil {
+		conflictResult, err := deps.conflicts.DetectAndResolve(ctx, deps.workDir, "main")
+		if err != nil {
+			r.Error(err)
+			return fmt.Errorf("checking for merge conflicts: %w", err)
+		}
+		if conflictResult.Rebased {
+			r.Note("rebase", "auto-rebased onto latest main")
+		}
+		if conflictResult.HasConflicts {
+			conflictGaps := make([]state.Gap, 0, len(conflictResult.ConflictFiles))
+			for _, f := range conflictResult.ConflictFiles {
+				conflictGaps = append(conflictGaps, state.Gap{
+					Severity:    state.SeverityP0,
+					Description: fmt.Sprintf("merge conflict in %s", f),
+					Blocking:    true,
+					File:        f,
+				})
+			}
+			r.Escalation(task.ID, state.PhaseCode, 0, 0, conflictGaps)
+			return deps.onEscalation(ctx, task, escalation.Result{
+				Phase: state.PhaseCode,
+				Gaps:  conflictGaps,
+			})
+		}
 	}
 
 	// --- Create GitHub PR (only after quality passes) ---

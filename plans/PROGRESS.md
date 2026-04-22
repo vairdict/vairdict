@@ -10,11 +10,11 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #81 conflicts: merge conflict detection
 - #90 cmd/resume: resume interrupted run from last checkpoint
 - #91 cmd/interactive: status, notes, pause/continue during execution
 
 ## In Progress
+- #81 conflicts: merge conflict detection
 - #80 queue: priority ordering + dependency resolution
 - #100 cmd: @vairdict PR mention commands (review / approve / ignore)
 

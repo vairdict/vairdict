@@ -536,12 +536,18 @@ func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *st
 }
 
 // formatInlineComment builds the markdown body for a single inline comment.
+// When the gap carries a Suggestion, a GitHub suggestion block is appended
+// so the PR author can apply the fix with one click.
 func formatInlineComment(g state.Gap) string {
 	icon := "💡"
 	if g.Blocking {
 		icon = "🚫"
 	}
-	return fmt.Sprintf("%s **[%s]** %s", icon, g.Severity, g.Description)
+	body := fmt.Sprintf("%s **[%s]** %s", icon, g.Severity, g.Description)
+	if g.Suggestion != "" {
+		body += "\n\n```suggestion\n" + g.Suggestion + "\n```"
+	}
+	return body
 }
 
 // CommitStatusContext is the context string VAIrdict uses when posting

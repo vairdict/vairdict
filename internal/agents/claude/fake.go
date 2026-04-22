@@ -47,6 +47,13 @@ func (f *FakeClient) CompleteWithTool(_ context.Context, system, prompt string, 
 	return f.fill(target)
 }
 
+// CompleteWithTools records the call (using finalTool as ToolName) and returns
+// the configured response. Does not simulate the multi-turn loop.
+func (f *FakeClient) CompleteWithTools(_ context.Context, system, prompt string, _ []Tool, finalTool string, _ map[string]ToolHandler, target any) error {
+	f.Calls = append(f.Calls, FakeCall{System: system, Prompt: prompt, ToolName: finalTool})
+	return f.fill(target)
+}
+
 func (f *FakeClient) fill(target any) error {
 	if f.Err != nil {
 		return f.Err
