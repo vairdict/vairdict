@@ -390,17 +390,55 @@ func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.V
 
 // PostVerdictWithDiff is like PostVerdict but accepts a diff string for
 // resolving inline comment positions. When diff is non-empty, gaps that
-// have File and Line set are posted as inline review comments.
+// have File and Line set are posted as inline review comments attached to
+// the same review as the verdict summary — a single cohesive review.
 func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int, diff string) error {
 	c.deletePreviousVerdicts(ctx, prNumber)
 
-	// Post inline review comments for gaps with file:line info.
+	// Build inline comments from gaps with file:line info.
+	var inlineResult *InlineReviewResult
 	if diff != "" {
-		c.postInlineReview(ctx, prNumber, verdict, diff)
+		inlineResult = BuildInlineReview(verdict, diff)
 	}
 
-	comment := FormatVerdictComment(verdict, phase, loop)
+	var inlineIndices map[int]bool
+	var inlineComments []InlineComment
+	if inlineResult != nil {
+		inlineIndices = inlineResult.InlineGapIndices
+		if inlineResult.Payload != nil {
+			inlineComments = inlineResult.Payload.Comments
+		}
+	}
 
+	comment := FormatVerdictComment(verdict, phase, loop, inlineIndices)
+
+	// When we have inline comments, post everything as a single review
+	// so inline comments appear as children of the verdict summary.
+	if len(inlineComments) > 0 {
+		event := "COMMENT"
+		if verdict.Pass {
+			event = "APPROVE"
+		}
+		review := &InlineReviewPayload{
+			Event:    event,
+			Body:     comment,
+			Comments: inlineComments,
+		}
+		err := c.postReviewPayload(ctx, prNumber, review)
+		if err != nil && verdict.Pass && cannotApprovePRRe.MatchString(err.Error()) {
+			// Approval denied — retry as COMMENT.
+			slog.Info("approval rejected, falling back to comment review", "pr", prNumber, "reason", err)
+			review.Event = "COMMENT"
+			err = c.postReviewPayload(ctx, prNumber, review)
+		}
+		if err != nil {
+			return fmt.Errorf("posting verdict review: %w", err)
+		}
+		slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "review", "inline_comments", len(inlineComments))
+		return nil
+	}
+
+	// No inline comments — use the simpler approval/comment path.
 	if verdict.Pass {
 		err := c.ApprovePR(ctx, prNumber, comment)
 		if err == nil {
@@ -433,18 +471,28 @@ type InlineReviewPayload struct {
 	Comments []InlineComment `json:"comments"`
 }
 
+// InlineReviewResult holds the review payload and the indices of gaps that
+// were successfully anchored as inline comments. The indices let callers
+// (e.g. FormatVerdictComment) omit those gaps from the summary comment
+// since they are already visible as inline review comments on the PR.
+type InlineReviewResult struct {
+	Payload          *InlineReviewPayload
+	InlineGapIndices map[int]bool
+}
+
 // BuildInlineReview turns a verdict + diff into a review payload whose
 // comments point only at lines present in the diff. Gaps without File/Line
 // or whose line does not appear in the diff are collected into the review
 // body so reviewers still see every concern — previously they were dropped
 // silently and only surfaced in the verdict table.
-// Returns nil only when the verdict has no gaps at all.
-func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload {
+// Returns a result with a nil Payload only when the verdict has no gaps at all.
+func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewResult {
 	positions := ParseDiffPositions(diff)
 
 	var comments []InlineComment
 	var unanchored []state.Gap
-	for _, g := range verdict.Gaps {
+	inlineIndices := make(map[int]bool)
+	for i, g := range verdict.Gaps {
 		if g.File == "" || g.Line == 0 {
 			unanchored = append(unanchored, g)
 			continue
@@ -461,16 +509,20 @@ func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewPayload
 			Position: pos,
 			Body:     formatInlineComment(g),
 		})
+		inlineIndices[i] = true
 	}
 
 	if len(comments) == 0 && len(unanchored) == 0 {
-		return nil
+		return &InlineReviewResult{}
 	}
 
-	return &InlineReviewPayload{
-		Event:    "COMMENT",
-		Body:     formatReviewBody(len(comments), unanchored),
-		Comments: comments,
+	return &InlineReviewResult{
+		Payload: &InlineReviewPayload{
+			Event:    "COMMENT",
+			Body:     formatReviewBody(len(comments), unanchored),
+			Comments: comments,
+		},
+		InlineGapIndices: inlineIndices,
 	}
 }
 
@@ -491,35 +543,25 @@ func formatReviewBody(inlineCount int, unanchored []state.Gap) string {
 	return b.String()
 }
 
-// postInlineReview creates a single GitHub review with inline comments
-// for gaps that have resolvable file:line positions. Best-effort — errors
-// are logged but do not block the summary verdict from being posted.
-func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *state.Verdict, diff string) {
-	review := BuildInlineReview(verdict, diff)
-	if review == nil {
-		return
-	}
-
+// postReviewPayload posts a review payload to the GitHub API.
+func (c *Client) postReviewPayload(ctx context.Context, prNumber int, review *InlineReviewPayload) error {
 	payload, err := json.Marshal(review)
 	if err != nil {
-		slog.Debug("failed to marshal review payload", "error", err)
-		return
+		return fmt.Errorf("marshalling review payload: %w", err)
 	}
 
 	// Write payload to a temp file for gh api --input since our
 	// CommandRunner doesn't support stdin.
 	f, err := os.CreateTemp("", "vairdict-review-*.json")
 	if err != nil {
-		slog.Debug("failed to create temp file for review", "error", err)
-		return
+		return fmt.Errorf("creating temp file for review: %w", err)
 	}
 	tmpPath := f.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 
 	if _, err := f.Write(payload); err != nil {
 		_ = f.Close()
-		slog.Debug("failed to write review payload", "error", err)
-		return
+		return fmt.Errorf("writing review payload: %w", err)
 	}
 	_ = f.Close()
 
@@ -529,10 +571,9 @@ func (c *Client) postInlineReview(ctx context.Context, prNumber int, verdict *st
 		"--input", tmpPath,
 	)
 	if err != nil {
-		slog.Debug("failed to post inline review", "pr", prNumber, "error", err)
-		return
+		return fmt.Errorf("posting review to PR #%d: %w", prNumber, err)
 	}
-	slog.Info("inline review posted", "pr", prNumber, "comments", len(review.Comments))
+	return nil
 }
 
 // formatInlineComment builds the markdown body for a single inline comment.
@@ -658,7 +699,11 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 const logoURL = "https://raw.githubusercontent.com/vairdict/vairdict/main/assets/logo.png"
 
 // FormatVerdictComment builds a structured markdown comment from a Verdict.
-func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) string {
+// inlineGapIndices contains the indices of gaps that were already posted as
+// inline review comments on the PR. Those gaps are excluded from the criteria
+// table to avoid duplication — the summary focuses on high-level narrative
+// and non-inline concerns.
+func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, inlineGapIndices map[int]bool) string {
 	var b strings.Builder
 
 	// Header with logo and pass/fail status.
@@ -679,15 +724,26 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) s
 		b.WriteString("\n\n")
 	}
 
-	// Criteria table — build from gaps. When the verdict passes with zero
-	// gaps we still emit an explicit "no issues found" line so reviewers
-	// can tell the judge ran and had nothing to flag, instead of staring
-	// at an empty comment body and assuming vairdict skipped the review.
-	if len(verdict.Gaps) > 0 {
+	// Separate gaps into inline (already visible on specific lines) and
+	// summary-only (belong in this comment).
+	var summaryGaps []state.Gap
+	inlineCount := 0
+	for i, g := range verdict.Gaps {
+		if inlineGapIndices[i] {
+			inlineCount++
+		} else {
+			summaryGaps = append(summaryGaps, g)
+		}
+	}
+
+	// Criteria table — only non-inline gaps. When the verdict passes with
+	// zero gaps we still emit an explicit "no issues found" line so
+	// reviewers can tell the judge ran and had nothing to flag.
+	if len(summaryGaps) > 0 {
 		b.WriteString("### Criteria\n\n")
 		b.WriteString("| Severity | Status | Description |\n")
 		b.WriteString("|----------|--------|-------------|\n")
-		for _, g := range verdict.Gaps {
+		for _, g := range summaryGaps {
 			status := "pass"
 			if g.Blocking {
 				status = "BLOCKING"
@@ -699,9 +755,14 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) s
 		b.WriteString("✓ No issues found.\n\n")
 	}
 
-	// Gaps section for failures.
+	if inlineCount > 0 {
+		fmt.Fprintf(&b, "> %d additional comment(s) posted inline on the diff.\n\n", inlineCount)
+	}
+
+	// Blocking gaps section for failures — include ALL blocking gaps
+	// (even inline ones) so the summary is a complete failure report.
 	if !verdict.Pass {
-		blocking := make([]state.Gap, 0)
+		var blocking []state.Gap
 		for _, g := range verdict.Gaps {
 			if g.Blocking {
 				blocking = append(blocking, g)

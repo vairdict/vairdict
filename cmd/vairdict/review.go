@@ -162,7 +162,7 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	}
 
 	if deps.noComment {
-		_, _ = fmt.Fprintln(deps.stdout, github.FormatVerdictComment(verdict, state.PhaseQuality, 1))
+		_, _ = fmt.Fprintln(deps.stdout, github.FormatVerdictComment(verdict, state.PhaseQuality, 1, nil))
 	} else {
 		if err := deps.gh.PostVerdictWithDiff(ctx, prNumber, verdict, state.PhaseQuality, 1, diff); err != nil {
 			return fmt.Errorf("posting verdict: %w", err)

@@ -397,7 +397,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		},
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1, nil)
 
 	checks := []struct {
 		name string
@@ -441,7 +441,7 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		},
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhaseCode, 2)
+	comment := FormatVerdictComment(verdict, state.PhaseCode, 2, nil)
 
 	checks := []struct {
 		name string
@@ -473,7 +473,7 @@ func TestFormatVerdictComment_NoGaps(t *testing.T) {
 		Pass:  true,
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhasePlan, 1)
+	comment := FormatVerdictComment(verdict, state.PhasePlan, 1, nil)
 
 	if contains(comment, "### Criteria") {
 		t.Error("should not have criteria table when no gaps")
@@ -497,7 +497,7 @@ func TestFormatVerdictComment_FailWithNoGaps_NoSuchMessage(t *testing.T) {
 		Pass:  false,
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1, nil)
 
 	if contains(comment, "No issues found") {
 		t.Error("fail verdict must not render the no-issues affirmation")
@@ -516,7 +516,7 @@ func TestFormatVerdictComment_RendersSummary(t *testing.T) {
 		Summary: summary,
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1, nil)
 
 	if !contains(comment, "## Reviewed") {
 		t.Error("comment missing Reviewed section from Summary")
@@ -539,7 +539,7 @@ func TestFormatVerdictComment_EmptySummaryNotRendered(t *testing.T) {
 		Summary: "   \n\t  ",
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhasePlan, 1)
+	comment := FormatVerdictComment(verdict, state.PhasePlan, 1, nil)
 
 	if contains(comment, "## Reviewed") || contains(comment, "## Notes") {
 		t.Error("whitespace-only summary should not emit any section")
@@ -771,10 +771,11 @@ func TestPostVerdictWithDiff_InlineComments(t *testing.T) {
 	}
 }
 
-func TestPostVerdictWithDiff_ReviewStillPostedForUnanchoredGaps(t *testing.T) {
-	// #100 follow-up: gaps without file/line used to be dropped
-	// silently from the inline review. Now they surface in the review
-	// body so reviewers still see them in the PR's review tab.
+func TestPostVerdictWithDiff_UnanchoredGapsSurfaceInComment(t *testing.T) {
+	// Gaps without file/line don't produce inline comments, so when
+	// there are no inline comments the verdict is posted as a plain
+	// comment. The unanchored gaps must still appear in the criteria
+	// table of that comment.
 	diff := `diff --git a/x.go b/x.go
 --- a/x.go
 +++ b/x.go
@@ -798,15 +799,19 @@ func TestPostVerdictWithDiff_ReviewStillPostedForUnanchoredGaps(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var sawReview bool
+	// No inline comments → should fall back to gh pr comment, not review API.
+	var sawComment bool
 	for _, call := range runner.Calls {
-		if call.Name == "gh" && len(call.Args) >= 2 &&
-			call.Args[0] == "api" && strings.Contains(strings.Join(call.Args, " "), "reviews") {
-			sawReview = true
+		if call.Name == "gh" && len(call.Args) >= 2 && call.Args[1] == "comment" {
+			sawComment = true
+			body := strings.Join(call.Args, " ")
+			if !strings.Contains(body, "missing docs") {
+				t.Error("verdict comment should contain the unanchored gap")
+			}
 		}
 	}
-	if !sawReview {
-		t.Error("expected review API call so unanchored gap surfaces, saw none")
+	if !sawComment {
+		t.Error("expected gh pr comment call for verdict with no inline comments")
 	}
 }
 
@@ -853,17 +858,17 @@ func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
 		},
 	}
 
-	review := BuildInlineReview(verdict, diff)
-	if review == nil {
+	result := BuildInlineReview(verdict, diff)
+	if result.Payload == nil {
 		t.Fatal("expected review payload, got nil")
 	}
-	if review.Event != "COMMENT" {
-		t.Errorf("expected event=COMMENT (batched, no notification spam), got %q", review.Event)
+	if result.Payload.Event != "COMMENT" {
+		t.Errorf("expected event=COMMENT (batched, no notification spam), got %q", result.Payload.Event)
 	}
-	if len(review.Comments) != 1 {
-		t.Fatalf("expected 1 inline comment, got %d", len(review.Comments))
+	if len(result.Payload.Comments) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(result.Payload.Comments))
 	}
-	only := review.Comments[0]
+	only := result.Payload.Comments[0]
 	if only.Path != "foo.go" {
 		t.Errorf("expected path foo.go, got %q", only.Path)
 	}
@@ -876,9 +881,16 @@ func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
 	// The three non-resolvable gaps must now appear in the review body so
 	// reviewers see every concern, not just the subset with anchors.
 	for _, want := range []string{"no file info", "line outside diff", "wrong file"} {
-		if !contains(review.Body, want) {
-			t.Errorf("expected unanchored gap %q in review body, got %q", want, review.Body)
+		if !contains(result.Payload.Body, want) {
+			t.Errorf("expected unanchored gap %q in review body, got %q", want, result.Payload.Body)
 		}
+	}
+	// Verify inline gap index tracking.
+	if !result.InlineGapIndices[0] {
+		t.Error("expected gap index 0 to be marked as inline")
+	}
+	if result.InlineGapIndices[1] || result.InlineGapIndices[2] || result.InlineGapIndices[3] {
+		t.Error("non-inline gap indices should not be in InlineGapIndices")
 	}
 }
 
@@ -902,16 +914,16 @@ func TestBuildInlineReview_UnanchoredGapsStillSurface(t *testing.T) {
 		},
 	}
 
-	review := BuildInlineReview(verdict, diff)
-	if review == nil {
+	result := BuildInlineReview(verdict, diff)
+	if result.Payload == nil {
 		t.Fatal("expected review payload so unanchored gaps surface, got nil")
 	}
-	if len(review.Comments) != 0 {
-		t.Errorf("expected 0 inline comments, got %d", len(review.Comments))
+	if len(result.Payload.Comments) != 0 {
+		t.Errorf("expected 0 inline comments, got %d", len(result.Payload.Comments))
 	}
 	for _, want := range []string{"no location", "out of diff"} {
-		if !contains(review.Body, want) {
-			t.Errorf("expected unanchored gap %q in review body, got %q", want, review.Body)
+		if !contains(result.Payload.Body, want) {
+			t.Errorf("expected unanchored gap %q in review body, got %q", want, result.Payload.Body)
 		}
 	}
 }
@@ -928,8 +940,9 @@ func TestBuildInlineReview_NilWhenNoGapsAtAll(t *testing.T) {
  c
 `
 	verdict := &state.Verdict{}
-	if review := BuildInlineReview(verdict, diff); review != nil {
-		t.Errorf("expected nil review when verdict has no gaps, got %+v", review)
+	result := BuildInlineReview(verdict, diff)
+	if result.Payload != nil {
+		t.Errorf("expected nil payload when verdict has no gaps, got %+v", result.Payload)
 	}
 }
 
@@ -956,17 +969,22 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 		},
 	}
 
-	review := BuildInlineReview(verdict, diff)
-	if review == nil || len(review.Comments) != 1 {
-		t.Fatalf("expected exactly 1 inline comment, got %+v", review)
+	result := BuildInlineReview(verdict, diff)
+	if result.Payload == nil || len(result.Payload.Comments) != 1 {
+		t.Fatalf("expected exactly 1 inline comment, got %+v", result)
 	}
 
-	summary := FormatVerdictComment(verdict, state.PhaseQuality, 1)
-	if !contains(summary, "bad on added line") {
-		t.Error("summary must still list the inline-eligible gap")
+	// When inlineGapIndices is passed, the inline gap should be excluded
+	// from the criteria table but the non-inline gap should remain.
+	summary := FormatVerdictComment(verdict, state.PhaseQuality, 1, result.InlineGapIndices)
+	if contains(summary, "| P1 |") {
+		t.Error("inline gap should NOT appear in criteria table when inlineGapIndices is set")
 	}
 	if !contains(summary, "architectural concern") {
 		t.Error("summary must list the location-less gap that has no inline counterpart")
+	}
+	if !contains(summary, "1 additional comment(s) posted inline") {
+		t.Error("summary should note inline comments were posted")
 	}
 }
 
@@ -1048,18 +1066,18 @@ func TestBuildInlineReview_SuggestionPreserved(t *testing.T) {
 		},
 	}
 
-	review := BuildInlineReview(verdict, diff)
-	if review == nil {
+	result := BuildInlineReview(verdict, diff)
+	if result.Payload == nil {
 		t.Fatal("expected review payload")
 	}
-	if len(review.Comments) != 1 {
-		t.Fatalf("expected 1 inline comment, got %d", len(review.Comments))
+	if len(result.Payload.Comments) != 1 {
+		t.Fatalf("expected 1 inline comment, got %d", len(result.Payload.Comments))
 	}
-	if !contains(review.Comments[0].Body, "```suggestion") {
-		t.Errorf("inline comment should contain suggestion block, got %q", review.Comments[0].Body)
+	if !contains(result.Payload.Comments[0].Body, "```suggestion") {
+		t.Errorf("inline comment should contain suggestion block, got %q", result.Payload.Comments[0].Body)
 	}
-	if !contains(review.Comments[0].Body, "os.Getenv") {
-		t.Errorf("suggestion should contain replacement code, got %q", review.Comments[0].Body)
+	if !contains(result.Payload.Comments[0].Body, "os.Getenv") {
+		t.Errorf("suggestion should contain replacement code, got %q", result.Payload.Comments[0].Body)
 	}
 }
 
@@ -1074,7 +1092,7 @@ func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
 		},
 	}
 
-	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1, nil)
 
 	// Both gaps should appear in the table regardless of file/line.
 	if !contains(comment, "magic number") {
