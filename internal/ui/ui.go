@@ -77,6 +77,7 @@ const (
 	OutcomeFail
 	OutcomeEscalate
 	OutcomeRequeueToCode
+	OutcomeRequeueToPlan
 )
 
 // Options holds the construction parameters for a Renderer.

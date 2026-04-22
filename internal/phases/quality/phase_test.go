@@ -118,7 +118,10 @@ func TestRun_PassOnRetry_NonBlockingGaps(t *testing.T) {
 	}
 }
 
-func TestRun_RequeueToCode_OnP0Gap(t *testing.T) {
+func TestRun_ReturnToCode_OnP0Gap(t *testing.T) {
+	// The LLM diagnoses a code-level root cause via ReturnTo=code. The
+	// phase forwards it to the orchestrator rather than escalating or
+	// looping within quality.
 	judge := &fakeJudge{verdicts: []*state.Verdict{
 		{
 			Score: 30,
@@ -126,6 +129,7 @@ func TestRun_RequeueToCode_OnP0Gap(t *testing.T) {
 			Gaps: []state.Gap{
 				{Severity: state.SeverityP0, Description: "intent mismatch", Blocking: true},
 			},
+			ReturnTo: state.ReturnToCode,
 		},
 	}}
 
@@ -136,14 +140,14 @@ func TestRun_RequeueToCode_OnP0Gap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.RequeueToCode {
-		t.Errorf("expected RequeueToCode, got %+v", result)
+	if result.ReturnTo != state.ReturnToCode {
+		t.Errorf("expected ReturnTo=code, got %+v", result)
 	}
 	if result.Pass {
 		t.Error("should not pass")
 	}
 	if result.Escalate {
-		t.Error("should not escalate yet — orchestrator routes to code")
+		t.Error("should not escalate — orchestrator routes to code")
 	}
 	if result.Loops != 1 {
 		t.Errorf("loops = %d, want 1", result.Loops)
@@ -153,14 +157,17 @@ func TestRun_RequeueToCode_OnP0Gap(t *testing.T) {
 	}
 }
 
-func TestRun_RequeueToCode_OnP1Gap(t *testing.T) {
+func TestRun_ReturnToPlan_ForwardsToOrchestrator(t *testing.T) {
+	// A plan-level diagnosis stops the quality loop the same way a
+	// code-level diagnosis does; the orchestrator handles the rewind.
 	judge := &fakeJudge{verdicts: []*state.Verdict{
 		{
-			Score: 55,
+			Score: 40,
 			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "e2e tests failed", Blocking: true},
+				{Severity: state.SeverityP0, Description: "plan too narrow", Blocking: true},
 			},
+			ReturnTo: state.ReturnToPlan,
 		},
 	}}
 
@@ -171,13 +178,47 @@ func TestRun_RequeueToCode_OnP1Gap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.RequeueToCode {
-		t.Errorf("expected RequeueToCode for P1 blocking, got %+v", result)
+	if result.ReturnTo != state.ReturnToPlan {
+		t.Errorf("expected ReturnTo=plan, got %+v", result)
+	}
+	if result.Escalate {
+		t.Error("should not escalate — orchestrator rewinds to plan")
+	}
+}
+
+func TestRun_ReturnToEscalate_SignalsEscalate(t *testing.T) {
+	// ReturnTo=escalate must both expose the LLM's diagnosis AND set
+	// Escalate=true so orchestrators that only check Escalate still do
+	// the right thing.
+	judge := &fakeJudge{verdicts: []*state.Verdict{
+		{
+			Score: 20,
+			Pass:  false,
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP0, Description: "intent is ambiguous", Blocking: true},
+			},
+			ReturnTo: state.ReturnToEscalate,
+		},
+	}}
+
+	task := qualityTask(t)
+	phase := New(judge, defaultCfg(), "fake-diff")
+
+	result, err := phase.Run(context.Background(), task, "the plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.ReturnTo != state.ReturnToEscalate {
+		t.Errorf("expected ReturnTo=escalate, got %+v", result)
+	}
+	if !result.Escalate {
+		t.Error("expected Escalate=true when ReturnTo=escalate")
 	}
 }
 
 func TestRun_Escalation_NonBlockingLoopOut(t *testing.T) {
-	// Every loop fails with non-blocking gaps → loops exhausted → escalate.
+	// Every loop fails with non-blocking gaps and no ReturnTo → loops
+	// exhausted → escalate. No cross-phase rewind is requested.
 	failing := &state.Verdict{
 		Score: 60,
 		Pass:  false,
@@ -202,8 +243,8 @@ func TestRun_Escalation_NonBlockingLoopOut(t *testing.T) {
 	if result.Pass {
 		t.Error("should not pass")
 	}
-	if result.RequeueToCode {
-		t.Error("should not requeue to code (no blocking gaps)")
+	if result.ReturnTo != state.ReturnToNone {
+		t.Errorf("should not request cross-phase rewind without a diagnosis, got %+v", result.ReturnTo)
 	}
 }
 
@@ -264,63 +305,6 @@ func TestRun_AttemptsStored(t *testing.T) {
 		if a.Loop != i+1 {
 			t.Errorf("attempt[%d].loop = %d, want %d", i, a.Loop, i+1)
 		}
-	}
-}
-
-func TestNeedsCodeRework(t *testing.T) {
-	tests := []struct {
-		name string
-		v    *state.Verdict
-		want bool
-	}{
-		{
-			name: "no gaps",
-			v:    &state.Verdict{},
-			want: false,
-		},
-		{
-			name: "non-blocking P2",
-			v: &state.Verdict{Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Blocking: false},
-			}},
-			want: false,
-		},
-		{
-			name: "blocking P0",
-			v: &state.Verdict{Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Blocking: true},
-			}},
-			want: true,
-		},
-		{
-			name: "blocking P1",
-			v: &state.Verdict{Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Blocking: true},
-			}},
-			want: true,
-		},
-		{
-			name: "blocking P3 (unusual)",
-			v: &state.Verdict{Gaps: []state.Gap{
-				{Severity: state.SeverityP3, Blocking: true},
-			}},
-			want: false,
-		},
-		{
-			name: "mix: non-blocking P0, blocking P2",
-			v: &state.Verdict{Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Blocking: false},
-				{Severity: state.SeverityP2, Blocking: true},
-			}},
-			want: false,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := needsCodeRework(tc.v); got != tc.want {
-				t.Errorf("needsCodeRework = %v, want %v", got, tc.want)
-			}
-		})
 	}
 }
 

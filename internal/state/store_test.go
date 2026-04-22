@@ -48,6 +48,48 @@ func TestCreateAndGetTask(t *testing.T) {
 	}
 }
 
+func TestCreateAndGetTask_HardConstraintsRoundTrip(t *testing.T) {
+	// #87: hard_constraints column is persisted and hydrated so quality-
+	// driven plan rewinds survive a process restart.
+	store := newTestStore(t)
+	task := NewTask("task-hc", "build it right this time")
+	task.HardConstraints = []string{
+		"[quality judge, P0] /admin/users is not protected",
+		"[quality judge, P1] rate-limit bypass on /admin/logs",
+	}
+
+	if err := store.CreateTask(task); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+
+	got, err := store.GetTask("task-hc")
+	if err != nil {
+		t.Fatalf("getting task: %v", err)
+	}
+	if len(got.HardConstraints) != 2 {
+		t.Fatalf("expected 2 hard constraints, got %d: %v", len(got.HardConstraints), got.HardConstraints)
+	}
+	for i, want := range task.HardConstraints {
+		if got.HardConstraints[i] != want {
+			t.Errorf("hard_constraints[%d] = %q, want %q", i, got.HardConstraints[i], want)
+		}
+	}
+
+	// Mutate and update — confirm the update path also round-trips.
+	got.HardConstraints = append(got.HardConstraints, "[quality judge, P0] third constraint")
+	got.UpdatedAt = time.Now()
+	if err := store.UpdateTask(got); err != nil {
+		t.Fatalf("updating task: %v", err)
+	}
+	refetched, err := store.GetTask("task-hc")
+	if err != nil {
+		t.Fatalf("refetching: %v", err)
+	}
+	if len(refetched.HardConstraints) != 3 {
+		t.Errorf("expected 3 constraints after update, got %d", len(refetched.HardConstraints))
+	}
+}
+
 func TestGetTaskNotFound(t *testing.T) {
 	store := newTestStore(t)
 

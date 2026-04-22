@@ -781,6 +781,155 @@ func TestJudge_SystemPromptMentionsCheckPath(t *testing.T) {
 	}
 }
 
+func TestJudge_ReturnTo_ClearedOnPass(t *testing.T) {
+	// Even if the LLM erroneously emits a ReturnTo on a passing verdict
+	// (e.g. leftover from a previous response), the judge must clear it
+	// — a passing verdict never rewinds.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps:     []state.Gap{},
+			ReturnTo: state.ReturnToCode,
+		},
+	}
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Pass {
+		t.Fatal("expected pass")
+	}
+	if verdict.ReturnTo != state.ReturnToNone {
+		t.Errorf("ReturnTo must be cleared on passing verdict, got %q", verdict.ReturnTo)
+	}
+}
+
+func TestJudge_ReturnTo_Propagated(t *testing.T) {
+	cases := []struct {
+		name string
+		in   state.ReturnTo
+	}{
+		{"code", state.ReturnToCode},
+		{"plan", state.ReturnToPlan},
+		{"escalate", state.ReturnToEscalate},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &claude.FakeClient{
+				Response: state.Verdict{
+					Gaps: []state.Gap{
+						{Severity: state.SeverityP0, Description: "failing"},
+					},
+					ReturnTo: tc.in,
+				},
+			}
+			judge := New(fake, nil, testConfig())
+			verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if verdict.Pass {
+				t.Error("expected fail with P0 gap")
+			}
+			if verdict.ReturnTo != tc.in {
+				t.Errorf("ReturnTo = %q, want %q", verdict.ReturnTo, tc.in)
+			}
+		})
+	}
+}
+
+func TestJudge_ReturnTo_DefaultsToCodeOnBlockingFailure(t *testing.T) {
+	// The LLM may forget to emit ReturnTo. For a blocking failure we
+	// default to ReturnToCode — the pre-#87 heuristic was to route every
+	// P0/P1 blocking failure back to code, so that's the safest default.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP1, Description: "bug"},
+			},
+			// ReturnTo deliberately empty.
+		},
+	}
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Pass {
+		t.Error("expected fail with blocking P1 gap")
+	}
+	if verdict.ReturnTo != state.ReturnToCode {
+		t.Errorf("ReturnTo default on blocking failure = %q, want code", verdict.ReturnTo)
+	}
+}
+
+func TestJudge_ReturnTo_EmptyForNonBlockingFailure(t *testing.T) {
+	// Non-blocking-but-failing verdict (score dragged below threshold
+	// by P2s) should not request a cross-phase rewind — the quality
+	// phase can retry in place.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "a"},
+				{Severity: state.SeverityP2, Description: "b"},
+				{Severity: state.SeverityP2, Description: "c"},
+				{Severity: state.SeverityP2, Description: "d"},
+			},
+		},
+	}
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Pass {
+		t.Error("expected fail with accumulated P2s")
+	}
+	if verdict.ReturnTo != state.ReturnToNone {
+		t.Errorf("ReturnTo on non-blocking failure should be empty, got %q", verdict.ReturnTo)
+	}
+}
+
+func TestJudge_ReturnTo_UnknownValueCollapsesToCode(t *testing.T) {
+	// Defensive normalisation: if the LLM emits a value outside the
+	// enum (e.g. a typo), treat it as the safe default for a blocking
+	// failure rather than passing it through and surprising the
+	// orchestrator with an unhandled route.
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP0, Description: "bug"},
+			},
+			ReturnTo: state.ReturnTo("rewrite"),
+		},
+	}
+	judge := New(fake, nil, testConfig())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.ReturnTo != state.ReturnToCode {
+		t.Errorf("unknown ReturnTo should collapse to code, got %q", verdict.ReturnTo)
+	}
+}
+
+func TestJudge_SystemPromptExplainsReturnTo(t *testing.T) {
+	// The prompt must instruct the LLM to diagnose the root cause and
+	// emit ReturnTo — otherwise the whole cross-phase rewind machinery
+	// cannot kick in.
+	for _, needle := range []string{
+		"return_to",
+		"\"code\"",
+		"\"plan\"",
+		"\"escalate\"",
+		"root cause",
+	} {
+		if !strings.Contains(systemPrompt, needle) {
+			t.Errorf("system prompt missing ReturnTo instruction %q", needle)
+		}
+	}
+}
+
 func TestJudge_UsesCompleteWithTools(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{Gaps: []state.Gap{}},

@@ -58,6 +58,11 @@ const inputSchema = `{
         "required": ["text", "priority"],
         "additionalProperties": false
       }
+    },
+    "return_to": {
+      "type": "string",
+      "enum": ["", "code", "plan", "escalate"],
+      "description": "Quality-judge-only. On a failing verdict, the phase the outer loop should rewind to. Omit or leave empty on passing verdicts and on judges that do not drive cross-phase routing."
     }
   },
   "required": ["summary", "gaps", "questions"],

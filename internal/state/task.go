@@ -50,6 +50,12 @@ const (
 )
 
 // validTransitions defines which state transitions are allowed.
+//
+// StateQualityReview can rewind to StateCoding or StatePlanning when the
+// quality judge's verdict says the root cause is a code- or plan-level
+// failure — not something re-judging the same workdir can resolve. See
+// Rewind for the per-cycle budget semantics that accompany those
+// transitions.
 var validTransitions = map[TaskState][]TaskState{
 	// Pending can go into the normal pipeline or straight to blocked if
 	// a dependency already failed at submission time.
@@ -59,7 +65,7 @@ var validTransitions = map[TaskState][]TaskState{
 	StateCoding:        {StateCodeReview},
 	StateCodeReview:    {StateCoding, StateQuality, StateEscalated},
 	StateQuality:       {StateQualityReview},
-	StateQualityReview: {StateQuality, StateDone, StateEscalated},
+	StateQualityReview: {StateQuality, StateCoding, StatePlanning, StateDone, StateEscalated},
 	StateDone:          {},
 	StateEscalated:     {},
 	StateBlocked:       {},
@@ -108,6 +114,29 @@ type Question struct {
 	Priority string `json:"priority"`
 }
 
+// ReturnTo names the phase a failing verdict should rewind to. The quality
+// judge sets it when the root cause of a failure cannot be resolved by
+// re-running the current phase — the orchestrator reads it to route the
+// task back through the outer loop.
+type ReturnTo string
+
+const (
+	// ReturnToNone is the zero value: no rewind requested. Used when the
+	// verdict passes or the judge wants another in-phase retry.
+	ReturnToNone ReturnTo = ""
+	// ReturnToCode rewinds to the code phase (tests failing, acceptance
+	// criteria unmet, etc).
+	ReturnToCode ReturnTo = "code"
+	// ReturnToPlan rewinds to the plan phase (plan was too shallow to
+	// catch this class of problem). The quality failure is injected as
+	// a hard constraint into replanning.
+	ReturnToPlan ReturnTo = "plan"
+	// ReturnToEscalate stops the loop and asks for human input (intent
+	// is fundamentally ambiguous or requires judgement this process
+	// cannot make).
+	ReturnToEscalate ReturnTo = "escalate"
+)
+
 // Verdict is the typed output of a judge evaluation.
 type Verdict struct {
 	Score     float64    `json:"score"`
@@ -118,6 +147,12 @@ type Verdict struct {
 	// alongside the structured verdict (decisions, reviewed items, etc).
 	// It is rendered in cli mode under the phase header. May be empty.
 	Summary string `json:"summary,omitempty"`
+	// ReturnTo is the quality judge's diagnosis of where a failing
+	// verdict should be re-run — code, plan, or escalate. Empty on
+	// passing verdicts and on non-quality judges. The orchestrator uses
+	// it to drive outer-loop rewinds rather than just retrying the same
+	// phase.
+	ReturnTo ReturnTo `json:"return_to,omitempty"`
 }
 
 // Attempt records one execution of a phase.
@@ -131,13 +166,23 @@ type Attempt struct {
 
 // Task is the core entity tracked through the VAIrdict pipeline.
 type Task struct {
-	ID          string        `json:"id"`
-	Intent      string        `json:"intent"`
-	State       TaskState     `json:"state"`
-	Phase       Phase         `json:"phase"`
+	ID     string    `json:"id"`
+	Intent string    `json:"intent"`
+	State  TaskState `json:"state"`
+	Phase  Phase     `json:"phase"`
+	// LoopCount tracks loops completed for each phase within the current
+	// outer cycle. Rewind resets the counter for the target phase (and
+	// every later phase) so a fresh cycle gets its own budget — a code
+	// retry triggered by a plan rewind must not count against the code
+	// phase's original budget.
 	LoopCount   map[Phase]int `json:"loop_count"`
 	Assumptions []Assumption  `json:"assumptions"`
 	Attempts    []Attempt     `json:"attempts"`
+	// HardConstraints are requirements injected into the next plan run
+	// by the outer loop — typically the quality judge's failure finding
+	// when it rewinds to Plan. The planner must satisfy them in the new
+	// plan, not just acknowledge them.
+	HardConstraints []string `json:"hard_constraints,omitempty"`
 	// DependsOn lists task IDs this task waits on. The scheduler in
 	// internal/deps uses it to build the DAG; vairdict status reads it
 	// to render the graph. Empty for tasks without dependencies.
@@ -217,6 +262,51 @@ func (t *Task) Requeue(maxLoops int) error {
 	}
 
 	t.LoopCount[phase]++
+	return nil
+}
+
+// Rewind moves the task from its current review state back to the active
+// state of an earlier phase and resets the per-cycle loop budget for the
+// target phase and every phase after it. Only PhaseCode and PhasePlan are
+// valid rewind targets — escalation is its own terminal state, not a
+// rewind. The caller is responsible for setting any HardConstraints that
+// should flow into replanning before calling Rewind.
+//
+// Budget semantics: LoopCount tracks loops within the current outer cycle.
+// A rewind starts a new cycle for the phases downstream of the target, so
+// their counters are zeroed. The audit trail (task.Attempts) keeps every
+// historical attempt; the counter reset only affects future budget checks.
+func (t *Task) Rewind(to Phase) error {
+	var target TaskState
+	switch to {
+	case PhasePlan:
+		target = StatePlanning
+	case PhaseCode:
+		target = StateCoding
+	default:
+		return fmt.Errorf("rewinding to %s: %w", to, ErrInvalidTransition)
+	}
+	if err := t.Transition(target); err != nil {
+		return fmt.Errorf("rewinding: %w", err)
+	}
+
+	// Reset the per-cycle budget for the target phase and every phase
+	// that follows it. A plan rewind gives the code phase a fresh
+	// budget (and quality, after code); a code rewind only resets code
+	// and quality. Earlier-phase counters stay intact.
+	resetFrom := false
+	if t.LoopCount == nil {
+		t.LoopCount = map[Phase]int{}
+	}
+	for _, p := range AllPhases() {
+		if p == to {
+			resetFrom = true
+		}
+		if resetFrom {
+			delete(t.LoopCount, p)
+		}
+	}
+
 	return nil
 }
 

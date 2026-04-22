@@ -275,6 +275,162 @@ func TestEscalationFromAllReviewStates(t *testing.T) {
 	}
 }
 
+func TestRewindToCode_ResetsCodeAndQualityBudget(t *testing.T) {
+	// Issue #87: "a code retry triggered by a plan rewind does not count
+	// against the code phase's original budget". More generally, a rewind
+	// resets the per-cycle counter for the target phase and every phase
+	// downstream. The plan counter stays put — the rewind doesn't
+	// touch the phase we're bypassing.
+	task := NewTask("t-rewind-code", "intent")
+	task.LoopCount = map[Phase]int{
+		PhasePlan:    2,
+		PhaseCode:    3,
+		PhaseQuality: 1,
+	}
+	// Advance through the state machine to QualityReview so the
+	// downstream transition is valid.
+	for _, s := range []TaskState{
+		StatePlanning, StatePlanReview, StateCoding, StateCodeReview,
+		StateQuality, StateQualityReview,
+	} {
+		if err := task.Transition(s); err != nil {
+			t.Fatalf("setup transition to %s: %v", s, err)
+		}
+	}
+
+	if err := task.Rewind(PhaseCode); err != nil {
+		t.Fatalf("rewind to code should succeed from quality_review: %v", err)
+	}
+
+	if task.State != StateCoding {
+		t.Errorf("state = %s, want coding", task.State)
+	}
+	if task.LoopCount[PhasePlan] != 2 {
+		t.Errorf("plan budget should be preserved on code rewind, got %d", task.LoopCount[PhasePlan])
+	}
+	if _, ok := task.LoopCount[PhaseCode]; ok {
+		t.Errorf("code budget should be reset on code rewind, got %d", task.LoopCount[PhaseCode])
+	}
+	if _, ok := task.LoopCount[PhaseQuality]; ok {
+		t.Errorf("quality budget should be reset on code rewind, got %d", task.LoopCount[PhaseQuality])
+	}
+}
+
+func TestRewindToPlan_ResetsAllPhaseBudgets(t *testing.T) {
+	// A plan rewind resets every downstream phase's budget — the code
+	// phase is downstream of plan, so it must not inherit the old
+	// counter from before the rewind.
+	task := NewTask("t-rewind-plan", "intent")
+	task.LoopCount = map[Phase]int{
+		PhasePlan:    1,
+		PhaseCode:    2,
+		PhaseQuality: 3,
+	}
+	for _, s := range []TaskState{
+		StatePlanning, StatePlanReview, StateCoding, StateCodeReview,
+		StateQuality, StateQualityReview,
+	} {
+		if err := task.Transition(s); err != nil {
+			t.Fatalf("setup transition to %s: %v", s, err)
+		}
+	}
+
+	if err := task.Rewind(PhasePlan); err != nil {
+		t.Fatalf("rewind to plan should succeed from quality_review: %v", err)
+	}
+	if task.State != StatePlanning {
+		t.Errorf("state = %s, want planning", task.State)
+	}
+	for _, p := range []Phase{PhasePlan, PhaseCode, PhaseQuality} {
+		if _, ok := task.LoopCount[p]; ok {
+			t.Errorf("%s budget should be reset on plan rewind, got %d", p, task.LoopCount[p])
+		}
+	}
+}
+
+func TestRewind_RejectsInvalidTarget(t *testing.T) {
+	task := NewTask("t", "intent")
+	for _, s := range []TaskState{
+		StatePlanning, StatePlanReview, StateCoding, StateCodeReview,
+		StateQuality, StateQualityReview,
+	} {
+		_ = task.Transition(s)
+	}
+	if err := task.Rewind(PhaseQuality); err == nil {
+		t.Error("rewinding to quality should fail — it is not a valid rewind target")
+	}
+	if err := task.Rewind(Phase("bogus")); err == nil {
+		t.Error("rewinding to an unknown phase should fail")
+	}
+}
+
+func TestRewind_FromNonReviewState(t *testing.T) {
+	// Rewinds are only valid from review states (specifically
+	// quality_review, per validTransitions). Trying to rewind from
+	// active states like StateCoding must error.
+	task := NewTask("t", "intent")
+	_ = task.Transition(StatePlanning)
+	_ = task.Transition(StatePlanReview)
+	_ = task.Transition(StateCoding)
+
+	if err := task.Rewind(PhasePlan); err == nil {
+		t.Error("rewind from coding should fail — no valid transition coding → planning")
+	}
+}
+
+func TestRewindThenRequeue_UsesFreshBudget(t *testing.T) {
+	// End-to-end budget behavior: after rewind, subsequent requeues in
+	// the target phase count from zero — the quality failure that
+	// triggered the rewind does not count against the code phase's
+	// new-cycle budget.
+	task := NewTask("t", "intent")
+	for _, s := range []TaskState{
+		StatePlanning, StatePlanReview, StateCoding, StateCodeReview,
+	} {
+		_ = task.Transition(s)
+	}
+	// Exhaust code's first-cycle budget nearly to the limit.
+	task.LoopCount[PhaseCode] = 2
+	// Advance through quality review.
+	_ = task.Transition(StateQuality)
+	_ = task.Transition(StateQualityReview)
+
+	if err := task.Rewind(PhaseCode); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	// After rewind the code phase should be able to loop the full
+	// budget again without triggering ErrMaxLoopsReached.
+	_ = task.Transition(StateCodeReview)
+	if err := task.Requeue(3); err != nil {
+		t.Fatalf("first requeue in new cycle should not hit max loops (maxLoops=3, fresh budget), got %v", err)
+	}
+	if task.LoopCount[PhaseCode] != 1 {
+		t.Errorf("post-rewind code loop count = %d, want 1", task.LoopCount[PhaseCode])
+	}
+}
+
+func TestQualityReviewTransitions_IncludeRewinds(t *testing.T) {
+	// The state machine must allow cross-phase rewinds from
+	// quality_review. Missing transitions would manifest as
+	// ErrInvalidTransition deep inside the orchestrator.
+	for _, target := range []TaskState{StateCoding, StatePlanning} {
+		t.Run(string(target), func(t *testing.T) {
+			task := NewTask("t-"+string(target), "intent")
+			for _, s := range []TaskState{
+				StatePlanning, StatePlanReview, StateCoding, StateCodeReview,
+				StateQuality, StateQualityReview,
+			} {
+				if err := task.Transition(s); err != nil {
+					t.Fatalf("setup %s: %v", s, err)
+				}
+			}
+			if err := task.Transition(target); err != nil {
+				t.Errorf("quality_review → %s should be allowed: %v", target, err)
+			}
+		})
+	}
+}
+
 func TestAllPhases(t *testing.T) {
 	phases := AllPhases()
 	if len(phases) != 3 {
