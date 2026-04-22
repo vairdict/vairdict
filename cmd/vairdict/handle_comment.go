@@ -393,8 +393,8 @@ func handleReviewMention(ctx context.Context, deps handleCommentDeps, prNumber i
 	}
 
 	startBody := fmt.Sprintf(
-		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Re-running VAIrdict review on @%s's request…\n\n%s\n",
-		github.LogoURL, deps.author, reviewStartMarker)
+		"🔁 Re-running VAIrdict review on @%s's request…\n\n%s\n",
+		deps.author, reviewStartMarker)
 	if err := deps.gh.AddComment(ctx, prNumber, startBody); err != nil {
 		return fmt.Errorf("posting review start comment: %w", err)
 	}
