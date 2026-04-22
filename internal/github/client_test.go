@@ -481,6 +481,69 @@ func TestFormatVerdictComment_NoGaps(t *testing.T) {
 	if !contains(comment, "PASS") {
 		t.Error("should contain PASS")
 	}
+	// A passing verdict with no gaps must still say something concrete
+	// about the review outcome — otherwise reviewers of a large diff see
+	// nothing and assume the judge was a no-op.
+	if !contains(comment, "No issues found") {
+		t.Error("pass with no gaps should explicitly say no issues found")
+	}
+}
+
+func TestFormatVerdictComment_FailWithNoGaps_NoSuchMessage(t *testing.T) {
+	// "No issues found" is a PASS-only affirmation. A failing verdict
+	// (even one without structured gaps) must never render it.
+	verdict := &state.Verdict{
+		Score: 0,
+		Pass:  false,
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+
+	if contains(comment, "No issues found") {
+		t.Error("fail verdict must not render the no-issues affirmation")
+	}
+}
+
+func TestFormatVerdictComment_RendersSummary(t *testing.T) {
+	// A passing verdict with no gaps previously rendered only the score
+	// line, dropping the judge's Reviewed/Notes narrative — see PR #107
+	// where a 1200-line diff got an empty comment. The summary must
+	// survive into the posted PR comment.
+	summary := "## Reviewed\n- diff against plan\n\n## Notes\n- watch for follow-up"
+	verdict := &state.Verdict{
+		Score:   95,
+		Pass:    true,
+		Summary: summary,
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1)
+
+	if !contains(comment, "## Reviewed") {
+		t.Error("comment missing Reviewed section from Summary")
+	}
+	if !contains(comment, "diff against plan") {
+		t.Error("comment missing Reviewed bullet from Summary")
+	}
+	if !contains(comment, "## Notes") {
+		t.Error("comment missing Notes section from Summary")
+	}
+	if !contains(comment, "watch for follow-up") {
+		t.Error("comment missing Notes bullet from Summary")
+	}
+}
+
+func TestFormatVerdictComment_EmptySummaryNotRendered(t *testing.T) {
+	verdict := &state.Verdict{
+		Score:   100,
+		Pass:    true,
+		Summary: "   \n\t  ",
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhasePlan, 1)
+
+	if contains(comment, "## Reviewed") || contains(comment, "## Notes") {
+		t.Error("whitespace-only summary should not emit any section")
+	}
 }
 
 func TestParsePRNumber(t *testing.T) {

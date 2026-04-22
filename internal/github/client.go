@@ -671,7 +671,18 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) s
 	// Summary line.
 	fmt.Fprintf(&b, "**Score:** %.0f%% | **Phase:** %s | **Loop:** %d\n\n", verdict.Score, phase, loop)
 
-	// Criteria table — build from gaps.
+	// Judge narrative (Reviewed / Notes sections). Without this, a passing
+	// verdict with no gaps renders as just the score line, hiding everything
+	// the judge actually checked.
+	if s := strings.TrimSpace(verdict.Summary); s != "" {
+		b.WriteString(s)
+		b.WriteString("\n\n")
+	}
+
+	// Criteria table — build from gaps. When the verdict passes with zero
+	// gaps we still emit an explicit "no issues found" line so reviewers
+	// can tell the judge ran and had nothing to flag, instead of staring
+	// at an empty comment body and assuming vairdict skipped the review.
 	if len(verdict.Gaps) > 0 {
 		b.WriteString("### Criteria\n\n")
 		b.WriteString("| Severity | Status | Description |\n")
@@ -684,6 +695,8 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) s
 			fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity, status, g.Description)
 		}
 		b.WriteString("\n")
+	} else if verdict.Pass {
+		b.WriteString("✓ No issues found.\n\n")
 	}
 
 	// Gaps section for failures.
