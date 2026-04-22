@@ -29,6 +29,7 @@ import (
 type completer interface {
 	CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
 	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
+	CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, handlers map[string]claude.ToolHandler, target any) error
 }
 
 // backendKind is the resolved backend identifier returned alongside the

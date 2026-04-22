@@ -111,10 +111,30 @@ type messagesResponse struct {
 
 type contentBlock struct {
 	Type  string          `json:"type"`
+	ID    string          `json:"id,omitempty"`
 	Text  string          `json:"text,omitempty"`
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 }
+
+// toolResultBlock is a content block sent in a user message to return the
+// result of a tool call back to the model during a multi-turn conversation.
+type toolResultBlock struct {
+	Type      string `json:"type"`       // always "tool_result"
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+}
+
+// anyMessage supports flexible content (string or structured blocks) for
+// multi-turn tool-use conversations.
+type anyMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+// ToolHandler resolves an auxiliary tool call during a multi-turn conversation.
+// It receives the raw JSON input from the model and returns a result string.
+type ToolHandler func(ctx context.Context, input json.RawMessage) (string, error)
 
 type usage struct {
 	InputTokens  int `json:"input_tokens"`
@@ -240,6 +260,174 @@ func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, to
 	return c.sendAndParse(ctx, reqBody, func(resp *messagesResponse) error {
 		return unmarshalToolInput(resp, tool.Name, target)
 	})
+}
+
+// maxToolRounds caps the number of auxiliary tool calls in CompleteWithTools.
+const maxToolRounds = 10
+
+// multiTurnRequest is like messagesRequest but uses anyMessage to support
+// structured content (tool results) in the conversation.
+type multiTurnRequest struct {
+	Model       string       `json:"model"`
+	MaxTokens   int          `json:"max_tokens"`
+	System      string       `json:"system,omitempty"`
+	Messages    []anyMessage `json:"messages"`
+	Temperature *float64     `json:"temperature,omitempty"`
+	Tools       []Tool       `json:"tools,omitempty"`
+	ToolChoice  *ToolChoice  `json:"tool_choice,omitempty"`
+}
+
+// CompleteWithTools runs a multi-turn conversation where the model can call
+// auxiliary tools (resolved via handlers) before calling finalTool, whose
+// input is unmarshalled into target.
+func (c *Client) CompleteWithTools(
+	ctx context.Context,
+	system, prompt string,
+	tools []Tool,
+	finalTool string,
+	handlers map[string]ToolHandler,
+	target any,
+) error {
+	messages := []anyMessage{{Role: "user", Content: prompt}}
+
+	for round := range maxToolRounds {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("completing multi-turn request: %w", err)
+		}
+
+		reqBody := multiTurnRequest{
+			Model:       c.model,
+			MaxTokens:   defaultMaxTokens,
+			System:      system,
+			Messages:    messages,
+			Temperature: c.temperature,
+			Tools:       tools,
+			ToolChoice:  &ToolChoice{Type: "any"},
+		}
+
+		body, err := c.doRequestAny(ctx, reqBody)
+		if err != nil {
+			return fmt.Errorf("multi-turn round %d: %w", round, err)
+		}
+
+		var resp messagesResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return &ParseError{Body: string(body), Err: fmt.Errorf("unmarshalling response: %w", err)}
+		}
+
+		// Check if the model called the final tool.
+		for _, block := range resp.Content {
+			if block.Type == "tool_use" && block.Name == finalTool {
+				if len(block.Input) == 0 {
+					return &ParseError{Err: fmt.Errorf("tool_use block %q had empty input", finalTool)}
+				}
+				if err := json.Unmarshal(block.Input, target); err != nil {
+					return &ParseError{Body: string(block.Input), Err: fmt.Errorf("unmarshalling tool input: %w", err)}
+				}
+				return nil
+			}
+		}
+
+		// Resolve auxiliary tool calls.
+		var toolResults []toolResultBlock
+		for _, block := range resp.Content {
+			if block.Type != "tool_use" {
+				continue
+			}
+			handler, ok := handlers[block.Name]
+			if !ok {
+				return fmt.Errorf("model called unknown tool %q", block.Name)
+			}
+			result, err := handler(ctx, block.Input)
+			if err != nil {
+				return fmt.Errorf("handling tool %q: %w", block.Name, err)
+			}
+			slog.Debug("auxiliary tool resolved", "tool", block.Name, "result", result)
+			toolResults = append(toolResults, toolResultBlock{
+				Type:      "tool_result",
+				ToolUseID: block.ID,
+				Content:   result,
+			})
+		}
+
+		if len(toolResults) == 0 {
+			return &ParseError{Err: fmt.Errorf("model did not call any tool in round %d", round)}
+		}
+
+		// Append assistant response + tool results to conversation.
+		messages = append(messages, anyMessage{Role: "assistant", Content: resp.Content})
+		messages = append(messages, anyMessage{Role: "user", Content: toolResults})
+	}
+
+	return fmt.Errorf("multi-turn tool loop exceeded %d rounds", maxToolRounds)
+}
+
+// doRequestAny is like doRequest but accepts any request type for marshalling.
+// It includes retry logic for transient errors.
+func (c *Client) doRequestAny(ctx context.Context, reqBody any) ([]byte, error) {
+	var lastErr error
+	for attempt := range maxRetries {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("completing request: %w", err)
+		}
+
+		payload, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("marshalling request: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", c.apiKey)
+		req.Header.Set("anthropic-version", defaultAnthropicVersion)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("sending request: %w", err)
+			continue
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("reading response: %w", readErr)
+			continue
+		}
+
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			return body, nil
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return nil, &AuthError{Message: string(body)}
+		case resp.StatusCode == http.StatusTooManyRequests:
+			lastErr = &RateLimitError{RetryAfter: baseBackoff}
+		case resp.StatusCode >= 500:
+			lastErr = &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		default:
+			return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		}
+
+		if !isRetryable(lastErr) {
+			return nil, lastErr
+		}
+
+		backoff := time.Duration(math.Pow(2, float64(attempt))) * baseBackoff
+		slog.Warn("retrying anthropic request",
+			"attempt", attempt+1,
+			"backoff", backoff,
+			"error", lastErr,
+		)
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("completing request: %w", ctx.Err())
+		case <-time.After(backoff):
+		}
+	}
+	return nil, fmt.Errorf("completing request after %d retries: %w", maxRetries, lastErr)
 }
 
 // sendAndParse drives the retry loop for a single request and hands the

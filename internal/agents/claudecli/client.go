@@ -149,6 +149,18 @@ func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, to
 	return c.CompleteWithSystem(ctx, augmented, prompt, target)
 }
 
+// CompleteWithTools falls back to single-turn CompleteWithTool using only the
+// final tool. The CLI backend cannot do multi-turn tool use, so auxiliary tools
+// like check_path are silently unavailable.
+func (c *Client) CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, _ map[string]claude.ToolHandler, target any) error {
+	for _, t := range tools {
+		if t.Name == finalTool {
+			return c.CompleteWithTool(ctx, system, prompt, t, target)
+		}
+	}
+	return fmt.Errorf("final tool %q not found in tools list", finalTool)
+}
+
 // envelope is the subset of Claude Code's `--output-format json` result that
 // we care about. We explicitly decode only the fields we need so the rest
 // (session_id, cost, usage, …) are tolerated as extras.
