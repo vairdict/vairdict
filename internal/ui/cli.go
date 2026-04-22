@@ -65,7 +65,13 @@ func (r *cliRenderer) RunStart(taskID, intent, logPath string) {
 	r.printf("%s%s  vairdict run %s· task %s%s\n",
 		r.pal.bold, r.glyphs.logo, r.pal.dim, taskID, r.pal.reset)
 	if intent != "" {
-		r.printf("   %s\n", oneLine(intent))
+		title, body := splitIntent(intent)
+		r.printf("   %s%s%s\n", r.pal.bold, title, r.pal.reset)
+		if body != "" {
+			for _, line := range truncateBody(body, 4) {
+				r.printf("   %s%s%s\n", r.pal.dim, line, r.pal.reset)
+			}
+		}
 	}
 	if logPath != "" {
 		r.printf("   %slogs: %s%s\n", r.pal.dim, logPath, r.pal.reset)
@@ -207,4 +213,47 @@ func (r *cliRenderer) renderGaps(gaps []state.Gap) {
 // on a single header line.
 func oneLine(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", " "), "\n", " ")
+}
+
+// splitIntent splits an intent string into a title (first non-empty line)
+// and a body (everything after, trimmed). For issue-sourced intents the
+// format is "title\n\nbody".
+func splitIntent(s string) (title, body string) {
+	s = strings.TrimSpace(s)
+	if t, b, ok := strings.Cut(s, "\n"); ok {
+		title = strings.TrimSpace(t)
+		body = strings.TrimSpace(b)
+	} else {
+		title = s
+	}
+	return
+}
+
+// truncateBody returns up to maxLines non-empty lines from a body string,
+// trimming markdown noise (## headers become plain text). If more lines
+// exist, a "..." line is appended.
+func truncateBody(body string, maxLines int) []string {
+	var lines []string
+	for raw := range strings.SplitSeq(body, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		// Strip markdown header prefixes for cleaner display.
+		line = strings.TrimLeft(line, "#")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Truncate long lines.
+		if len(line) > 80 {
+			line = line[:77] + "..."
+		}
+		lines = append(lines, line)
+		if len(lines) >= maxLines {
+			lines = append(lines, "...")
+			break
+		}
+	}
+	return lines
 }

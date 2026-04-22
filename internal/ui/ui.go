@@ -138,6 +138,24 @@ type Renderer interface {
 	Close() error
 }
 
+// PaletteForCLI extracts the palette from a Renderer if it is the CLI
+// renderer. Returns a zero palette (no ANSI escapes) for other renderers.
+// This is used by the spinner, which writes directly to stdout.
+func PaletteForCLI(r Renderer) palette {
+	if c, ok := r.(*cliRenderer); ok {
+		return c.pal
+	}
+	return noColorPalette()
+}
+
+// IsASCII reports whether the Renderer is configured for ASCII-only output.
+func IsASCII(r Renderer) bool {
+	if c, ok := r.(*cliRenderer); ok {
+		return c.useASCI
+	}
+	return false
+}
+
 // New constructs a Renderer for the given options. If Mode is empty, it
 // auto-detects: cli for TTYs, ci otherwise. If Colors is empty, it
 // auto-detects: ColorsNone if not a TTY or NO_COLOR is set, otherwise

@@ -49,9 +49,10 @@ type Judge interface {
 // orchestrator (cmd/vairdict/run.go) before constructing the phase, so the
 // same content is judged on every requeue loop.
 type QualityPhase struct {
-	judge Judge
-	cfg   config.QualityPhaseConfig
-	diff  string
+	judge      Judge
+	cfg        config.QualityPhaseConfig
+	diff       string
+	OnProgress func(loop, max int, step string, score float64, pass bool)
 }
 
 // New creates a QualityPhase with the given judge, config, and diff. The
@@ -63,6 +64,12 @@ func New(judge Judge, cfg config.QualityPhaseConfig, diff string) *QualityPhase 
 		judge: judge,
 		cfg:   cfg,
 		diff:  diff,
+	}
+}
+
+func (p *QualityPhase) notify(loop, max int, step string, score float64, pass bool) {
+	if p.OnProgress != nil {
+		p.OnProgress(loop, max, step, score, pass)
 	}
 }
 
@@ -88,10 +95,13 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 			return nil, fmt.Errorf("transitioning to quality review: %w", err)
 		}
 
+		p.notify(loop+1, p.cfg.MaxLoops, "reviewing", 0, false)
 		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff)
 		if err != nil {
 			return nil, fmt.Errorf("running quality judge: %w", err)
 		}
+
+		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass)
 
 		lastScore = verdict.Score
 
