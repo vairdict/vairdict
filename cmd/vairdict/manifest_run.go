@@ -240,4 +240,3 @@ func maybeBlockOnDeps(store *state.Store, t *state.Task, depIDs []string) (bool,
 	}
 	return false, nil
 }
-
