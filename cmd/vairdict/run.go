@@ -868,7 +868,11 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, client completer, sto
 	judge := planjudge.New(client, cfg.Phases.Plan)
 	phase := planphase.New(client, judge, cfg.Phases.Plan)
 
+	spin := ui.NewSpinner(os.Stdout, "", ui.PaletteForCLI(r), ui.IsASCII(r))
+	phase.OnProgress = phaseProgressHandler(spin, r, state.PhasePlan)
+
 	result, err := phase.Run(ctx, task)
+	spin.Stop()
 	if err != nil {
 		if updateErr := store.UpdateTask(task); updateErr != nil {
 			slog.Error("failed to persist task state", "error", updateErr)
@@ -880,7 +884,6 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, client completer, sto
 		return nil, fmt.Errorf("persisting task state: %w", err)
 	}
 
-	emitPhaseAttempts(r, task, state.PhasePlan, cfg.Phases.Plan.MaxLoops)
 	emitPhaseDone(r, task, state.PhasePlan, result.Pass, result.Escalate, state.ReturnToNone, result.LastScore, result.Loops)
 	return result, nil
 }
@@ -892,7 +895,11 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 	judge := codejudge.New(&codejudge.ExecExecutor{}, *cfg)
 	phase := codephase.New(coder, judge, cfg.Phases.Code, workDir)
 
+	spin := ui.NewSpinner(os.Stdout, "", ui.PaletteForCLI(r), ui.IsASCII(r))
+	phase.OnProgress = phaseProgressHandler(spin, r, state.PhaseCode)
+
 	result, err := phase.Run(ctx, task, plan)
+	spin.Stop()
 	if err != nil {
 		if updateErr := store.UpdateTask(task); updateErr != nil {
 			slog.Error("failed to persist task state", "error", updateErr)
@@ -914,7 +921,6 @@ func runCodePhase(ctx context.Context, cfg *config.Config, store *state.Store, t
 		}
 	}
 
-	emitPhaseAttempts(r, task, state.PhaseCode, cfg.Phases.Code.MaxLoops)
 	emitPhaseDone(r, task, state.PhaseCode, result.Pass, result.Escalate, state.ReturnToNone, result.LastScore, result.Loops)
 	return result, nil
 }
@@ -974,9 +980,8 @@ func codeDiffSummary(workDir string) string {
 }
 
 // emitPhaseAttempts replays every attempt for the given phase to the
-// renderer as PhaseLoop events. Called once after the phase finishes so
-// the renderer sees the same trace whether the phase passed, failed, or
-// escalated.
+// renderer as PhaseLoop events. Used by tests and as a fallback when
+// real-time progress is not available (e.g. CI mode).
 func emitPhaseAttempts(r ui.Renderer, task *state.Task, phase state.Phase, maxLoops int) {
 	for _, attempt := range task.Attempts {
 		if attempt.Phase != phase {
@@ -989,6 +994,30 @@ func emitPhaseAttempts(r ui.Renderer, task *state.Task, phase state.Phase, maxLo
 			pass = attempt.Verdict.Pass
 		}
 		r.PhaseLoop(phase, attempt.Loop, maxLoops, score, pass)
+	}
+}
+
+// phaseProgressHandler returns a callback for phase.OnProgress that updates
+// the spinner label on step changes and emits PhaseLoop lines in real time
+// when a loop completes.
+func phaseProgressHandler(spin *ui.Spinner, r ui.Renderer, phase state.Phase) func(loop, max int, step string, score float64, pass bool) {
+	return func(loop, max int, step string, score float64, pass bool) {
+		if step == "done" {
+			// Loop finished — stop spinner, print result, restart spinner.
+			spin.Stop()
+			r.PhaseLoop(phase, loop, max, score, pass)
+			if !pass {
+				spin.Reset()
+				spin.SetLabel(fmt.Sprintf("loop %d/%d: retrying...", loop+1, max))
+				spin.Start()
+			}
+		} else {
+			// Step in progress — update spinner label.
+			spin.SetLabel(fmt.Sprintf("loop %d/%d: %s", loop, max, step))
+			if !spin.IsRunning() {
+				spin.Start()
+			}
+		}
 	}
 }
 
@@ -1083,7 +1112,11 @@ func runQualityPhase(
 	diff := codeDiffFull(workDir)
 	phase := qualityphase.New(judge, cfg.Phases.Quality, diff)
 
+	spin := ui.NewSpinner(os.Stdout, "", ui.PaletteForCLI(r), ui.IsASCII(r))
+	phase.OnProgress = phaseProgressHandler(spin, r, state.PhaseQuality)
+
 	result, err := phase.Run(ctx, task, plan)
+	spin.Stop()
 	if err != nil {
 		if updateErr := store.UpdateTask(task); updateErr != nil {
 			slog.Error("failed to persist task state", "error", updateErr)
@@ -1095,7 +1128,6 @@ func runQualityPhase(
 		return nil, fmt.Errorf("persisting task state: %w", err)
 	}
 
-	emitPhaseAttempts(r, task, state.PhaseQuality, cfg.Phases.Quality.MaxLoops)
 	emitPhaseDone(r, task, state.PhaseQuality, result.Pass, result.Escalate, result.ReturnTo, result.LastScore, result.Loops)
 
 	return result, nil

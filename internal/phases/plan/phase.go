@@ -43,9 +43,10 @@ type Judge interface {
 
 // PlanPhase orchestrates the plan phase: planner agent + judge loop.
 type PlanPhase struct {
-	planner Planner
-	judge   Judge
-	cfg     config.PlanPhaseConfig
+	planner    Planner
+	judge      Judge
+	cfg        config.PlanPhaseConfig
+	OnProgress func(loop, max int, step string, score float64, pass bool)
 }
 
 // New creates a PlanPhase with the given planner client, judge, and config.
@@ -54,6 +55,12 @@ func New(planner Planner, judge Judge, cfg config.PlanPhaseConfig) *PlanPhase {
 		planner: planner,
 		judge:   judge,
 		cfg:     cfg,
+	}
+}
+
+func (p *PlanPhase) notify(loop, max int, step string, score float64, pass bool) {
+	if p.OnProgress != nil {
+		p.OnProgress(loop, max, step, score, pass)
 	}
 }
 
@@ -105,6 +112,7 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 		prompt := buildPlannerPrompt(task.Intent, lastFeedback, task.Assumptions, task.HardConstraints)
 
 		// Call the planner agent.
+		p.notify(loop+1, p.cfg.MaxLoops, "generating plan", 0, false)
 		var resp plannerResponse
 		if err := p.planner.CompleteWithSystem(ctx, plannerSystemPrompt, prompt, &resp); err != nil {
 			return nil, fmt.Errorf("calling planner agent: %w", err)
@@ -119,10 +127,13 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 		}
 
 		// Run the judge.
+		p.notify(loop+1, p.cfg.MaxLoops, "judging plan", 0, false)
 		verdict, err := p.judge.Judge(ctx, task.Intent, fullPlan)
 		if err != nil {
 			return nil, fmt.Errorf("running plan judge: %w", err)
 		}
+
+		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass)
 
 		lastScore = verdict.Score
 
