@@ -308,6 +308,20 @@ func ParseLinkedIssue(body string) int {
 	return n
 }
 
+// AddReaction adds a reaction to an issue comment via the GitHub API.
+// content must be one of: +1, -1, laugh, confused, heart, hooray, rocket, eyes.
+func (c *Client) AddReaction(ctx context.Context, commentID int64, content string) error {
+	_, err := c.runner.Run(ctx, "gh", "api",
+		fmt.Sprintf("repos/{owner}/{repo}/issues/comments/%d/reactions", commentID),
+		"-X", "POST",
+		"-f", "content="+content,
+	)
+	if err != nil {
+		return fmt.Errorf("adding %s reaction to comment %d: %w", content, commentID, err)
+	}
+	return nil
+}
+
 // AddComment adds a comment to a PR.
 func (c *Client) AddComment(ctx context.Context, prNumber int, body string) error {
 	_, err := c.runner.Run(ctx, "gh", "pr", "comment", fmt.Sprintf("%d", prNumber), "--body", body)

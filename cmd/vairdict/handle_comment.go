@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+
 	"strconv"
 	"strings"
 	"time"
@@ -208,6 +209,7 @@ func authorized(association string) bool {
 // does too, which keeps the orchestration core free of exec/network.
 type handleCommentGH interface {
 	AddComment(ctx context.Context, prNumber int, body string) error
+	AddReaction(ctx context.Context, commentID int64, content string) error
 	FetchPR(ctx context.Context, number int) (*github.PRDetails, error)
 	SetCommitStatus(ctx context.Context, sha, state, statusContext, description string) error
 	RecentCommentExists(ctx context.Context, prNumber int, marker string, within time.Duration) (bool, error)
@@ -222,6 +224,7 @@ type handleCommentDeps struct {
 	body       string
 	author     string
 	assoc      string
+	commentID  int64
 	runReview  func(prNumber int) error
 	rateWindow time.Duration
 }
@@ -269,12 +272,15 @@ func runHandleComment(prNumber int) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	commentID, _ := strconv.ParseInt(os.Getenv("VAIRDICT_COMMENT_ID"), 10, 64)
+
 	return runHandleCommentWith(ctx, prNumber, handleCommentDeps{
 		gh:         ghClient,
 		stdout:     os.Stdout,
 		body:       os.Getenv("VAIRDICT_COMMENT_BODY"),
 		author:     os.Getenv("VAIRDICT_COMMENT_AUTHOR"),
 		assoc:      os.Getenv("VAIRDICT_COMMENT_ASSOCIATION"),
+		commentID:  commentID,
 		runReview:  runReview,
 		rateWindow: reviewRateLimitWindow,
 	})
@@ -294,6 +300,14 @@ func runHandleCommentWith(ctx context.Context, prNumber int, deps handleCommentD
 	if !res.Mentioned {
 		slog.Debug("no @vairdict mention, nothing to do", "pr", prNumber)
 		return nil
+	}
+
+	// Acknowledge the mention immediately with an :eyes: reaction so the
+	// commenter sees visual feedback before any processing starts.
+	if deps.commentID != 0 {
+		if err := deps.gh.AddReaction(ctx, deps.commentID, "eyes"); err != nil {
+			slog.Warn("failed to add eyes reaction", "pr", prNumber, "error", err)
+		}
 	}
 
 	if res.Command == cmdNone {

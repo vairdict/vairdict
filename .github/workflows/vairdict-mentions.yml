@@ -49,5 +49,6 @@ jobs:
           VAIRDICT_COMMENT_BODY: ${{ github.event.comment.body }}
           VAIRDICT_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           VAIRDICT_COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+          VAIRDICT_COMMENT_ID: ${{ github.event.comment.id }}
         run: |
           "${{ runner.temp }}/vairdict" handle-comment "${{ github.event.issue.number }}"

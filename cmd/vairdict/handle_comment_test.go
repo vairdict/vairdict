@@ -96,11 +96,18 @@ type fakeHandleGH struct {
 	recent            bool
 	recentErr         error
 	recentCalls       int
+	reactions         []string
+	reactionErr       error
 }
 
 func (f *fakeHandleGH) AddComment(_ context.Context, _ int, body string) error {
 	f.comments = append(f.comments, body)
 	return f.commentErr
+}
+
+func (f *fakeHandleGH) AddReaction(_ context.Context, _ int64, content string) error {
+	f.reactions = append(f.reactions, content)
+	return f.reactionErr
 }
 
 func (f *fakeHandleGH) FetchPR(_ context.Context, _ int) (*github.PRDetails, error) {
@@ -422,6 +429,38 @@ func TestRunHandleComment_Ignore_FetchPRError(t *testing.T) {
 	err := runHandleCommentWith(context.Background(), 99, deps)
 	if err == nil {
 		t.Fatal("expected error when fetching PR fails")
+	}
+}
+
+func TestRunHandleComment_EyesReaction_OnMention(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict review"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.commentID = 12345
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.reactions) != 1 || gh.reactions[0] != "eyes" {
+		t.Errorf("expected [eyes] reaction, got %v", gh.reactions)
+	}
+}
+
+func TestRunHandleComment_NoReaction_WithoutCommentID(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict review"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	// commentID is 0 (not set)
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.reactions) != 0 {
+		t.Errorf("expected no reactions without comment ID, got %v", gh.reactions)
 	}
 }
 
