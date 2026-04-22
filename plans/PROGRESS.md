@@ -12,16 +12,13 @@ Update this file when opening, completing, or blocking an issue.
 ## Ready to Start
 - #90 cmd/resume: resume interrupted run from last checkpoint
 - #91 cmd/interactive: status, notes, pause/continue during execution
+- #82 perf: load test 5 concurrent tasks
+- #87 state/rewind: verdict ReturnTo field + phase rewind in outer loop
 
 ## In Progress
-- #81 conflicts: merge conflict detection
-- #80 queue: priority ordering + dependency resolution
-- #100 cmd: @vairdict PR mention commands (review / approve / ignore)
 
 ## Blocked
-- #82 perf: load test 5 concurrent tasks (depends on #77-#81)
-- #86 state/rewind: verdict ReturnTo field + phase rewind in outer loop
-- #87 state/rewind-context: structured failure context propagation (depends on #86)
+- #86 state/rewind-context: structured failure context propagation (depends on #87)
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -67,6 +64,9 @@ Update this file when opening, completing, or blocking an issue.
 - #72 judge/review: inline PR review comments on specific diff lines
 - #84 judge/baseline: hardcoded non-negotiable engineering standards
 - #79 deps: task dependency graph
+- #80 queue: priority ordering + dependency resolution
+- #100 cmd: @vairdict PR mention commands (review / approve / ignore)
+- #81 conflicts: merge conflict detection
 
 ---
 
@@ -162,6 +162,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 6/11        |
+| M5        | in progress | 9/11        |
 | M6        | not started | 0/7         |
 | M7+       | not started | —           |
