@@ -345,7 +345,6 @@ func (c *Client) ApprovePR(ctx context.Context, prNumber int, body string) error
 	return nil
 }
 
-
 // verdictMarker is the string that appears in every verdict comment.
 // Used to identify and clean up previous verdicts before posting a new one.
 const verdictMarker = "Posted by @vairdict-judge"
