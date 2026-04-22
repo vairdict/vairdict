@@ -107,6 +107,10 @@ type Renderer interface {
 	// PhaseLoop prints one loop's progress line within a phase.
 	PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool)
 
+	// PhaseLoopGaps prints blocking gaps inline after a failed loop so the
+	// user can see why a loop was rejected without digging into logs.
+	PhaseLoopGaps(gaps []state.Gap)
+
 	// PhaseDone prints the closing summary block for a phase: outcome,
 	// score, loops, narrative summary (if any), and gaps (if any).
 	PhaseDone(

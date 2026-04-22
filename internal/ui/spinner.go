@@ -22,9 +22,10 @@ type Spinner struct {
 	pal    palette
 	frames []string
 
-	mu      sync.Mutex
-	running bool
-	done    chan struct{}
+	mu        sync.Mutex
+	running   bool
+	done      chan struct{}
+	startedAt time.Time
 }
 
 // NewSpinner creates a spinner that writes to w. Call Start() to begin
@@ -58,6 +59,7 @@ func (s *Spinner) Start() {
 		return
 	}
 	s.running = true
+	s.startedAt = time.Now()
 	s.mu.Unlock()
 
 	go s.loop()
@@ -75,10 +77,16 @@ func (s *Spinner) loop() {
 		case <-tick.C:
 			s.mu.Lock()
 			label := s.label
+			elapsed := time.Since(s.startedAt).Truncate(time.Second)
 			s.mu.Unlock()
 			frame := s.frames[i%len(s.frames)]
+			// Show elapsed time after the label (only once >=1s has passed).
+			elapsedStr := ""
+			if elapsed >= time.Second {
+				elapsedStr = fmt.Sprintf(" %s(%s)%s", s.pal.dim, formatDuration(elapsed), s.pal.reset)
+			}
 			// \r returns to start of line, print spinner + label, clear rest of line with \033[K
-			_, _ = fmt.Fprintf(s.w, "\r   %s%s %s%s\033[K", s.pal.dim, frame, label, s.pal.reset)
+			_, _ = fmt.Fprintf(s.w, "\r   %s%s %s%s%s\033[K", s.pal.dim, frame, label, s.pal.reset, elapsedStr)
 			i++
 		}
 	}
@@ -110,4 +118,19 @@ func (s *Spinner) Reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.done = make(chan struct{})
+}
+
+// formatDuration renders a duration as a compact human-readable string:
+// "5s", "1m30s", "2m".
+func formatDuration(d time.Duration) string {
+	d = d.Truncate(time.Second)
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	if m == 0 {
+		return fmt.Sprintf("%ds", s)
+	}
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%ds", m, s)
 }

@@ -108,6 +108,23 @@ func (r *cliRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64,
 		loop, max, rule, scoreColor, score, r.pal.reset, mark)
 }
 
+func (r *cliRenderer) PhaseLoopGaps(gaps []state.Gap) {
+	defer r.flush()
+	// Only show blocking gaps inline to keep output concise.
+	var blocking []state.Gap
+	for _, g := range gaps {
+		if g.Blocking {
+			blocking = append(blocking, g)
+		}
+	}
+	if len(blocking) == 0 {
+		return
+	}
+	for _, g := range blocking {
+		r.printf("     %s%s%s [%s] %s\n", r.pal.dim, r.glyphs.blocking, r.pal.reset, g.Severity, g.Description)
+	}
+}
+
 func (r *cliRenderer) PhaseDone(
 	phase state.Phase,
 	outcome PhaseOutcome,
@@ -162,7 +179,7 @@ func (r *cliRenderer) Escalation(taskID string, phase state.Phase, loops int, sc
 		r.renderGaps(gaps)
 	}
 	r.println("")
-	r.printf("   %sHuman intervention required.%s\n", r.pal.dim, r.pal.reset)
+	r.printf("   %sNo PR was created. Human intervention required.%s\n", r.pal.dim, r.pal.reset)
 }
 
 func (r *cliRenderer) RunComplete(taskID string) {
