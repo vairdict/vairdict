@@ -671,6 +671,14 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int) s
 	// Summary line.
 	fmt.Fprintf(&b, "**Score:** %.0f%% | **Phase:** %s | **Loop:** %d\n\n", verdict.Score, phase, loop)
 
+	// Judge narrative (Reviewed / Notes sections). Without this, a passing
+	// verdict with no gaps renders as just the score line, hiding everything
+	// the judge actually checked.
+	if s := strings.TrimSpace(verdict.Summary); s != "" {
+		b.WriteString(s)
+		b.WriteString("\n\n")
+	}
+
 	// Criteria table — build from gaps.
 	if len(verdict.Gaps) > 0 {
 		b.WriteString("### Criteria\n\n")
