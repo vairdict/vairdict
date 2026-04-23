@@ -96,8 +96,11 @@ type fakeHandleGH struct {
 	recent            bool
 	recentErr         error
 	recentCalls       int
+	recentMarkers     []string // tracks which markers were checked
 	reactions         []string
 	reactionErr       error
+	diff              string
+	diffErr           error
 }
 
 func (f *fakeHandleGH) AddComment(_ context.Context, _ int, body string) error {
@@ -114,6 +117,10 @@ func (f *fakeHandleGH) FetchPR(_ context.Context, _ int) (*github.PRDetails, err
 	return f.pr, f.prErr
 }
 
+func (f *fakeHandleGH) FetchPRDiff(_ context.Context, _ int) (string, error) {
+	return f.diff, f.diffErr
+}
+
 func (f *fakeHandleGH) SetCommitStatus(_ context.Context, sha, state, statusContext, description string) error {
 	f.statusSHA = sha
 	f.statusState = state
@@ -122,8 +129,9 @@ func (f *fakeHandleGH) SetCommitStatus(_ context.Context, sha, state, statusCont
 	return f.statusErr
 }
 
-func (f *fakeHandleGH) RecentCommentExists(_ context.Context, _ int, _ string, _ time.Duration) (bool, error) {
+func (f *fakeHandleGH) RecentCommentExists(_ context.Context, _ int, marker string, _ time.Duration) (bool, error) {
 	f.recentCalls++
+	f.recentMarkers = append(f.recentMarkers, marker)
 	return f.recent, f.recentErr
 }
 
@@ -462,6 +470,395 @@ func TestRunHandleComment_NoReaction_WithoutCommentID(t *testing.T) {
 	if len(gh.reactions) != 0 {
 		t.Errorf("expected no reactions without comment ID, got %v", gh.reactions)
 	}
+}
+
+// --- Parser tests for new commands ---
+
+func TestParseComment_Explain(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		body    string
+		command commentCommand
+		args    string
+	}{
+		{"explain_with_question", "@vairdict explain why was this changed?", cmdExplain, "why was this changed?"},
+		{"explain_no_args", "@vairdict explain", cmdExplain, ""},
+		{"explain_multiword", "@vairdict explain what does the new function do and why", cmdExplain, "what does the new function do and why"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseComment(tc.body)
+			if !got.Mentioned {
+				t.Fatal("expected Mentioned=true")
+			}
+			if got.Command != tc.command {
+				t.Errorf("Command = %q, want %q", got.Command, tc.command)
+			}
+			if got.Args != tc.args {
+				t.Errorf("Args = %q, want %q", got.Args, tc.args)
+			}
+		})
+	}
+}
+
+func TestParseComment_Fix(t *testing.T) {
+	t.Parallel()
+	got := parseComment("@vairdict fix add nil check before dereferencing config")
+	if got.Command != cmdFix {
+		t.Fatalf("Command = %q, want fix", got.Command)
+	}
+	if got.Args != "add nil check before dereferencing config" {
+		t.Errorf("Args = %q", got.Args)
+	}
+}
+
+func TestParseComment_Run(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		body string
+		args string
+	}{
+		{"quoted", `@vairdict run "add input validation"`, "add input validation"},
+		{"single_quoted", `@vairdict run 'fix the bug'`, "fix the bug"},
+		{"unquoted", `@vairdict run add tests`, "add tests"},
+		{"no_args", "@vairdict run", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseComment(tc.body)
+			if got.Command != cmdRun {
+				t.Fatalf("Command = %q, want run", got.Command)
+			}
+			if got.Args != tc.args {
+				t.Errorf("Args = %q, want %q", got.Args, tc.args)
+			}
+		})
+	}
+}
+
+func TestStripQuotes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in, want string
+	}{
+		{`"hello"`, "hello"},
+		{`'hello'`, "hello"},
+		{`hello`, "hello"},
+		{`"`, `"`},
+		{`""`, ""},
+		{`"mismatched'`, `"mismatched'`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := stripQuotes(tc.in); got != tc.want {
+				t.Errorf("stripQuotes(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- Explain handler tests ---
+
+func TestHandleComment_Explain_NoArgs_PostsHelp(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict explain"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], "Please provide a question") {
+		t.Errorf("expected help message, got %q", gh.comments[0])
+	}
+}
+
+func TestHandleComment_Explain_Success(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{diff: "diff --git a/foo.go b/foo.go\n+added line"}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict explain why was this added?"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.explainQuestion = func(_ context.Context, diff, question string) (string, error) {
+		if !strings.Contains(diff, "foo.go") {
+			t.Error("expected diff to be passed")
+		}
+		if question != "why was this added?" {
+			t.Errorf("question = %q", question)
+		}
+		return "Because it fixes a bug.", nil
+	}
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], "Because it fixes a bug.") {
+		t.Errorf("expected answer in comment, got %q", gh.comments[0])
+	}
+	if !strings.Contains(gh.comments[0], explainMarker) {
+		t.Errorf("expected explain marker, got %q", gh.comments[0])
+	}
+}
+
+func TestHandleComment_Explain_LLMError_PostsErrorReply(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{diff: "some diff"}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict explain what happened?"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.explainQuestion = func(context.Context, string, string) (string, error) {
+		return "", errors.New("LLM down")
+	}
+	err := runHandleCommentWith(context.Background(), 1, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "running explain") {
+		t.Errorf("error = %v", err)
+	}
+	// Should still post an error comment.
+	if len(gh.comments) != 1 {
+		t.Fatalf("expected 1 error comment, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], "couldn't answer") {
+		t.Errorf("expected error in comment, got %q", gh.comments[0])
+	}
+}
+
+// --- Fix handler tests ---
+
+func TestHandleComment_Fix_NoArgs_PostsHelp(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict fix"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], "Please describe the fix") {
+		t.Errorf("expected help message, got %q", gh.comments[0])
+	}
+}
+
+func TestHandleComment_Fix_Success(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{
+		pr:   &github.PRDetails{Number: 5, HeadRefName: "fix-branch", HeadRefOid: "abc"},
+		diff: "diff content",
+	}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict fix add nil check"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.fixCode = func(_ context.Context, pr *github.PRDetails, desc, diff string) (string, error) {
+		if pr.HeadRefName != "fix-branch" {
+			t.Errorf("branch = %q", pr.HeadRefName)
+		}
+		if desc != "add nil check" {
+			t.Errorf("desc = %q", desc)
+		}
+		return "deadbeef1234567890", nil
+	}
+	if err := runHandleCommentWith(context.Background(), 5, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Expect 2 comments: start + confirmation.
+	if len(gh.comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], "Working on fix") {
+		t.Errorf("expected start comment, got %q", gh.comments[0])
+	}
+	if !strings.Contains(gh.comments[1], "deadbee") {
+		t.Errorf("expected short SHA in confirmation, got %q", gh.comments[1])
+	}
+	if !strings.Contains(gh.comments[1], fixMarker) {
+		t.Errorf("expected fix marker, got %q", gh.comments[1])
+	}
+}
+
+func TestHandleComment_Fix_Error_PostsFailure(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{
+		pr:   &github.PRDetails{Number: 5, HeadRefName: "fix-branch"},
+		diff: "diff",
+	}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict fix something"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.fixCode = func(context.Context, *github.PRDetails, string, string) (string, error) {
+		return "", errors.New("no changes produced")
+	}
+	err := runHandleCommentWith(context.Background(), 5, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Expect 2 comments: start + error.
+	if len(gh.comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[1], "Fix failed") {
+		t.Errorf("expected failure comment, got %q", gh.comments[1])
+	}
+}
+
+// --- Run handler tests ---
+
+func TestHandleComment_Run_NoArgs_PostsHelp(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{}
+	deps := baseHandleDeps(gh)
+	deps.body = "@vairdict run"
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], "Please provide an intent") {
+		t.Errorf("expected help message, got %q", gh.comments[0])
+	}
+}
+
+func TestHandleComment_Run_Success(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{
+		pr: &github.PRDetails{Number: 10, HeadRefName: "feat-branch"},
+	}
+	deps := baseHandleDeps(gh)
+	deps.body = `@vairdict run "add validation"`
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.runConcurrencyWindow = time.Minute
+	orchCalled := false
+	deps.runOrchestration = func(_ context.Context, pr *github.PRDetails, intent string) error {
+		orchCalled = true
+		if pr.HeadRefName != "feat-branch" {
+			t.Errorf("branch = %q", pr.HeadRefName)
+		}
+		if intent != "add validation" {
+			t.Errorf("intent = %q", intent)
+		}
+		return nil
+	}
+	if err := runHandleCommentWith(context.Background(), 10, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !orchCalled {
+		t.Error("expected runOrchestration to be called")
+	}
+	// Expect 2 comments: start + done.
+	if len(gh.comments) != 2 {
+		t.Fatalf("expected 2 comments, got %d", len(gh.comments))
+	}
+	if !strings.Contains(gh.comments[0], runStartMarker) {
+		t.Errorf("expected start marker, got %q", gh.comments[0])
+	}
+	if !strings.Contains(gh.comments[1], runDoneMarker) {
+		t.Errorf("expected done marker, got %q", gh.comments[1])
+	}
+	if !strings.Contains(gh.comments[1], "completed successfully") {
+		t.Errorf("expected success message, got %q", gh.comments[1])
+	}
+}
+
+func TestHandleComment_Run_ConcurrencyGuard_BlocksDuplicate(t *testing.T) {
+	t.Parallel()
+	// Simulate: start marker exists, done marker does NOT → run is active.
+	callCount := 0
+	gh := &fakeHandleGH{}
+	deps := baseHandleDeps(gh)
+	deps.body = `@vairdict run "something"`
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.runConcurrencyWindow = time.Minute
+	// Override RecentCommentExists behavior: first call (start) → true,
+	// second call (done) → false.
+	originalGH := gh
+	deps.gh = &fakeHandleGHWithRecentFunc{
+		fakeHandleGH: originalGH,
+		recentFunc: func(marker string) (bool, error) {
+			callCount++
+			if strings.Contains(marker, "run-start") {
+				return true, nil // start marker found
+			}
+			return false, nil // done marker NOT found
+		},
+	}
+	deps.runOrchestration = func(context.Context, *github.PRDetails, string) error {
+		t.Fatal("runOrchestration should NOT be called when run is active")
+		return nil
+	}
+	if err := runHandleCommentWith(context.Background(), 1, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(originalGH.comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(originalGH.comments))
+	}
+	if !strings.Contains(originalGH.comments[0], "already in progress") {
+		t.Errorf("expected concurrency message, got %q", originalGH.comments[0])
+	}
+}
+
+func TestHandleComment_Run_Error_PostsDoneMarker(t *testing.T) {
+	t.Parallel()
+	gh := &fakeHandleGH{
+		pr: &github.PRDetails{Number: 10, HeadRefName: "feat-branch"},
+	}
+	deps := baseHandleDeps(gh)
+	deps.body = `@vairdict run "broken thing"`
+	deps.author = "alice"
+	deps.assoc = "MEMBER"
+	deps.runConcurrencyWindow = time.Minute
+	deps.runOrchestration = func(context.Context, *github.PRDetails, string) error {
+		return errors.New("orchestration failed")
+	}
+	err := runHandleCommentWith(context.Background(), 10, deps)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// Should still post done marker so next run isn't blocked.
+	found := false
+	for _, c := range gh.comments {
+		if strings.Contains(c, runDoneMarker) {
+			found = true
+			if !strings.Contains(c, "Run failed") {
+				t.Errorf("expected failure in done comment, got %q", c)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected done marker to be posted even on failure")
+	}
+}
+
+// fakeHandleGHWithRecentFunc wraps fakeHandleGH but overrides
+// RecentCommentExists with a custom function for concurrency tests.
+type fakeHandleGHWithRecentFunc struct {
+	*fakeHandleGH
+	recentFunc func(marker string) (bool, error)
+}
+
+func (f *fakeHandleGHWithRecentFunc) RecentCommentExists(_ context.Context, _ int, marker string, _ time.Duration) (bool, error) {
+	return f.recentFunc(marker)
 }
 
 func TestLevenshtein(t *testing.T) {

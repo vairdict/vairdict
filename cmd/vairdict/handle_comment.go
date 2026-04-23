@@ -31,7 +31,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/vairdict/vairdict/internal/agents/claudecode"
+	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/github"
+	"github.com/vairdict/vairdict/internal/ui"
 )
 
 // commentCommand is the set of recognised `@vairdict <cmd>` keywords.
@@ -45,12 +48,15 @@ const (
 	cmdReview  commentCommand = "review"
 	cmdApprove commentCommand = "approve"
 	cmdIgnore  commentCommand = "ignore"
+	cmdExplain commentCommand = "explain"
+	cmdFix     commentCommand = "fix"
+	cmdRun     commentCommand = "run"
 )
 
 // knownCommands is the canonical list of commands, used both to validate
 // parsed tokens and to drive the "did you mean?" suggestion. Declared as
 // a slice (not a map) so the order is deterministic in help text.
-var knownCommands = []commentCommand{cmdReview, cmdApprove, cmdIgnore}
+var knownCommands = []commentCommand{cmdReview, cmdApprove, cmdIgnore, cmdExplain, cmdFix, cmdRun}
 
 // reviewRateLimitWindow is the minimum gap between two accepted
 // `@vairdict review` runs on the same PR. A second mention inside the
@@ -72,6 +78,22 @@ const overrideMarker = "<!-- vairdict-mention-override -->"
 // same reason as overrideMarker.
 const ignoreMarker = "<!-- vairdict-mention-ignore -->"
 
+// runStartMarker is embedded in the "starting run" confirmation comment
+// so the concurrency guard can detect an in-progress run without external
+// state. The run command allows only one active run per PR.
+const runStartMarker = "<!-- vairdict-mention-run-start -->"
+
+// runDoneMarker is embedded when a run completes so the concurrency guard
+// can tell the difference between a run that is still active and one that
+// has finished. Without this, the start marker alone blocks subsequent runs.
+const runDoneMarker = "<!-- vairdict-mention-run-done -->"
+
+// explainMarker is embedded in explain replies for auditability.
+const explainMarker = "<!-- vairdict-mention-explain -->"
+
+// fixMarker is embedded in fix confirmation comments.
+const fixMarker = "<!-- vairdict-mention-fix -->"
+
 // parseResult captures everything the parser learned about a comment
 // body. Mentioned=false means "no @vairdict mention at all" and is the
 // cue for the workflow to exit 0 silently. Mentioned=true with an empty
@@ -81,6 +103,7 @@ type parseResult struct {
 	Mentioned  bool
 	Raw        string // token that followed @vairdict, lowercased, punctuation stripped
 	Command    commentCommand
+	Args       string // everything after the command token (trimmed), for explain/fix/run
 	DidYouMean commentCommand
 }
 
@@ -125,6 +148,16 @@ func parseComment(body string) parseResult {
 	for _, c := range knownCommands {
 		if token == string(c) {
 			res.Command = c
+			// Capture the remaining text after the command token as args.
+			// Used by explain, fix, and run which take arguments.
+			if end < len(rest) {
+				args := strings.TrimSpace(rest[end:])
+				// For `run`, strip surrounding quotes from the intent.
+				if c == cmdRun {
+					args = stripQuotes(args)
+				}
+				res.Args = args
+			}
 			return res
 		}
 	}
@@ -192,6 +225,17 @@ func levenshtein(a, b string) int {
 	return prev[len(rb)]
 }
 
+// stripQuotes removes surrounding double or single quotes from a string.
+// Used to extract the intent from `@vairdict run "add login"`.
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
 // authorized reports whether a GitHub author_association string grants
 // permission to run VAIrdict mention commands. Case-insensitive so we
 // tolerate lowercase payloads from third-party webhook bridges.
@@ -210,6 +254,7 @@ type handleCommentGH interface {
 	AddComment(ctx context.Context, prNumber int, body string) error
 	AddReaction(ctx context.Context, commentID int64, content string) error
 	FetchPR(ctx context.Context, number int) (*github.PRDetails, error)
+	FetchPRDiff(ctx context.Context, number int) (string, error)
 	SetCommitStatus(ctx context.Context, sha, state, statusContext, description string) error
 	RecentCommentExists(ctx context.Context, prNumber int, marker string, within time.Duration) (bool, error)
 }
@@ -226,6 +271,24 @@ type handleCommentDeps struct {
 	commentID  int64
 	runReview  func(prNumber int) error
 	rateWindow time.Duration
+
+	// explainQuestion calls an LLM with the PR diff and question, returns
+	// the answer text. Injected so tests can fake the LLM call.
+	explainQuestion func(ctx context.Context, diff, question string) (string, error)
+
+	// fixCode checks out the PR branch, runs Claude Code with the
+	// description scoped to the diff, commits, pushes, and returns the
+	// new commit SHA. Injected for testability.
+	fixCode func(ctx context.Context, pr *github.PRDetails, description, diff string) (string, error)
+
+	// runOrchestration triggers the full plan→code→quality loop against
+	// the PR branch. Progress and the final verdict are posted by the
+	// implementation itself; this hook returns nil on success.
+	runOrchestration func(ctx context.Context, pr *github.PRDetails, intent string) error
+
+	// runConcurrencyWindow is how long an active `run` blocks subsequent
+	// runs on the same PR. Zero means use the default (60 min).
+	runConcurrencyWindow time.Duration
 }
 
 var handleCommentCmd = &cobra.Command{
@@ -282,6 +345,15 @@ func runHandleComment(prNumber int) error {
 		commentID:  commentID,
 		runReview:  runReview,
 		rateWindow: reviewRateLimitWindow,
+		explainQuestion: func(ctx context.Context, diff, question string) (string, error) {
+			return runExplainQuestion(ctx, diff, question)
+		},
+		fixCode: func(ctx context.Context, pr *github.PRDetails, description, diff string) (string, error) {
+			return runFixCode(ctx, workDir, pr, description, diff)
+		},
+		runOrchestration: func(ctx context.Context, pr *github.PRDetails, intent string) error {
+			return runMentionOrchestration(ctx, workDir, pr, intent)
+		},
 	})
 }
 
@@ -324,6 +396,12 @@ func runHandleCommentWith(ctx context.Context, prNumber int, deps handleCommentD
 		return handleApproveMention(ctx, deps, prNumber)
 	case cmdIgnore:
 		return handleIgnoreMention(ctx, deps, prNumber)
+	case cmdExplain:
+		return handleExplainMention(ctx, deps, prNumber, res.Args)
+	case cmdFix:
+		return handleFixMention(ctx, deps, prNumber, res.Args)
+	case cmdRun:
+		return handleRunMention(ctx, deps, prNumber, res.Args)
 	}
 	return nil
 }
@@ -468,6 +546,184 @@ func handleIgnoreMention(ctx context.Context, deps handleCommentDeps, prNumber i
 	return nil
 }
 
+// defaultRunConcurrencyWindow is the default window for the `run` command's
+// concurrency guard. A run that started more than this long ago is assumed
+// to have died without posting a done marker.
+const defaultRunConcurrencyWindow = 60 * time.Minute
+
+// handleExplainMention answers a question about the PR changes using an LLM.
+// The response is posted as a threaded reply. Read-only — no code changes.
+func handleExplainMention(ctx context.Context, deps handleCommentDeps, prNumber int, question string) error {
+	if strings.TrimSpace(question) == "" {
+		body := fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Please provide a question after `@vairdict explain`. "+
+				"Example: `@vairdict explain why was this function changed?`\n", github.LogoURL)
+		return deps.gh.AddComment(ctx, prNumber, body)
+	}
+
+	diff, err := deps.gh.FetchPRDiff(ctx, prNumber)
+	if err != nil {
+		return fmt.Errorf("fetching PR diff for explain: %w", err)
+	}
+
+	if deps.explainQuestion == nil {
+		return fmt.Errorf("explainQuestion hook not configured")
+	}
+
+	answer, err := deps.explainQuestion(ctx, diff, question)
+	if err != nil {
+		errBody := fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Sorry, I couldn't answer that question: %v\n\n%s\n",
+			github.LogoURL, err, explainMarker)
+		if addErr := deps.gh.AddComment(ctx, prNumber, errBody); addErr != nil {
+			return fmt.Errorf("posting explain error reply: %w", addErr)
+		}
+		return fmt.Errorf("running explain: %w", err)
+	}
+
+	body := fmt.Sprintf(
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> **Answer** (requested by @%s)\n\n%s\n\n%s\n",
+		github.LogoURL, deps.author, answer, explainMarker)
+	if err := deps.gh.AddComment(ctx, prNumber, body); err != nil {
+		return fmt.Errorf("posting explain reply: %w", err)
+	}
+	slog.Info("explain answered", "pr", prNumber, "author", deps.author)
+	return nil
+}
+
+// handleFixMention pushes a targeted code fix to the PR branch. Claude Code
+// runs with the description scoped to the PR diff, commits the change, and
+// pushes. A confirmation reply is posted with the commit SHA.
+func handleFixMention(ctx context.Context, deps handleCommentDeps, prNumber int, description string) error {
+	if strings.TrimSpace(description) == "" {
+		body := fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Please describe the fix after `@vairdict fix`. "+
+				"Example: `@vairdict fix add nil check before dereferencing config`\n", github.LogoURL)
+		return deps.gh.AddComment(ctx, prNumber, body)
+	}
+
+	pr, err := deps.gh.FetchPR(ctx, prNumber)
+	if err != nil {
+		return fmt.Errorf("fetching PR for fix: %w", err)
+	}
+
+	diff, err := deps.gh.FetchPRDiff(ctx, prNumber)
+	if err != nil {
+		return fmt.Errorf("fetching PR diff for fix: %w", err)
+	}
+
+	if deps.fixCode == nil {
+		return fmt.Errorf("fixCode hook not configured")
+	}
+
+	startBody := fmt.Sprintf(
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Working on fix requested by @%s…\n",
+		github.LogoURL, deps.author)
+	if err := deps.gh.AddComment(ctx, prNumber, startBody); err != nil {
+		slog.Warn("failed to post fix start comment", "pr", prNumber, "error", err)
+	}
+
+	sha, err := deps.fixCode(ctx, pr, description, diff)
+	if err != nil {
+		errBody := fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Fix failed: %v\n\n%s\n",
+			github.LogoURL, err, fixMarker)
+		if addErr := deps.gh.AddComment(ctx, prNumber, errBody); addErr != nil {
+			return fmt.Errorf("posting fix error reply: %w", addErr)
+		}
+		return fmt.Errorf("running fix: %w", err)
+	}
+
+	body := fmt.Sprintf(
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Fix pushed by @%s: `%s`\n\n%s\n",
+		github.LogoURL, deps.author, shortSHA(sha), fixMarker)
+	if err := deps.gh.AddComment(ctx, prNumber, body); err != nil {
+		return fmt.Errorf("posting fix confirmation: %w", err)
+	}
+	slog.Info("fix pushed", "pr", prNumber, "author", deps.author, "sha", sha)
+	return nil
+}
+
+// handleRunMention triggers the full plan→code→quality loop against the
+// PR branch. A concurrency guard ensures only one run at a time per PR.
+func handleRunMention(ctx context.Context, deps handleCommentDeps, prNumber int, intent string) error {
+	if strings.TrimSpace(intent) == "" {
+		body := fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Please provide an intent after `@vairdict run`. "+
+				"Example: `@vairdict run \"add input validation\"`\n", github.LogoURL)
+		return deps.gh.AddComment(ctx, prNumber, body)
+	}
+
+	// Concurrency guard: check if a run is already in progress.
+	window := deps.runConcurrencyWindow
+	if window == 0 {
+		window = defaultRunConcurrencyWindow
+	}
+
+	// A run is active if we find a start marker but no done marker within
+	// the window. Check start first, then done.
+	hasStart, err := deps.gh.RecentCommentExists(ctx, prNumber, runStartMarker, window)
+	if err != nil {
+		slog.Warn("run concurrency check (start) failed, continuing", "pr", prNumber, "error", err)
+	} else if hasStart {
+		hasDone, doneErr := deps.gh.RecentCommentExists(ctx, prNumber, runDoneMarker, window)
+		if doneErr != nil {
+			slog.Warn("run concurrency check (done) failed, continuing", "pr", prNumber, "error", doneErr)
+		} else if !hasDone {
+			body := fmt.Sprintf(
+				"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> A run is already in progress for this PR "+
+					"(mention by @%s ignored). Please wait for the current run to finish.\n",
+				github.LogoURL, deps.author)
+			if addErr := deps.gh.AddComment(ctx, prNumber, body); addErr != nil {
+				return fmt.Errorf("posting run concurrency reply: %w", addErr)
+			}
+			return nil
+		}
+	}
+
+	pr, err := deps.gh.FetchPR(ctx, prNumber)
+	if err != nil {
+		return fmt.Errorf("fetching PR for run: %w", err)
+	}
+
+	if deps.runOrchestration == nil {
+		return fmt.Errorf("runOrchestration hook not configured")
+	}
+
+	// Post start marker for concurrency guard.
+	startBody := fmt.Sprintf(
+		"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Starting full VAIrdict run on @%s's request: %s\n\n%s\n",
+		github.LogoURL, deps.author, intent, runStartMarker)
+	if err := deps.gh.AddComment(ctx, prNumber, startBody); err != nil {
+		return fmt.Errorf("posting run start comment: %w", err)
+	}
+
+	runErr := deps.runOrchestration(ctx, pr, intent)
+
+	// Post done marker regardless of success/failure so the concurrency
+	// guard unblocks subsequent runs.
+	var doneBody string
+	if runErr != nil {
+		doneBody = fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Run failed: %v\n\n%s\n",
+			github.LogoURL, runErr, runDoneMarker)
+	} else {
+		doneBody = fmt.Sprintf(
+			"<img src=\"%s\" alt=\"VAIrdict\" height=\"20\"> Run completed successfully.\n\n%s\n",
+			github.LogoURL, runDoneMarker)
+	}
+	if addErr := deps.gh.AddComment(ctx, prNumber, doneBody); addErr != nil {
+		slog.Warn("failed to post run done comment", "pr", prNumber, "error", addErr)
+	}
+
+	if runErr != nil {
+		return fmt.Errorf("running orchestration: %w", runErr)
+	}
+
+	slog.Info("run completed", "pr", prNumber, "author", deps.author, "intent", intent)
+	return nil
+}
+
 // shortSHA trims a commit OID to the conventional 7-char prefix used in
 // PR UI. Defensive against short inputs so we never panic on bad data.
 func shortSHA(sha string) string {
@@ -475,4 +731,104 @@ func shortSHA(sha string) string {
 		return sha
 	}
 	return sha[:7]
+}
+
+// --- Production implementations for explain / fix / run hooks ---
+
+// runExplainQuestion calls the resolved completer with the PR diff and
+// question, returning a plain-text answer. The completer is resolved fresh
+// from config so handle-comment doesn't need the full runTask setup.
+func runExplainQuestion(ctx context.Context, diff, question string) (string, error) {
+	cfg, err := config.LoadConfig("vairdict.yaml")
+	if err != nil {
+		return "", fmt.Errorf("loading config: %w", err)
+	}
+	client, _, err := resolveCompleter(cfg)
+	if err != nil {
+		return "", fmt.Errorf("resolving completer: %w", err)
+	}
+	system := "You are VAIrdict, an AI code review assistant. Answer the user's question " +
+		"about the following PR diff concisely and accurately. Focus on the specific " +
+		"changes in the diff.\n\n## PR Diff\n```\n" + diff + "\n```"
+	var answer string
+	if err := client.CompleteWithSystem(ctx, system, question, &answer); err != nil {
+		return "", fmt.Errorf("LLM completion: %w", err)
+	}
+	return answer, nil
+}
+
+// runFixCode checks out the PR branch, runs Claude Code with the fix
+// description, commits, pushes, and returns the new commit SHA.
+func runFixCode(ctx context.Context, workDir string, pr *github.PRDetails, description, diff string) (string, error) {
+	// Checkout the PR branch.
+	if _, err := execCommandInDir(workDir, "git", "fetch", "origin", pr.HeadRefName); err != nil {
+		return "", fmt.Errorf("fetching branch %s: %w", pr.HeadRefName, err)
+	}
+	if _, err := execCommandInDir(workDir, "git", "checkout", pr.HeadRefName); err != nil {
+		return "", fmt.Errorf("checking out branch %s: %w", pr.HeadRefName, err)
+	}
+
+	// Build a prompt scoped to the diff.
+	prompt := fmt.Sprintf(
+		"You are working on a PR. Apply the following fix to the codebase.\n\n"+
+			"## Fix Description\n%s\n\n## Current PR Diff (for context)\n```\n%s\n```\n\n"+
+			"Make the minimal change needed. Do not refactor unrelated code.",
+		description, diff)
+
+	runner := claudecode.New()
+	result, err := runner.Run(ctx, prompt, workDir)
+	if err != nil {
+		return "", fmt.Errorf("running claude code: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("claude code exited with status %d: %s", result.ExitCode, result.Stderr)
+	}
+
+	// Stage, commit, push.
+	if _, err := execCommandInDir(workDir, "git", "add", "-A"); err != nil {
+		return "", fmt.Errorf("staging changes: %w", err)
+	}
+	status, err := execCommandInDir(workDir, "git", "status", "--porcelain")
+	if err != nil {
+		return "", fmt.Errorf("checking status: %w", err)
+	}
+	if strings.TrimSpace(string(status)) == "" {
+		return "", fmt.Errorf("no changes produced by fix")
+	}
+
+	msg := fmt.Sprintf("fix: %s\n\nApplied via @vairdict fix", description)
+	if _, err := execCommandInDir(workDir, "git", "commit", "-m", msg); err != nil {
+		return "", fmt.Errorf("committing fix: %w", err)
+	}
+
+	// Get the commit SHA.
+	shaOut, err := execCommandInDir(workDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("reading commit SHA: %w", err)
+	}
+	sha := strings.TrimSpace(string(shaOut))
+
+	if _, err := execCommandInDir(workDir, "git", "push", "origin", pr.HeadRefName); err != nil {
+		return "", fmt.Errorf("pushing fix: %w", err)
+	}
+
+	return sha, nil
+}
+
+// runMentionOrchestration triggers the full plan→code→quality loop on the
+// PR branch. It reuses the existing runTask infrastructure with the PR's
+// branch already checked out.
+func runMentionOrchestration(ctx context.Context, workDir string, pr *github.PRDetails, intent string) error {
+	// Checkout the PR branch.
+	if _, err := execCommandInDir(workDir, "git", "fetch", "origin", pr.HeadRefName); err != nil {
+		return fmt.Errorf("fetching branch %s: %w", pr.HeadRefName, err)
+	}
+	if _, err := execCommandInDir(workDir, "git", "checkout", pr.HeadRefName); err != nil {
+		return fmt.Errorf("checking out branch %s: %w", pr.HeadRefName, err)
+	}
+
+	// Run the task using the existing single-task path. The PR branch is
+	// already checked out in workDir, so the orchestration produces code
+	// on top of the existing PR.
+	return runTask(intent, 0, ui.ModeCI, ui.ColorsNone, true, nil, "")
 }
