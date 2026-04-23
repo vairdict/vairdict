@@ -1009,7 +1009,7 @@ func phaseProgressHandler(spin *ui.Spinner, r ui.Renderer, phase state.Phase) fu
 			r.PhaseLoop(phase, loop, max, score, pass)
 			if !pass && len(gaps) > 0 {
 				// Show blocking gaps inline so the user sees why this loop failed.
-				r.PhaseLoopGaps(gaps)
+				r.PhaseLoopBlockingGaps(gaps)
 			}
 			if !pass {
 				spin.Reset()

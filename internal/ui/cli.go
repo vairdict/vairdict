@@ -108,7 +108,7 @@ func (r *cliRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64,
 		loop, max, rule, scoreColor, score, r.pal.reset, mark)
 }
 
-func (r *cliRenderer) PhaseLoopGaps(gaps []state.Gap) {
+func (r *cliRenderer) PhaseLoopBlockingGaps(gaps []state.Gap) {
 	defer r.flush()
 	// Only show blocking gaps inline to keep output concise.
 	var blocking []state.Gap

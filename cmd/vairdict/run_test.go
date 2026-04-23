@@ -311,7 +311,7 @@ func (f *fakeRenderer) Close() error                    { return nil }
 func (f *fakeRenderer) Escalation(string, state.Phase, int, float64, []state.Gap) {
 }
 
-func (f *fakeRenderer) PhaseLoopGaps([]state.Gap) {}
+func (f *fakeRenderer) PhaseLoopBlockingGaps([]state.Gap) {}
 
 func (f *fakeRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool) {
 	f.loops = append(f.loops, fakeLoopCall{phase, loop, max, score, pass})

@@ -64,7 +64,7 @@ func (r *jsonRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64
 	})
 }
 
-func (r *jsonRenderer) PhaseLoopGaps(gaps []state.Gap) {
+func (r *jsonRenderer) PhaseLoopBlockingGaps(gaps []state.Gap) {
 	if len(gaps) == 0 {
 		return
 	}
