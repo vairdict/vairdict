@@ -54,6 +54,10 @@ func (r *jsonRenderer) PhaseStart(phase state.Phase) {
 	r.emit("phase_start", map[string]any{"phase": string(phase)})
 }
 
+func (r *jsonRenderer) StepUpdate(phase state.Phase, step string) {
+	r.emit("step_update", map[string]any{"phase": string(phase), "step": step})
+}
+
 func (r *jsonRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool) {
 	r.emit("phase_loop", map[string]any{
 		"phase": string(phase),

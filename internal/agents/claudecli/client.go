@@ -133,20 +133,46 @@ func (c *Client) Complete(ctx context.Context, prompt string, target any) error 
 // CompleteWithTool is the CLI-path implementation of the tool-use API.
 // The Claude Code CLI does not expose native tool-use with a forced schema,
 // so this falls back to embedding the tool's JSON Schema into the system
-// prompt and reusing the prose-to-JSON parser. The API client's
-// implementation enforces the schema strictly; this one is best-effort
-// structural. Judges therefore behave the same way from the caller side
-// regardless of which transport is resolved.
+// prompt and reusing the prose-to-JSON parser. Tools are disabled via
+// --tools "" so the CLI produces a single-turn text response instead of
+// spending turns on file reads. On parse failure a single recovery call
+// re-prompts Claude with its own raw output and asks for just the JSON.
 func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error {
 	augmented := system
 	if augmented != "" {
 		augmented += "\n\n"
 	}
 	augmented += fmt.Sprintf(
-		"## Response tool: %s\n%s\n\nRespond with a single JSON object that conforms to this JSON Schema (no markdown, no prose outside the object):\n%s",
+		"## Response tool: %s\n%s\n\n"+
+			"CRITICAL INSTRUCTION — OUTPUT FORMAT:\n"+
+			"Respond with ONLY a single JSON object that conforms to this JSON Schema.\n"+
+			"No prose before or after. No markdown fences. No explanation. Just the raw JSON object.\n\n"+
+			"Schema:\n%s",
 		tool.Name, tool.Description, string(tool.InputSchema),
 	)
-	return c.CompleteWithSystem(ctx, augmented, prompt, target)
+
+	err := c.completeWithOpts(ctx, augmented, prompt, true, target)
+	if err == nil {
+		return nil
+	}
+
+	// If parse failed, attempt a single recovery call: feed the raw output
+	// back and ask Claude to extract/reformat it as valid JSON.
+	parseErr, ok := err.(*ParseError)
+	if !ok || parseErr.Raw == "" {
+		return err
+	}
+
+	slog.Info("claude cli tool call failed, attempting recovery", "original_err", err)
+
+	recoveryPrompt := fmt.Sprintf(
+		"The following text was supposed to be a JSON object conforming to this schema:\n%s\n\n"+
+			"But it was returned as prose. Extract the information and return ONLY the JSON object. "+
+			"No markdown, no explanation, no fences — just the JSON.\n\n"+
+			"Original text:\n%s",
+		string(tool.InputSchema), truncate(parseErr.Raw, 4000),
+	)
+	return c.completeWithOpts(ctx, "", recoveryPrompt, true, target)
 }
 
 // CompleteWithTools falls back to single-turn CompleteWithTool using only the
@@ -169,6 +195,77 @@ type envelope struct {
 	Subtype string `json:"subtype"`
 	IsError bool   `json:"is_error"`
 	Result  string `json:"result"`
+}
+
+// completeWithOpts is the core CLI invocation. When noTools is true it
+// passes --tools "" to disable all tool use, producing a single-turn text
+// response. This is critical for judge calls that must return JSON directly
+// rather than spending turns reading files.
+func (c *Client) completeWithOpts(ctx context.Context, system, prompt string, noTools bool, target any) error {
+	start := time.Now()
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	args := []string{"-p", "--output-format", "json"}
+	if noTools {
+		args = append(args, "--tools", "")
+	}
+	if system != "" {
+		args = append(args, "--append-system-prompt", system)
+	}
+	args = append(args, c.extraArgs...)
+	args = append(args, prompt)
+
+	cmd := c.cmdFactory(ctx, "claude", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	slog.Debug("running claude cli", "args", args, "noTools", noTools, "timeout", c.timeout)
+
+	if err := cmd.Run(); err != nil {
+		if execErr, ok := err.(*exec.Error); ok {
+			return &NotInstalledError{Err: execErr}
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("claude cli cancelled: %w", ctx.Err())
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return &ExitError{
+				ExitCode: exitErr.ExitCode(),
+				Stderr:   stderr.String(),
+				Err:      err,
+			}
+		}
+		return fmt.Errorf("running claude cli: %w", err)
+	}
+
+	slog.Debug("claude cli completed", "duration", time.Since(start), "noTools", noTools)
+
+	var env envelope
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		return &ParseError{Raw: stdout.String(), Err: fmt.Errorf("decoding envelope: %w", err)}
+	}
+	if env.IsError {
+		return &ParseError{Raw: env.Result, Err: fmt.Errorf("claude cli returned is_error=true (subtype=%s)", env.Subtype)}
+	}
+	if env.Result == "" {
+		return &ParseError{Raw: stdout.String(), Err: fmt.Errorf("empty result field in envelope")}
+	}
+
+	cleaned := extractJSON(env.Result)
+	if err := json.Unmarshal([]byte(cleaned), target); err != nil {
+		slog.Debug("claude cli parse failed",
+			"err", err,
+			"raw_len", len(env.Result),
+			"cleaned_len", len(cleaned),
+			"raw_head", truncate(env.Result, 500),
+			"cleaned_head", truncate(cleaned, 500),
+		)
+		return &ParseError{Raw: env.Result, Err: fmt.Errorf("decoding result into target: %w", err)}
+	}
+	return nil
 }
 
 // CompleteWithSystem runs `claude -p --output-format json` with the given

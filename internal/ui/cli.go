@@ -9,6 +9,19 @@ import (
 	"github.com/vairdict/vairdict/internal/state"
 )
 
+// allPhases is the ordered list of phases shown in the task checklist.
+var allPhases = []state.Phase{state.PhasePlan, state.PhaseCode, state.PhaseQuality}
+
+// phaseStatus tracks what happened to a phase for checklist rendering.
+type phaseStatus int
+
+const (
+	phasePending  phaseStatus = iota
+	phaseActive               // currently running
+	phasePassed               // completed successfully
+	phaseFailed               // completed with failure
+)
+
 // cliRenderer prints sectioned, colored, emoji-decorated output for human
 // consumption in a terminal. It buffers via bufio for efficient writes and
 // flushes on every public method so output appears immediately even if the
@@ -19,6 +32,12 @@ type cliRenderer struct {
 	glyphs  glyphSet
 	colors  ColorScheme
 	useASCI bool
+
+	// Task-list state: tracks each phase's status for checklist display.
+	phases    map[state.Phase]phaseStatus
+	scores    map[state.Phase]float64
+	activeStep string // current sub-step within the active phase
+	doneSteps  map[state.Phase][]string // completed sub-steps per phase
 }
 
 func newCLIRenderer(out io.Writer, colors ColorScheme, ascii bool) *cliRenderer {
@@ -27,6 +46,9 @@ func newCLIRenderer(out io.Writer, colors ColorScheme, ascii bool) *cliRenderer 
 		pal:     paletteFor(colors),
 		colors:  colors,
 		useASCI: ascii,
+		phases:    make(map[state.Phase]phaseStatus),
+		scores:    make(map[state.Phase]float64),
+		doneSteps: make(map[state.Phase][]string),
 	}
 	if ascii {
 		r.glyphs = asciiGlyphs()
@@ -89,12 +111,24 @@ func (r *cliRenderer) Note(label, value string) {
 
 func (r *cliRenderer) PhaseStart(phase state.Phase) {
 	defer r.flush()
+	r.phases[phase] = phaseActive
+	r.activeStep = ""
 	r.println("")
-	r.printf("%s%s %s%s\n", r.pal.bold, r.glyphs.phase(phase), phaseTitle(phase), r.pal.reset)
+	r.renderChecklist()
+}
+
+func (r *cliRenderer) StepUpdate(phase state.Phase, step string) {
+	defer r.flush()
+	// Mark the previous active step as done before moving to the new one.
+	if r.activeStep != "" && r.activeStep != step {
+		r.doneSteps[phase] = append(r.doneSteps[phase], r.activeStep)
+	}
+	r.activeStep = step
 }
 
 func (r *cliRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool) {
 	defer r.flush()
+	r.scores[phase] = score
 	mark := r.glyphs.fail
 	if pass {
 		mark = r.glyphs.pass
@@ -134,6 +168,17 @@ func (r *cliRenderer) PhaseDone(
 	gaps []state.Gap,
 ) {
 	defer r.flush()
+
+	if outcome == OutcomePass {
+		r.phases[phase] = phasePassed
+	} else {
+		r.phases[phase] = phaseFailed
+	}
+	r.scores[phase] = score
+
+	// Re-render the checklist to reflect the completed phase.
+	r.println("")
+	r.renderChecklist()
 
 	if summary != "" {
 		r.println("")
@@ -192,6 +237,88 @@ func (r *cliRenderer) Error(err error) {
 	defer r.flush()
 	r.println("")
 	r.printf("%s%s%s error%s: %s\n", r.pal.bold, r.pal.red, r.glyphs.fail, r.pal.reset, err.Error())
+}
+
+// ── checklist rendering ──────────────────────────────────────────────────
+
+// phaseSubSteps defines the known sub-steps for each phase, in order.
+// These match the step strings emitted by phase.OnProgress callbacks.
+var phaseSubSteps = map[state.Phase][]string{
+	state.PhasePlan:    {"generating plan", "judging plan"},
+	state.PhaseCode:    {"coding", "judging code"},
+	state.PhaseQuality: {"reviewing"},
+}
+
+// renderChecklist prints the task-list style progress overview showing all
+// phases with their current status: pending (☐), active (▸), passed (☑ ✅),
+// or failed (☑ ❌). Active phases also show their sub-steps.
+func (r *cliRenderer) renderChecklist() {
+	r.printf("   %sTasks%s\n", r.pal.bold, r.pal.reset)
+	for _, p := range allPhases {
+		status := r.phases[p]
+		icon := r.glyphs.phase(p)
+		title := phaseTitle(p)
+
+		switch status {
+		case phaseActive:
+			r.printf("   %s%s%s %s %s\n", r.pal.cyan, r.glyphs.todoActive, r.pal.reset, icon, title)
+			// Show sub-steps under the active phase.
+			r.renderSubSteps(p)
+		case phasePassed:
+			score := r.scores[p]
+			scoreColor := r.pal.scoreColor(score)
+			r.printf("   %s%s%s %s %s %s%.0f%%%s %s\n",
+				r.pal.green, r.glyphs.todoDone, r.pal.reset,
+				icon, title, scoreColor, score, r.pal.reset, r.glyphs.pass)
+		case phaseFailed:
+			score := r.scores[p]
+			r.printf("   %s%s%s %s %s %s%.0f%%%s %s\n",
+				r.pal.red, r.glyphs.todoDone, r.pal.reset,
+				icon, title, r.pal.red, score, r.pal.reset, r.glyphs.fail)
+		default: // phasePending
+			r.printf("   %s%s %s %s%s\n", r.pal.dim, r.glyphs.todoPend, icon, title, r.pal.reset)
+		}
+	}
+}
+
+// renderSubSteps prints sub-steps for the given phase. Completed sub-steps
+// show ☑, the current active step shows ▸, and future steps show ☐.
+func (r *cliRenderer) renderSubSteps(phase state.Phase) {
+	steps := phaseSubSteps[phase]
+	done := r.doneSteps[phase]
+	doneSet := make(map[string]bool, len(done))
+	for _, d := range done {
+		doneSet[d] = true
+	}
+
+	for _, step := range steps {
+		label := stepLabel(step)
+		if doneSet[step] {
+			r.printf("     %s%s%s %s\n", r.pal.green, r.glyphs.todoDone, r.pal.reset, label)
+		} else if step == r.activeStep {
+			r.printf("     %s%s%s %s\n", r.pal.cyan, r.glyphs.todoActive, r.pal.reset, label)
+		} else {
+			r.printf("     %s%s %s%s\n", r.pal.dim, r.glyphs.todoPend, label, r.pal.reset)
+		}
+	}
+}
+
+// stepLabel returns a human-friendly label for a sub-step identifier.
+func stepLabel(step string) string {
+	switch step {
+	case "generating plan":
+		return "Generate plan"
+	case "judging plan":
+		return "Judge plan"
+	case "coding":
+		return "Write code"
+	case "judging code":
+		return "Judge code"
+	case "reviewing":
+		return "Quality review"
+	default:
+		return step
+	}
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

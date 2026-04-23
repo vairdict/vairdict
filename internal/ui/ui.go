@@ -104,6 +104,12 @@ type Renderer interface {
 	// PhaseStart prints the section header for a phase.
 	PhaseStart(phase state.Phase)
 
+	// StepUpdate records a sub-step within the active phase. The step
+	// string is one of the values emitted by phase.OnProgress (e.g.
+	// "generating plan", "judging plan", "coding", "reviewing").
+	// Renderers may use this to show sub-step progress in the checklist.
+	StepUpdate(phase state.Phase, step string)
+
 	// PhaseLoop prints one loop's progress line within a phase.
 	PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool)
 
