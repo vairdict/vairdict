@@ -47,7 +47,7 @@ func TestJudge_BaselineViolationForcedBlocking_UnderPermissiveConfig(t *testing.
 	}
 	judge := New(fake, cfg)
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestJudge_NonBaselineP1StillGovernedByConfig(t *testing.T) {
 	}
 	judge := New(fake, cfg)
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestJudge_Pass_NoGapsScoresFull(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes\n3. Write tests")
+	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes\n3. Write tests", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestJudge_Fail_BlockingGapsDriveScoreDown(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers")
+	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestJudge_BlockingIgnoresLLMOpinion(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestJudge_AccumulatedP2sDragScoreBelowThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestJudge_PassTrueAtExactThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestJudge_P3GapsDeferred(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestJudge_ClientError(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	_, err := judge.Judge(context.Background(), "intent", "plan")
+	_, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err == nil {
 		t.Fatal("expected error when client fails")
 	}
@@ -300,7 +300,7 @@ func TestJudge_CustomSeverityConfig(t *testing.T) {
 	}
 
 	judge := New(fake, cfg)
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestJudge_EmptyGapsAndQuestions(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestJudge_SummaryRoundTrip(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -379,5 +379,69 @@ func TestJudge_SystemPromptIncludesFewShotExamples(t *testing.T) {
 		if !strings.Contains(systemPrompt, needle) {
 			t.Errorf("system prompt missing few-shot anchor %q", needle)
 		}
+	}
+}
+
+func TestJudge_AcknowledgedAssumptionsInPrompt(t *testing.T) {
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{},
+		},
+	}
+
+	judge := New(fake, defaultCfg())
+	assumptions := []state.Assumption{
+		{Description: "database choice unclear", Severity: state.SeverityP2, Phase: state.PhasePlan},
+		{Description: "caching strategy TBD", Severity: state.SeverityP2, Phase: state.PhasePlan},
+	}
+
+	_, err := judge.Judge(context.Background(), "intent", "plan", assumptions)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
+	}
+	prompt := fake.Calls[0].Prompt
+	if !strings.Contains(prompt, "Acknowledged Assumptions") {
+		t.Error("expected prompt to contain Acknowledged Assumptions section")
+	}
+	if !strings.Contains(prompt, "database choice unclear") {
+		t.Error("expected prompt to contain first assumption")
+	}
+	if !strings.Contains(prompt, "caching strategy TBD") {
+		t.Error("expected prompt to contain second assumption")
+	}
+	if !strings.Contains(prompt, "do not re-flag") {
+		t.Error("expected prompt to instruct judge not to re-flag")
+	}
+}
+
+func TestJudge_ReflaggedGapHalvedPenalty(t *testing.T) {
+	// When the judge re-flags an already-acknowledged P2 gap, its
+	// penalty should be halved (5 instead of 10).
+	fake := &claude.FakeClient{
+		Response: state.Verdict{
+			Gaps: []state.Gap{
+				{Severity: state.SeverityP2, Description: "database choice unclear"},
+				{Severity: state.SeverityP2, Description: "new naming concern"},
+			},
+		},
+	}
+
+	judge := New(fake, defaultCfg())
+	acknowledged := []state.Assumption{
+		{Description: "database choice unclear", Severity: state.SeverityP2},
+	}
+
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", acknowledged)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 100 - 5 (halved re-flag) - 10 (new) = 85
+	if verdict.Score != 85 {
+		t.Errorf("expected score 85 (halved re-flag penalty), got %f", verdict.Score)
 	}
 }

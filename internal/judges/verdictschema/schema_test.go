@@ -104,6 +104,68 @@ func TestHasBlockingGap(t *testing.T) {
 	}
 }
 
+func TestIsReflagged(t *testing.T) {
+	ack := []state.Assumption{
+		{Description: "database choice unclear", Severity: state.SeverityP2},
+		{Description: "caching strategy not defined", Severity: state.SeverityP2},
+	}
+
+	tests := []struct {
+		name string
+		gap  state.Gap
+		want bool
+	}{
+		{"exact match", state.Gap{Description: "database choice unclear"}, true},
+		{"gap contains assumption", state.Gap{Description: "the database choice unclear — still ambiguous"}, true},
+		{"assumption contains gap", state.Gap{Description: "caching strategy"}, true},
+		{"case insensitive", state.Gap{Description: "Database Choice Unclear"}, true},
+		{"no match", state.Gap{Description: "missing error handling"}, false},
+		{"empty description", state.Gap{Description: ""}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsReflagged(tt.gap, ack); got != tt.want {
+				t.Errorf("IsReflagged(%q) = %v, want %v", tt.gap.Description, got, tt.want)
+			}
+		})
+	}
+
+	// Empty acknowledged list should never match.
+	if IsReflagged(state.Gap{Description: "anything"}, nil) {
+		t.Error("expected no match with nil acknowledged list")
+	}
+}
+
+func TestComputeScoreWithAcknowledged_HalvesPenalty(t *testing.T) {
+	ack := []state.Assumption{
+		{Description: "database choice unclear", Severity: state.SeverityP2},
+	}
+	gaps := []state.Gap{
+		{Severity: state.SeverityP2, Description: "database choice unclear"},  // re-flagged: 10/2 = 5
+		{Severity: state.SeverityP2, Description: "new concern about naming"}, // fresh: 10
+	}
+
+	got := ComputeScoreWithAcknowledged(gaps, ack)
+	// 100 - 5 - 10 = 85
+	if got != 85 {
+		t.Errorf("expected 85, got %f", got)
+	}
+}
+
+func TestComputeScoreWithAcknowledged_NoAcknowledged(t *testing.T) {
+	gaps := []state.Gap{
+		{Severity: state.SeverityP2, Description: "a"},
+		{Severity: state.SeverityP2, Description: "b"},
+	}
+
+	withAck := ComputeScoreWithAcknowledged(gaps, nil)
+	plain := ComputeScore(gaps)
+	if withAck != plain {
+		t.Errorf("expected identical to ComputeScore (%f), got %f", plain, withAck)
+	}
+}
+
 func TestVerdictTool_SchemaIsValidJSON(t *testing.T) {
 	tool := VerdictTool("test")
 	if tool.Name != ToolName {
