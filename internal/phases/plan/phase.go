@@ -109,7 +109,8 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 		}
 
 		// Build the planner prompt.
-		prompt := buildPlannerPrompt(task.Intent, lastFeedback, task.Assumptions, task.HardConstraints)
+		prompt := buildPlannerPrompt(task.Intent, lastFeedback, task.Assumptions, task.HardConstraints,
+			state.RewindContextsFor(task.RewindContexts, state.PhasePlan))
 
 		// Call the planner agent.
 		p.notify(loop+1, p.cfg.MaxLoops, "generating plan", 0, false, nil)
@@ -226,12 +227,28 @@ func (p *PlanPhase) processGaps(task *state.Task, gaps []state.Gap) {
 }
 
 // buildPlannerPrompt constructs the prompt for the planner agent.
-func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assumption, hardConstraints []string) string {
+//
+// When rewindContexts is non-empty, an explicit Rewind Context block is
+// emitted ahead of the hard constraints. The block uses the exact
+// "Previous attempt failed because X. You may not reproduce approach Y.
+// Your plan must explicitly address Z." framing from issue #86 —
+// without that constraint, successive rewinds tend to converge on the
+// same plan and the outer loop spins instead of terminating.
+func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assumption, hardConstraints []string, rewindContexts []state.RewindContext) string {
 	var b strings.Builder
 
 	b.WriteString("## Task Intent\n")
 	b.WriteString(intent)
 	b.WriteString("\n")
+
+	if len(rewindContexts) > 0 {
+		b.WriteString("\n## Rewind Context (previous outer cycles)\n")
+		b.WriteString("Earlier plan→code→quality cycles failed and the outer loop rewound back to plan. ")
+		b.WriteString("You must NOT reproduce the approaches below. Your new plan must explicitly address every failure listed.\n")
+		for _, rc := range rewindContexts {
+			rc.RenderPromptBlock(&b)
+		}
+	}
 
 	if len(hardConstraints) > 0 {
 		b.WriteString("\n## Hard Constraints (non-negotiable)\n")

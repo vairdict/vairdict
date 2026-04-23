@@ -14,7 +14,7 @@ import (
 func TestBuildCoderPrompt_IncludesBaseline(t *testing.T) {
 	// #84: the coder must see the non-negotiable standards so it doesn't
 	// write code that would be flagged during quality.
-	prompt := buildCoderPrompt("do stuff", "step 1", "", nil)
+	prompt := buildCoderPrompt("do stuff", "step 1", "", nil, nil)
 	if !strings.Contains(prompt, standards.Block) {
 		t.Error("coder prompt must include the baseline standards block")
 	}
@@ -228,7 +228,7 @@ func TestRun_AttemptsStored(t *testing.T) {
 func TestBuildCoderPrompt(t *testing.T) {
 	prompt := buildCoderPrompt("intent", "plan", "fix tests", []state.Assumption{
 		{Severity: state.SeverityP2, Description: "assumed X"},
-	})
+	}, nil)
 
 	if !containsStr(prompt, "intent") {
 		t.Error("prompt should contain intent")
@@ -245,6 +245,104 @@ func TestBuildCoderPrompt(t *testing.T) {
 	if !containsStr(prompt, "Avoid duplicating logic") {
 		t.Error("prompt should contain code-reuse guidance")
 	}
+}
+
+func TestBuildCoderPrompt_WithRewindContext(t *testing.T) {
+	// #86: when the outer loop rewinds to code, the coder must see
+	// structured context — root cause, prior approach, what to address —
+	// with the mandated framing. Shallow "fix these gaps" feedback
+	// alone lets the coder regenerate the same broken approach.
+	contexts := []state.RewindContext{
+		{
+			Cycle:         2,
+			Target:        state.PhaseCode,
+			RootCause:     "retry loop grew unbounded",
+			TriedApproach: "wrap in for-range without cap",
+			MustAddress:   []string{"cap retries at 3"},
+			Failure:       []string{"[P0] TestRetryLimit failed"},
+		},
+	}
+	prompt := buildCoderPrompt("intent", "plan", "", nil, contexts)
+
+	if !strings.Contains(prompt, "Rewind Context") {
+		t.Error("expected rewind context section header")
+	}
+	if !strings.Contains(prompt, "Previous attempt failed because: retry loop grew unbounded") {
+		t.Error("expected the mandated 'failed because X' framing")
+	}
+	if !strings.Contains(prompt, "You may not reproduce approach") {
+		t.Error("expected the mandated 'may not reproduce' framing")
+	}
+	if !strings.Contains(prompt, "wrap in for-range without cap") {
+		t.Error("expected prior approach text in the 'may not reproduce' block")
+	}
+	if !strings.Contains(prompt, "must explicitly address") {
+		t.Error("expected the mandated 'must explicitly address' framing")
+	}
+	if !strings.Contains(prompt, "cap retries at 3") {
+		t.Error("expected MustAddress entries rendered into the prompt")
+	}
+	if !strings.Contains(prompt, "TestRetryLimit failed") {
+		t.Error("expected observed failure list rendered into the prompt")
+	}
+}
+
+func TestCodePhase_RewindContextPropagatedToCoder(t *testing.T) {
+	// End-to-end: when the task already carries a code-targeted rewind
+	// context, the very next coder invocation must see it in the prompt.
+	// Plan-targeted entries must not leak into the coder prompt.
+	coder := &fakeCoder{results: []state.AgentResult{{Output: "done"}}}
+	judge := &fakeJudge{verdicts: []*state.Verdict{{Score: 100, Pass: true}}}
+
+	task := codingTask()
+	task.RewindContexts = []state.RewindContext{
+		{
+			Cycle:       1,
+			Target:      state.PhaseCode,
+			RootCause:   "previous code crashed on nil map",
+			MustAddress: []string{"guard map writes"},
+		},
+		{
+			Cycle:     1,
+			Target:    state.PhasePlan,
+			RootCause: "plan omitted the cache layer",
+		},
+	}
+
+	phase := New(coder, judge, defaultCfg(), "/work")
+	// Capture prompt via a wrapping coder.
+	capture := &capturingCoder{inner: coder}
+	phase.coder = capture
+
+	_, err := phase.Run(context.Background(), task, "the plan")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(capture.prompts) != 1 {
+		t.Fatalf("expected 1 coder call, got %d", len(capture.prompts))
+	}
+	prompt := capture.prompts[0]
+	if !containsStr(prompt, "previous code crashed on nil map") {
+		t.Error("expected code-targeted rewind context in coder prompt")
+	}
+	if !containsStr(prompt, "guard map writes") {
+		t.Error("expected code-targeted MustAddress in coder prompt")
+	}
+	if containsStr(prompt, "plan omitted the cache layer") {
+		t.Error("plan-targeted rewind context must not leak into coder prompt")
+	}
+}
+
+// capturingCoder wraps another Coder and records every prompt passed
+// to Run, so tests can assert on the exact prompt the phase built.
+type capturingCoder struct {
+	inner   Coder
+	prompts []string
+}
+
+func (c *capturingCoder) Run(ctx context.Context, prompt string, workDir string) (state.AgentResult, error) {
+	c.prompts = append(c.prompts, prompt)
+	return c.inner.Run(ctx, prompt, workDir)
 }
 
 func containsStr(s, substr string) bool {

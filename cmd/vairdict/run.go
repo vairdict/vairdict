@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -665,19 +666,30 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 			})
 		}
 
+		qualityVerdict := lastVerdictForPhase(task, state.PhaseQuality)
 		switch qualityResult.ReturnTo {
 		case state.ReturnToCode:
+			// The coder's "approach" is the diff it produced, not the
+			// plan it worked from — the plan survives into the next
+			// code run untouched, so telling the coder not to reproduce
+			// the plan would be wrong. The diff captures what actually
+			// failed and must change.
+			task.RewindContexts = append(task.RewindContexts,
+				buildRewindContext(cycle+1, state.PhaseCode, qualityVerdict, qualityResult.Diff))
 			if err := task.Rewind(state.PhaseCode); err != nil {
 				r.Error(err)
 				return fmt.Errorf("rewinding to code: %w", err)
 			}
 			slog.Info("outer loop rewinding to code",
 				"task_id", task.ID, "cycle", cycle+1,
+				"rewind_contexts", len(task.RewindContexts),
 			)
 			continue
 		case state.ReturnToPlan:
 			task.HardConstraints = append(task.HardConstraints,
-				buildQualityHardConstraints(lastVerdictForPhase(task, state.PhaseQuality))...)
+				buildQualityHardConstraints(qualityVerdict)...)
+			task.RewindContexts = append(task.RewindContexts,
+				buildRewindContext(cycle+1, state.PhasePlan, qualityVerdict, planResult.Plan))
 			if err := task.Rewind(state.PhasePlan); err != nil {
 				r.Error(err)
 				return fmt.Errorf("rewinding to plan: %w", err)
@@ -686,6 +698,7 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 			slog.Info("outer loop rewinding to plan",
 				"task_id", task.ID, "cycle", cycle+1,
 				"hard_constraints", len(task.HardConstraints),
+				"rewind_contexts", len(task.RewindContexts),
 			)
 			continue
 		}
@@ -787,6 +800,63 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 	}
 
 	r.RunComplete(task.ID)
+	return nil
+}
+
+// buildRewindContext packages the quality judge's verdict into a
+// structured RewindContext for the planner or coder. priorApproach is
+// whatever the next attempt must not reproduce: the prior plan for a
+// ReturnToPlan rewind, the prior code diff for a ReturnToCode rewind.
+// Every blocking gap becomes a MustAddress entry; every gap (blocking
+// or not) becomes a Failure entry so the next attempt sees the
+// symptoms, not just the diagnosis.
+func buildRewindContext(cycle int, target state.Phase, v *state.Verdict, priorApproach string) state.RewindContext {
+	rc := state.RewindContext{
+		Cycle:         cycle,
+		Target:        target,
+		TriedApproach: priorApproach,
+		CreatedAt:     time.Now(),
+	}
+	if v == nil {
+		return rc
+	}
+	if strings.TrimSpace(v.Summary) != "" {
+		rc.RootCause = v.Summary
+	} else if g := pickDiagnosisGap(v.Gaps); g != nil {
+		// Fall back to a gap description when the judge didn't write a
+		// summary. Prefix with severity so a P3 gap can't masquerade as
+		// the blocking diagnosis when it ends up being the only one.
+		rc.RootCause = fmt.Sprintf("[%s] %s", g.Severity, g.Description)
+	}
+	for _, g := range v.Gaps {
+		line := fmt.Sprintf("[%s] %s", g.Severity, g.Description)
+		if g.File != "" {
+			if g.Line > 0 {
+				line = fmt.Sprintf("%s (%s:%d)", line, g.File, g.Line)
+			} else {
+				line = fmt.Sprintf("%s (%s)", line, g.File)
+			}
+		}
+		rc.Failure = append(rc.Failure, line)
+		if g.Blocking {
+			rc.MustAddress = append(rc.MustAddress, g.Description)
+		}
+	}
+	return rc
+}
+
+// pickDiagnosisGap picks the most representative gap to use as a root-
+// cause fallback: the first blocking gap if any exists, else the first
+// gap. Returns nil when the slice is empty.
+func pickDiagnosisGap(gaps []state.Gap) *state.Gap {
+	for i := range gaps {
+		if gaps[i].Blocking {
+			return &gaps[i]
+		}
+	}
+	if len(gaps) > 0 {
+		return &gaps[0]
+	}
 	return nil
 }
 

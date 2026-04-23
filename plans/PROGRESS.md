@@ -13,10 +13,10 @@ Update this file when opening, completing, or blocking an issue.
 - #90 cmd/resume: resume interrupted run from last checkpoint
 - #91 cmd/interactive: status, notes, pause/continue during execution
 - #82 perf: load test 5 concurrent tasks
-- #86 state/rewind-context: structured failure context propagation (unblocked by #87)
 
 ## In Progress
 - #87 state/rewind: verdict ReturnTo field + phase rewind in outer loop
+- #86 state/rewind-context: structured failure context propagation (unblocked by #87)
 
 ## Blocked
 

@@ -1047,6 +1047,139 @@ func TestRunOrchestration_CycleBudgetExhausted(t *testing.T) {
 	}
 }
 
+func TestRunOrchestration_QualityReturnToCode_AppendsRewindContext(t *testing.T) {
+	t.Parallel()
+	// #86: on every rewind the orchestrator must build a structured
+	// RewindContext from the quality verdict and append it to the task
+	// so the next attempt doesn't reproduce the failed approach.
+	b := newOrchBundle()
+	b.plan.result = &planphase.PhaseResult{
+		Pass: true, Loops: 1, LastScore: 90, Plan: "approved plan v1",
+	}
+	b.quality.results = []*qualityphase.PhaseResult{
+		{ReturnTo: state.ReturnToCode, Loops: 1, LastScore: 50, Diff: "--- a/main.go\n+++ b/main.go\n@@ retry loop @@"},
+		{Pass: true, Loops: 1, LastScore: 95, Diff: "diff-2"},
+	}
+	b.quality.gapsByCall = [][]state.Gap{
+		{{Severity: state.SeverityP0, Description: "race in retry loop", Blocking: true}},
+		nil,
+	}
+	task := state.NewTask("t-rc", "intent")
+	r := &fakeRenderer{}
+
+	if err := runOrchestration(context.Background(), b.deps(), task, r); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(task.RewindContexts) != 1 {
+		t.Fatalf("expected 1 rewind context after a single rewind to code, got %d", len(task.RewindContexts))
+	}
+	rc := task.RewindContexts[0]
+	if rc.Target != state.PhaseCode {
+		t.Errorf("expected Target=code, got %s", rc.Target)
+	}
+	if rc.Cycle != 1 {
+		t.Errorf("expected Cycle=1, got %d", rc.Cycle)
+	}
+	if rc.RootCause == "" {
+		t.Error("expected RootCause populated from quality verdict")
+	}
+	// On ReturnToCode, TriedApproach must be the code diff — what the
+	// coder produced — not the plan it worked against. Without that,
+	// the next code run can regenerate the same broken implementation.
+	if !strings.Contains(rc.TriedApproach, "retry loop") {
+		t.Errorf("expected prior code diff recorded as TriedApproach, got %q", rc.TriedApproach)
+	}
+	if strings.Contains(rc.TriedApproach, "approved plan v1") {
+		t.Error("TriedApproach on a ReturnToCode rewind must be the diff, not the plan")
+	}
+	if len(rc.MustAddress) == 0 {
+		t.Error("expected blocking gap recorded in MustAddress")
+	}
+}
+
+func TestRunOrchestration_MultipleRewindsAccumulateContext(t *testing.T) {
+	t.Parallel()
+	// #86 acceptance: multiple rewinds must accumulate context (no
+	// amnesia). Two successive code rewinds followed by a pass → the
+	// task ends with two distinct rewind contexts and the coder sees
+	// the latest two on its final call.
+	b := newOrchBundle()
+	b.plan.result = &planphase.PhaseResult{
+		Pass: true, Loops: 1, LastScore: 90, Plan: "plan v1",
+	}
+	b.quality.results = []*qualityphase.PhaseResult{
+		{ReturnTo: state.ReturnToCode, Loops: 1, LastScore: 40, Diff: "d1"},
+		{ReturnTo: state.ReturnToCode, Loops: 1, LastScore: 55, Diff: "d2"},
+		{Pass: true, Loops: 1, LastScore: 95, Diff: "d3"},
+	}
+	b.quality.gapsByCall = [][]state.Gap{
+		{{Severity: state.SeverityP0, Description: "first failure", Blocking: true}},
+		{{Severity: state.SeverityP0, Description: "second failure", Blocking: true}},
+		nil,
+	}
+	task := state.NewTask("t-acc", "intent")
+	r := &fakeRenderer{}
+
+	if err := runOrchestration(context.Background(), b.deps(), task, r); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(task.RewindContexts) != 2 {
+		t.Fatalf("expected 2 rewind contexts accumulated, got %d", len(task.RewindContexts))
+	}
+	if task.RewindContexts[0].Cycle != 1 || task.RewindContexts[1].Cycle != 2 {
+		t.Errorf("expected cycles [1,2], got [%d,%d]", task.RewindContexts[0].Cycle, task.RewindContexts[1].Cycle)
+	}
+	if task.RewindContexts[0].RootCause == task.RewindContexts[1].RootCause {
+		t.Error("each rewind must record its own distinct root cause — no amnesia")
+	}
+	for _, rc := range task.RewindContexts {
+		if rc.Target != state.PhaseCode {
+			t.Errorf("expected Target=code for every rewind, got %s", rc.Target)
+		}
+	}
+}
+
+func TestRunOrchestration_QualityReturnToPlan_AppendsRewindContext(t *testing.T) {
+	t.Parallel()
+	// On a ReturnToPlan rewind the orchestrator must build a
+	// plan-targeted RewindContext AND keep the HardConstraints behavior
+	// intact — the two mechanisms coexist: HardConstraints are the
+	// non-negotiable list, RewindContext is the rich "why + what not
+	// to reproduce" block.
+	b := newOrchBundle()
+	b.plan.results = []*planphase.PhaseResult{
+		{Pass: true, Loops: 1, LastScore: 90, Plan: "plan v1"},
+		{Pass: true, Loops: 1, LastScore: 92, Plan: "plan v2"},
+	}
+	b.quality.results = []*qualityphase.PhaseResult{
+		{ReturnTo: state.ReturnToPlan, Loops: 1, LastScore: 30, Diff: "d1"},
+		{Pass: true, Loops: 1, LastScore: 95, Diff: "d2"},
+	}
+	b.quality.gapsByCall = [][]state.Gap{
+		{{Severity: state.SeverityP0, Description: "plan too narrow", Blocking: true}},
+		nil,
+	}
+	task := state.NewTask("t-rp", "intent")
+	r := &fakeRenderer{}
+
+	if err := runOrchestration(context.Background(), b.deps(), task, r); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(task.RewindContexts) != 1 {
+		t.Fatalf("expected 1 rewind context, got %d", len(task.RewindContexts))
+	}
+	rc := task.RewindContexts[0]
+	if rc.Target != state.PhasePlan {
+		t.Errorf("expected Target=plan, got %s", rc.Target)
+	}
+	if !strings.Contains(rc.TriedApproach, "plan v1") {
+		t.Errorf("expected prior plan in TriedApproach, got %q", rc.TriedApproach)
+	}
+	if len(task.HardConstraints) == 0 {
+		t.Error("HardConstraints should still be populated alongside RewindContext")
+	}
+}
+
 func TestRunOrchestration_PostVerdictFailure_DoesNotFailRun(t *testing.T) {
 	t.Parallel()
 	b := newOrchBundle()

@@ -73,6 +73,7 @@ func (s *Store) migrate() error {
 		depends_on TEXT NOT NULL DEFAULT '[]',
 		priority   TEXT NOT NULL DEFAULT 'normal',
 		hard_constraints TEXT NOT NULL DEFAULT '[]',
+		rewind_contexts TEXT NOT NULL DEFAULT '[]',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	);
@@ -91,6 +92,7 @@ func (s *Store) migrate() error {
 		{"depends_on", `ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'`},
 		{"priority", `ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`},
 		{"hard_constraints", `ALTER TABLE tasks ADD COLUMN hard_constraints TEXT NOT NULL DEFAULT '[]'`},
+		{"rewind_contexts", `ALTER TABLE tasks ADD COLUMN rewind_contexts TEXT NOT NULL DEFAULT '[]'`},
 	} {
 		if _, err := s.db.Exec(alter.stmt); err != nil && !isDuplicateColumnErr(err) {
 			return fmt.Errorf("adding %s column: %w", alter.column, err)
@@ -134,6 +136,10 @@ func (s *Store) CreateTask(t *Task) error {
 	if err != nil {
 		return fmt.Errorf("marshaling hard_constraints: %w", err)
 	}
+	rewindContextsJSON, err := json.Marshal(t.RewindContexts)
+	if err != nil {
+		return fmt.Errorf("marshaling rewind_contexts: %w", err)
+	}
 
 	priority := t.Priority
 	if priority == "" {
@@ -141,11 +147,11 @@ func (s *Store) CreateTask(t *Task) error {
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO tasks (id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Intent, string(t.State), string(t.Phase),
 		string(loopJSON), string(assumptionsJSON), string(attemptsJSON), string(dependsOnJSON),
-		priority, string(hardConstraintsJSON),
+		priority, string(hardConstraintsJSON), string(rewindContextsJSON),
 		t.CreatedAt.Format(time.RFC3339Nano), t.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -157,7 +163,7 @@ func (s *Store) CreateTask(t *Task) error {
 // GetTask retrieves a task by ID. Returns sql.ErrNoRows if not found.
 func (s *Store) GetTask(id string) (*Task, error) {
 	row := s.db.QueryRow(
-		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, created_at, updated_at
+		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at
 		 FROM tasks WHERE id = ?`, id,
 	)
 	return s.scanTask(row)
@@ -185,6 +191,10 @@ func (s *Store) UpdateTask(t *Task) error {
 	if err != nil {
 		return fmt.Errorf("marshaling hard_constraints: %w", err)
 	}
+	rewindContextsJSON, err := json.Marshal(t.RewindContexts)
+	if err != nil {
+		return fmt.Errorf("marshaling rewind_contexts: %w", err)
+	}
 
 	priority := t.Priority
 	if priority == "" {
@@ -192,11 +202,11 @@ func (s *Store) UpdateTask(t *Task) error {
 	}
 
 	result, err := s.db.Exec(
-		`UPDATE tasks SET intent=?, state=?, phase=?, loop_count=?, assumptions=?, attempts=?, depends_on=?, priority=?, hard_constraints=?, updated_at=?
+		`UPDATE tasks SET intent=?, state=?, phase=?, loop_count=?, assumptions=?, attempts=?, depends_on=?, priority=?, hard_constraints=?, rewind_contexts=?, updated_at=?
 		 WHERE id=?`,
 		t.Intent, string(t.State), string(t.Phase),
 		string(loopJSON), string(assumptionsJSON), string(attemptsJSON), string(dependsOnJSON),
-		priority, string(hardConstraintsJSON),
+		priority, string(hardConstraintsJSON), string(rewindContextsJSON),
 		t.UpdatedAt.Format(time.RFC3339Nano), t.ID,
 	)
 	if err != nil {
@@ -221,12 +231,12 @@ func (s *Store) ListTasks(filterState TaskState) ([]*Task, error) {
 
 	if filterState == "" {
 		rows, err = s.db.Query(
-			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, created_at, updated_at
+			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at
 			 FROM tasks ORDER BY created_at ASC`,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, created_at, updated_at
+			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at
 			 FROM tasks WHERE state = ? ORDER BY created_at ASC`,
 			string(filterState),
 		)
@@ -273,13 +283,14 @@ func (s *Store) scanFromScanner(sc scanner) (*Task, error) {
 		dependsOnJSON       string
 		priority            string
 		hardConstraintsJSON string
+		rewindContextsJSON  string
 		createdAt           string
 		updatedAt           string
 	)
 
 	err := sc.Scan(&t.ID, &t.Intent, &state, &phase,
 		&loopJSON, &assumptionsJSON, &attemptsJSON, &dependsOnJSON, &priority,
-		&hardConstraintsJSON,
+		&hardConstraintsJSON, &rewindContextsJSON,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scanning task: %w", err)
@@ -311,6 +322,12 @@ func (s *Store) scanFromScanner(sc scanner) (*Task, error) {
 	if hardConstraintsJSON != "" {
 		if err := json.Unmarshal([]byte(hardConstraintsJSON), &t.HardConstraints); err != nil {
 			return nil, fmt.Errorf("unmarshaling hard_constraints: %w", err)
+		}
+	}
+
+	if rewindContextsJSON != "" {
+		if err := json.Unmarshal([]byte(rewindContextsJSON), &t.RewindContexts); err != nil {
+			return nil, fmt.Errorf("unmarshaling rewind_contexts: %w", err)
 		}
 	}
 
