@@ -302,7 +302,8 @@ type fakeDoneCall struct {
 
 func (f *fakeRenderer) RunStart(string, string, string) {}
 func (f *fakeRenderer) Note(string, string)             {}
-func (f *fakeRenderer) PhaseStart(state.Phase)          {}
+func (f *fakeRenderer) PhaseStart(state.Phase)              {}
+func (f *fakeRenderer) StepUpdate(state.Phase, string)      {}
 func (f *fakeRenderer) PRCreated(string)                {}
 func (f *fakeRenderer) VerdictPosted(float64, bool)     {}
 func (f *fakeRenderer) RunComplete(string)              {}

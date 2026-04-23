@@ -17,6 +17,9 @@ type glyphSet struct {
 	rule       string
 	prCreated  string
 	branchIcon string
+	todoPend   string // ☐ pending step
+	todoDone   string // ☑ completed step
+	todoActive string // ▸ currently running step
 }
 
 func unicodeGlyphs() glyphSet {
@@ -33,6 +36,9 @@ func unicodeGlyphs() glyphSet {
 		rule:       "─",
 		prCreated:  "✅",
 		branchIcon: "↳",
+		todoPend:   "☐",
+		todoDone:   "☑",
+		todoActive: "▸",
 	}
 }
 
@@ -50,6 +56,9 @@ func asciiGlyphs() glyphSet {
 		rule:       "-",
 		prCreated:  "[OK]",
 		branchIcon: "->",
+		todoPend:   "[ ]",
+		todoDone:   "[x]",
+		todoActive: "[>]",
 	}
 }
 

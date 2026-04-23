@@ -1087,7 +1087,8 @@ func phaseProgressHandler(spin *ui.Spinner, r ui.Renderer, phase state.Phase) fu
 				spin.Start()
 			}
 		} else {
-			// Step in progress — update spinner label.
+			// Step in progress — update checklist sub-step and spinner label.
+			r.StepUpdate(phase, step)
 			spin.SetLabel(fmt.Sprintf("loop %d/%d: %s", loop, max, step))
 			if !spin.IsRunning() {
 				spin.Start()

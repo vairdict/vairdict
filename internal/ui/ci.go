@@ -40,6 +40,10 @@ func (r *ciRenderer) PhaseStart(phase state.Phase) {
 	r.printf("vairdict: phase start phase=%s\n", phase)
 }
 
+func (r *ciRenderer) StepUpdate(phase state.Phase, step string) {
+	r.printf("vairdict: step phase=%s step=%s\n", phase, step)
+}
+
 func (r *ciRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool) {
 	r.printf("vairdict: phase loop phase=%s loop=%d/%d score=%.0f pass=%v\n", phase, loop, max, score, pass)
 }
