@@ -822,18 +822,11 @@ func buildRewindContext(cycle int, target state.Phase, v *state.Verdict, priorAp
 	}
 	if strings.TrimSpace(v.Summary) != "" {
 		rc.RootCause = v.Summary
-	} else if len(v.Gaps) > 0 {
-		// Fall back to the first blocking gap, then any gap, as the
-		// one-line diagnosis when the judge didn't write a summary.
-		for _, g := range v.Gaps {
-			if g.Blocking {
-				rc.RootCause = g.Description
-				break
-			}
-		}
-		if rc.RootCause == "" {
-			rc.RootCause = v.Gaps[0].Description
-		}
+	} else if g := pickDiagnosisGap(v.Gaps); g != nil {
+		// Fall back to a gap description when the judge didn't write a
+		// summary. Prefix with severity so a P3 gap can't masquerade as
+		// the blocking diagnosis when it ends up being the only one.
+		rc.RootCause = fmt.Sprintf("[%s] %s", g.Severity, g.Description)
 	}
 	for _, g := range v.Gaps {
 		line := fmt.Sprintf("[%s] %s", g.Severity, g.Description)
@@ -850,6 +843,21 @@ func buildRewindContext(cycle int, target state.Phase, v *state.Verdict, priorAp
 		}
 	}
 	return rc
+}
+
+// pickDiagnosisGap picks the most representative gap to use as a root-
+// cause fallback: the first blocking gap if any exists, else the first
+// gap. Returns nil when the slice is empty.
+func pickDiagnosisGap(gaps []state.Gap) *state.Gap {
+	for i := range gaps {
+		if gaps[i].Blocking {
+			return &gaps[i]
+		}
+	}
+	if len(gaps) > 0 {
+		return &gaps[0]
+	}
+	return nil
 }
 
 // buildQualityHardConstraints extracts the blocking gaps from the last

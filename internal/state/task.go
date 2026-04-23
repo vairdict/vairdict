@@ -213,9 +213,12 @@ func (rc RewindContext) RenderPromptBlock(b *strings.Builder) {
 		fmt.Fprintf(b, "- Previous attempt failed because: %s\n", rc.RootCause)
 	}
 	if rc.TriedApproach != "" {
+		// Indent with plain spaces rather than a markdown blockquote
+		// prefix ('>'), so the block renders consistently across plain
+		// text, markdown viewers, and agent prompts.
 		b.WriteString("- You may not reproduce approach:\n")
 		for _, line := range strings.Split(strings.TrimRight(rc.TriedApproach, "\n"), "\n") {
-			fmt.Fprintf(b, "    > %s\n", line)
+			fmt.Fprintf(b, "      %s\n", line)
 		}
 	}
 	if len(rc.MustAddress) > 0 {
