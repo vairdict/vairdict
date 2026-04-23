@@ -15,8 +15,6 @@ Update this file when opening, completing, or blocking an issue.
 - #82 perf: load test 5 concurrent tasks
 
 ## In Progress
-- #87 state/rewind: verdict ReturnTo field + phase rewind in outer loop
-- #86 state/rewind-context: structured failure context propagation (unblocked by #87)
 
 ## Blocked
 
@@ -67,6 +65,12 @@ Update this file when opening, completing, or blocking an issue.
 - #80 queue: priority ordering + dependency resolution
 - #100 cmd: @vairdict PR mention commands (review / approve / ignore)
 - #81 conflicts: merge conflict detection
+- #87 state/rewind: verdict ReturnTo field + phase rewind in outer loop
+- #86 state/rewind-context: structured failure context propagation on rewind
+- #114 cmd: @vairdict mention commands — explain, fix, run
+- #111 cmd: @vairdict explain — answer questions about PR changes inline
+- #112 cmd: @vairdict fix — push code changes from PR comments
+- #113 cmd: @vairdict run — trigger full plan/code/quality loop from PR comment
 
 ---
 
@@ -162,6 +166,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 9/11        |
+| M5        | in progress | 14/17       |
 | M6        | not started | 0/7         |
 | M7+       | not started | —           |
