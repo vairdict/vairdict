@@ -38,7 +38,7 @@ type Planner interface {
 
 // Judge is the interface for the plan judge that evaluates plans.
 type Judge interface {
-	Judge(ctx context.Context, intent string, plan string) (*state.Verdict, error)
+	Judge(ctx context.Context, intent string, plan string, acknowledged []state.Assumption) (*state.Verdict, error)
 }
 
 // PlanPhase orchestrates the plan phase: planner agent + judge loop.
@@ -129,7 +129,7 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 
 		// Run the judge.
 		p.notify(loop+1, p.cfg.MaxLoops, "judging plan", 0, false, nil)
-		verdict, err := p.judge.Judge(ctx, task.Intent, fullPlan)
+		verdict, err := p.judge.Judge(ctx, task.Intent, fullPlan, task.Assumptions)
 		if err != nil {
 			return nil, fmt.Errorf("running plan judge: %w", err)
 		}

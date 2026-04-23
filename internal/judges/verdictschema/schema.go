@@ -6,6 +6,7 @@ package verdictschema
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/state"
@@ -139,4 +140,64 @@ func HasBlockingGap(gaps []state.Gap) bool {
 		}
 	}
 	return false
+}
+
+// IsReflagged reports whether a gap is substantially similar to an
+// already-acknowledged assumption. It uses bidirectional case-insensitive
+// substring matching: if the assumption description appears in the gap
+// description or vice versa, the gap is considered a re-flag.
+func IsReflagged(gap state.Gap, acknowledged []state.Assumption) bool {
+	if gap.Description == "" {
+		return false
+	}
+	gapLower := strings.ToLower(gap.Description)
+	for _, a := range acknowledged {
+		if a.Description == "" {
+			continue
+		}
+		aLower := strings.ToLower(a.Description)
+		if strings.Contains(gapLower, aLower) || strings.Contains(aLower, gapLower) {
+			return true
+		}
+	}
+	return false
+}
+
+// ComputeScoreWithAcknowledged returns a deterministic score like
+// ComputeScore, but halves the penalty for gaps that match an
+// already-acknowledged assumption. This prevents re-flagged advisory
+// gaps from dragging the score below the pass threshold on retries.
+func ComputeScoreWithAcknowledged(gaps []state.Gap, acknowledged []state.Assumption) float64 {
+	if len(acknowledged) == 0 {
+		return ComputeScore(gaps)
+	}
+
+	penalty := 0.0
+	for _, g := range gaps {
+		w := 0.0
+		switch g.Severity {
+		case state.SeverityP0:
+			w = weightP0
+		case state.SeverityP1:
+			w = weightP1
+		case state.SeverityP2:
+			w = weightP2
+		case state.SeverityP3:
+			w = weightP3
+		}
+		if IsReflagged(g, acknowledged) {
+			w /= 2
+		}
+		penalty += w
+	}
+
+	score := 100.0 - penalty
+	switch {
+	case score < 0:
+		return 0
+	case score > 100:
+		return 100
+	default:
+		return score
+	}
 }

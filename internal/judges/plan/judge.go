@@ -44,10 +44,12 @@ the stated intent.
 You care about correctness, clarity, and future maintenance pain. You are
 considered and deliberate — every observation earns its place. A thoughtful
 review surfaces design decisions, risks, and follow-ups — not just bugs.
-On any non-trivial plan (multiple files, new subsystem, external API
-change), 2–3 P3/P2 observations are normal; silence on such a plan almost
-certainly means you missed something worth saying. Only leave gaps empty
-when the plan is small AND genuinely has no design question worth surfacing.
+On a non-trivial plan, surfacing P3/P2 design observations is expected when
+genuine concerns exist. However, if prior concerns have been acknowledged
+(see Acknowledged Assumptions section in the user prompt when present),
+fewer new observations is the correct outcome — do not re-discover concerns
+that have already been accepted. Only leave gaps empty when there is
+genuinely no design question worth surfacing.
 
 Flag real problems (missing requirements, wrong approach, risks the
 planner should know) — and additionally surface the design-level
@@ -88,10 +90,10 @@ as a finding, use a gap.
 
 ## Examples
 
-On a substantive plan, 2–3 design observations (P3/P2) is normal — what a
-senior reviewer would write in a real plan review. Only leave gaps empty
-when the plan is small AND genuinely has no design question worth
-surfacing; never pad with nits to hit a target.
+On a substantive plan, design observations (P3/P2) are expected when genuine
+concerns exist — what a senior reviewer would raise in a real plan review.
+When Acknowledged Assumptions are present, those concerns have already been
+accepted; flag only NEW issues. Never pad with nits to hit a target.
 
 ### Example 1 — pass with texture (non-trivial plan, design observations)
 
@@ -135,8 +137,17 @@ var systemPrompt = systemPromptCore + "\n\n" + standards.Block
 // Pass is determined by whether the score meets the configured coverage
 // threshold AND there are no blocking gaps. Blocking is assigned from the
 // configured severity block-on list, not the LLM's opinion.
-func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string) (*state.Verdict, error) {
+func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, acknowledged []state.Assumption) (*state.Verdict, error) {
 	prompt := fmt.Sprintf("## Intent\n%s\n\n## Plan\n%s", intent, plan)
+
+	if len(acknowledged) > 0 {
+		prompt += "\n\n## Acknowledged Assumptions (do not re-flag)\n"
+		prompt += "These concerns were already raised in a previous loop, acknowledged by the planner, and accepted by the orchestrator. "
+		prompt += "Do NOT re-flag these as gaps unless the plan has actively regressed on them.\n"
+		for _, a := range acknowledged {
+			prompt += fmt.Sprintf("- [%s] %s\n", a.Severity, a.Description)
+		}
+	}
 
 	var verdict state.Verdict
 	tool := verdictschema.VerdictTool("Submit the plan judge verdict as a structured object. Omit score, pass, and blocking — they are computed from the gap severities.")
@@ -178,7 +189,7 @@ func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string) (*sta
 		}
 	}
 
-	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
+	verdict.Score = verdictschema.ComputeScoreWithAcknowledged(verdict.Gaps, acknowledged)
 	verdict.Pass = verdict.Score >= j.cfg.CoverageThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
 
 	return &verdict, nil
