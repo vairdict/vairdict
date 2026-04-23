@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -164,6 +165,90 @@ type Attempt struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// RewindContext captures why the outer loop rewound and what the next
+// attempt must do differently. Without it, successive rewinds have no
+// memory of earlier failures and tend to converge on the same output —
+// the loop spins instead of terminating. Every rewind builds a new
+// RewindContext from the quality verdict and appends it to the task so
+// the history survives across cycles (no amnesia). The planner and
+// coder treat the full slice as a first-class input: the prompt
+// explicitly says "Previous attempt failed because X. You may not
+// reproduce approach Y. Your plan must explicitly address Z."
+type RewindContext struct {
+	// Cycle is the outer-loop cycle number this rewind was diagnosed on
+	// (1-indexed). Lets the prompt and logs distinguish repeats.
+	Cycle int `json:"cycle"`
+	// Target is the phase the outer loop rewound to: PhasePlan or
+	// PhaseCode. Consumers filter the task's rewind history by Target
+	// when they only want contexts aimed at their phase.
+	Target Phase `json:"target"`
+	// RootCause is the quality judge's one-line diagnosis of why the
+	// attempt failed. Drives the "failed because X" line in the prompt.
+	RootCause string `json:"root_cause"`
+	// TriedApproach is a short description of what the previous attempt
+	// produced — the approach the next attempt may not reproduce.
+	TriedApproach string `json:"tried_approach,omitempty"`
+	// Failure lists the concrete symptoms the judge observed (failing
+	// checks, specific gaps). Rendered verbatim into the prompt so the
+	// next attempt has the evidence, not just the diagnosis.
+	Failure []string `json:"failure,omitempty"`
+	// MustAddress is the set of constraints the next attempt must
+	// explicitly satisfy — derived from blocking gaps. Separate from
+	// Task.HardConstraints so the context survives for the coder too,
+	// not just the planner on a ReturnToPlan.
+	MustAddress []string `json:"must_address,omitempty"`
+	// CreatedAt is when the rewind was diagnosed. Useful for ordering
+	// the audit trail when attempts span a long wall-clock window.
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// RenderPromptBlock writes a prompt-ready rendering of the rewind
+// context using the canonical "Previous attempt failed because X. You
+// may not reproduce approach Y. Your plan must explicitly address Z."
+// framing from issue #86. Every phase that consumes rewind contexts
+// (planner, coder) uses this so the framing is identical across agents.
+func (rc RewindContext) RenderPromptBlock(b *strings.Builder) {
+	fmt.Fprintf(b, "\n### Cycle %d (rewind to %s)\n", rc.Cycle, rc.Target)
+	if rc.RootCause != "" {
+		fmt.Fprintf(b, "- Previous attempt failed because: %s\n", rc.RootCause)
+	}
+	if rc.TriedApproach != "" {
+		b.WriteString("- You may not reproduce approach:\n")
+		for _, line := range strings.Split(strings.TrimRight(rc.TriedApproach, "\n"), "\n") {
+			fmt.Fprintf(b, "    > %s\n", line)
+		}
+	}
+	if len(rc.MustAddress) > 0 {
+		b.WriteString("- The next attempt must explicitly address:\n")
+		for _, m := range rc.MustAddress {
+			fmt.Fprintf(b, "    - %s\n", m)
+		}
+	}
+	if len(rc.Failure) > 0 {
+		b.WriteString("- Observed failures:\n")
+		for _, f := range rc.Failure {
+			fmt.Fprintf(b, "    - %s\n", f)
+		}
+	}
+}
+
+// RewindContextsFor returns the subset of rewind contexts targeted at
+// the given phase. Plan and code each consume only entries the outer
+// loop rewound to their phase — a ReturnToPlan rewind isn't addressed
+// to the coder, and vice versa.
+func RewindContextsFor(all []RewindContext, target Phase) []RewindContext {
+	if len(all) == 0 {
+		return nil
+	}
+	out := make([]RewindContext, 0, len(all))
+	for _, rc := range all {
+		if rc.Target == target {
+			out = append(out, rc)
+		}
+	}
+	return out
+}
+
 // Task is the core entity tracked through the VAIrdict pipeline.
 type Task struct {
 	ID     string    `json:"id"`
@@ -183,6 +268,14 @@ type Task struct {
 	// when it rewinds to Plan. The planner must satisfy them in the new
 	// plan, not just acknowledge them.
 	HardConstraints []string `json:"hard_constraints,omitempty"`
+	// RewindContexts accumulate structured failure context across every
+	// outer-loop rewind. Each entry records the cycle it was diagnosed
+	// on, the phase rewound to, and the root cause / approach / failure
+	// details the next attempt must respond to. The slice is append-only
+	// so multiple rewinds build history rather than overwriting earlier
+	// diagnoses. Planner and coder read the entries targeted at their
+	// phase to avoid reproducing failed approaches.
+	RewindContexts []RewindContext `json:"rewind_contexts,omitempty"`
 	// DependsOn lists task IDs this task waits on. The scheduler in
 	// internal/deps uses it to build the DAG; vairdict status reads it
 	// to render the graph. Empty for tasks without dependencies.

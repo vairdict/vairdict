@@ -90,6 +90,72 @@ func TestCreateAndGetTask_HardConstraintsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateAndGetTask_RewindContextsRoundTrip(t *testing.T) {
+	// #86: rewind_contexts column must persist and hydrate so structured
+	// failure context survives a process restart. Without persistence,
+	// a resumed task loses the "must not reproduce" memory and the
+	// outer loop converges on the same output.
+	store := newTestStore(t)
+	task := NewTask("task-rc", "ship it properly")
+	task.RewindContexts = []RewindContext{
+		{
+			Cycle:         1,
+			Target:        PhaseCode,
+			RootCause:     "retry loop unbounded",
+			TriedApproach: "for-range without cap",
+			MustAddress:   []string{"cap at 3"},
+			Failure:       []string{"[P0] TestRetryLimit"},
+			CreatedAt:     time.Now(),
+		},
+		{
+			Cycle:     2,
+			Target:    PhasePlan,
+			RootCause: "plan forgot observability",
+			CreatedAt: time.Now(),
+		},
+	}
+
+	if err := store.CreateTask(task); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+
+	got, err := store.GetTask("task-rc")
+	if err != nil {
+		t.Fatalf("getting task: %v", err)
+	}
+	if len(got.RewindContexts) != 2 {
+		t.Fatalf("expected 2 rewind contexts, got %d", len(got.RewindContexts))
+	}
+	if got.RewindContexts[0].RootCause != "retry loop unbounded" {
+		t.Errorf("RootCause[0] = %q, want %q", got.RewindContexts[0].RootCause, "retry loop unbounded")
+	}
+	if got.RewindContexts[0].Target != PhaseCode {
+		t.Errorf("Target[0] = %s, want code", got.RewindContexts[0].Target)
+	}
+	if len(got.RewindContexts[0].MustAddress) != 1 || got.RewindContexts[0].MustAddress[0] != "cap at 3" {
+		t.Errorf("MustAddress[0] did not round-trip: %v", got.RewindContexts[0].MustAddress)
+	}
+	if got.RewindContexts[1].Target != PhasePlan {
+		t.Errorf("Target[1] = %s, want plan", got.RewindContexts[1].Target)
+	}
+
+	// UpdateTask must also round-trip additional entries.
+	got.RewindContexts = append(got.RewindContexts, RewindContext{
+		Cycle: 3, Target: PhaseCode, RootCause: "added later",
+	})
+	got.UpdatedAt = time.Now()
+	if err := store.UpdateTask(got); err != nil {
+		t.Fatalf("updating task: %v", err)
+	}
+	refetched, err := store.GetTask("task-rc")
+	if err != nil {
+		t.Fatalf("refetching: %v", err)
+	}
+	if len(refetched.RewindContexts) != 3 {
+		t.Errorf("expected 3 rewind contexts after update, got %d", len(refetched.RewindContexts))
+	}
+}
+
 func TestGetTaskNotFound(t *testing.T) {
 	store := newTestStore(t)
 

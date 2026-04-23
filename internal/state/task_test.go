@@ -2,6 +2,7 @@ package state
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -428,6 +429,63 @@ func TestQualityReviewTransitions_IncludeRewinds(t *testing.T) {
 				t.Errorf("quality_review → %s should be allowed: %v", target, err)
 			}
 		})
+	}
+}
+
+func TestRewindContextsFor_FiltersByTarget(t *testing.T) {
+	all := []RewindContext{
+		{Cycle: 1, Target: PhasePlan, RootCause: "A"},
+		{Cycle: 1, Target: PhaseCode, RootCause: "B"},
+		{Cycle: 2, Target: PhasePlan, RootCause: "C"},
+	}
+
+	plan := RewindContextsFor(all, PhasePlan)
+	if len(plan) != 2 {
+		t.Fatalf("expected 2 plan-targeted contexts, got %d", len(plan))
+	}
+	if plan[0].RootCause != "A" || plan[1].RootCause != "C" {
+		t.Errorf("unexpected plan-targeted contexts: %+v", plan)
+	}
+
+	code := RewindContextsFor(all, PhaseCode)
+	if len(code) != 1 || code[0].RootCause != "B" {
+		t.Errorf("expected one code-targeted context B, got %+v", code)
+	}
+
+	if got := RewindContextsFor(nil, PhasePlan); got != nil {
+		t.Errorf("nil input must yield nil output, got %v", got)
+	}
+}
+
+func TestRewindContext_RenderPromptBlock_Framing(t *testing.T) {
+	// The canonical framing from issue #86 is load-bearing — if any of
+	// the three required phrases disappears the prompt no longer tells
+	// the agent what it must not reproduce, and rewinds converge.
+	rc := RewindContext{
+		Cycle:         2,
+		Target:        PhaseCode,
+		RootCause:     "missing timeout",
+		TriedApproach: "call fn without ctx",
+		MustAddress:   []string{"wire ctx into fn"},
+		Failure:       []string{"[P0] TestTimeout failed"},
+	}
+	var b strings.Builder
+	rc.RenderPromptBlock(&b)
+	out := b.String()
+
+	for _, phrase := range []string{
+		"Previous attempt failed because:",
+		"You may not reproduce approach",
+		"must explicitly address",
+		"missing timeout",
+		"call fn without ctx",
+		"wire ctx into fn",
+		"TestTimeout failed",
+		"Cycle 2",
+	} {
+		if !strings.Contains(out, phrase) {
+			t.Errorf("RenderPromptBlock must include %q — got:\n%s", phrase, out)
+		}
 	}
 }
 

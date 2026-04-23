@@ -508,7 +508,7 @@ func TestPlanPhase_ContextCancellation(t *testing.T) {
 }
 
 func TestBuildPlannerPrompt_NoFeedback(t *testing.T) {
-	prompt := buildPlannerPrompt("build an API", "", nil, nil)
+	prompt := buildPlannerPrompt("build an API", "", nil, nil, nil)
 
 	if !strings.Contains(prompt, "## Task Intent") {
 		t.Error("expected intent header")
@@ -528,7 +528,7 @@ func TestBuildPlannerPrompt_NoFeedback(t *testing.T) {
 }
 
 func TestBuildPlannerPrompt_WithFeedback(t *testing.T) {
-	prompt := buildPlannerPrompt("build an API", "missing auth", nil, nil)
+	prompt := buildPlannerPrompt("build an API", "missing auth", nil, nil, nil)
 
 	if !strings.Contains(prompt, "Previous Attempt Feedback") {
 		t.Error("expected feedback section")
@@ -542,7 +542,7 @@ func TestBuildPlannerPrompt_WithAssumptions(t *testing.T) {
 	assumptions := []state.Assumption{
 		{Description: "using PostgreSQL", Severity: state.SeverityP2, Phase: state.PhasePlan},
 	}
-	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions, nil)
+	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions, nil, nil)
 
 	if !strings.Contains(prompt, "Assumptions from Previous Loops") {
 		t.Error("expected assumptions section")
@@ -560,7 +560,7 @@ func TestBuildPlannerPrompt_WithHardConstraints(t *testing.T) {
 		"[quality judge, P0] /admin/users is not protected by auth middleware",
 		"[quality judge, P1] /admin/logs bypasses the same middleware",
 	}
-	prompt := buildPlannerPrompt("build an API", "", nil, constraints)
+	prompt := buildPlannerPrompt("build an API", "", nil, constraints, nil)
 
 	if !strings.Contains(prompt, "Hard Constraints") {
 		t.Error("expected hard constraints section")
@@ -570,6 +570,115 @@ func TestBuildPlannerPrompt_WithHardConstraints(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "/admin/users") || !strings.Contains(prompt, "/admin/logs") {
 		t.Error("expected every constraint to be rendered as its own bullet")
+	}
+}
+
+func TestBuildPlannerPrompt_WithRewindContext(t *testing.T) {
+	// #86: when the outer loop rewinds to plan, the planner must see
+	// structured context — root cause, prior approach, what to address —
+	// with the mandated framing. Without it rewinds converge on the
+	// same plan and the loop spins.
+	contexts := []state.RewindContext{
+		{
+			Cycle:         1,
+			Target:        state.PhasePlan,
+			RootCause:     "plan did not require a rate limiter",
+			TriedApproach: "step 1: add login\nstep 2: add logout",
+			MustAddress:   []string{"rate-limit /login"},
+			Failure:       []string{"[P0] brute-force possible"},
+		},
+	}
+	prompt := buildPlannerPrompt("build an API", "", nil, nil, contexts)
+
+	if !strings.Contains(prompt, "Rewind Context") {
+		t.Error("expected rewind context section header")
+	}
+	if !strings.Contains(prompt, "Previous attempt failed because: plan did not require a rate limiter") {
+		t.Error("expected the mandated 'failed because X' framing")
+	}
+	if !strings.Contains(prompt, "You may not reproduce approach") {
+		t.Error("expected the mandated 'may not reproduce' framing")
+	}
+	if !strings.Contains(prompt, "step 1: add login") {
+		t.Error("expected prior plan body to appear in the 'may not reproduce' block")
+	}
+	if !strings.Contains(prompt, "must explicitly address") {
+		t.Error("expected the mandated 'must explicitly address' framing")
+	}
+	if !strings.Contains(prompt, "rate-limit /login") {
+		t.Error("expected MustAddress entries rendered into the prompt")
+	}
+	if !strings.Contains(prompt, "brute-force possible") {
+		t.Error("expected observed failure list rendered into the prompt")
+	}
+}
+
+func TestBuildPlannerPrompt_MultipleRewindsAccumulate(t *testing.T) {
+	// Multiple outer rewinds must each appear in the prompt with their
+	// own cycle heading — no amnesia. The planner needs to see the full
+	// history to avoid oscillating between two failed approaches.
+	contexts := []state.RewindContext{
+		{Cycle: 1, Target: state.PhasePlan, RootCause: "cause A", TriedApproach: "plan A"},
+		{Cycle: 2, Target: state.PhasePlan, RootCause: "cause B", TriedApproach: "plan B"},
+	}
+	prompt := buildPlannerPrompt("build an API", "", nil, nil, contexts)
+
+	if !strings.Contains(prompt, "Cycle 1") || !strings.Contains(prompt, "Cycle 2") {
+		t.Error("expected headings for every cycle so history accumulates")
+	}
+	if !strings.Contains(prompt, "cause A") || !strings.Contains(prompt, "cause B") {
+		t.Error("expected every cycle's root cause to appear in the prompt")
+	}
+	if !strings.Contains(prompt, "plan A") || !strings.Contains(prompt, "plan B") {
+		t.Error("expected every cycle's prior approach to appear in the prompt")
+	}
+}
+
+func TestPlanPhase_RewindContextPropagatedToPlanner(t *testing.T) {
+	// End-to-end: when the task already has a RewindContext targeted at
+	// plan, the very next planner invocation must see it in the prompt.
+	planner := &multiResponseClient{
+		responses: []any{passingPlanResponse()},
+	}
+	judge := &fakeJudge{
+		verdicts: []*state.Verdict{passingVerdict()},
+	}
+
+	phase := New(planner, judge, testConfig())
+	task := newPendingTask()
+	task.RewindContexts = []state.RewindContext{
+		{
+			Cycle:       1,
+			Target:      state.PhasePlan,
+			RootCause:   "plan forgot auth",
+			MustAddress: []string{"add auth middleware"},
+		},
+		// Code-targeted entries must NOT leak into the planner prompt —
+		// the planner only sees contexts aimed at its phase.
+		{
+			Cycle:     1,
+			Target:    state.PhaseCode,
+			RootCause: "code did not handle 429",
+		},
+	}
+
+	_, err := phase.Run(context.Background(), task)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(planner.calls) != 1 {
+		t.Fatalf("expected 1 planner call, got %d", len(planner.calls))
+	}
+	prompt := planner.calls[0].prompt
+	if !strings.Contains(prompt, "plan forgot auth") {
+		t.Error("expected plan-targeted rewind context in planner prompt")
+	}
+	if !strings.Contains(prompt, "add auth middleware") {
+		t.Error("expected plan-targeted MustAddress in planner prompt")
+	}
+	if strings.Contains(prompt, "code did not handle 429") {
+		t.Error("code-targeted rewind context must not leak into planner prompt")
 	}
 }
 

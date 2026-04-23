@@ -74,7 +74,8 @@ func (p *CodePhase) Run(ctx context.Context, task *state.Task, plan string) (*Ph
 		)
 
 		// Build the coder prompt.
-		prompt := buildCoderPrompt(task.Intent, plan, lastFeedback, task.Assumptions)
+		prompt := buildCoderPrompt(task.Intent, plan, lastFeedback, task.Assumptions,
+			state.RewindContextsFor(task.RewindContexts, state.PhaseCode))
 
 		// Run the coder agent.
 		p.notify(loop+1, p.cfg.MaxLoops, "coding", 0, false, nil)
@@ -158,7 +159,15 @@ func (p *CodePhase) Run(ctx context.Context, task *state.Task, plan string) (*Ph
 	}, nil
 }
 
-func buildCoderPrompt(intent string, plan string, feedback string, assumptions []state.Assumption) string {
+// buildCoderPrompt constructs the prompt for the coder agent.
+//
+// When rewindContexts is non-empty, an explicit Rewind Context block is
+// emitted ahead of guidelines and feedback. The block uses the canonical
+// "Previous attempt failed because X. You may not reproduce approach Y.
+// Your plan must explicitly address Z." framing from issue #86 — that
+// constraint is what stops successive rewinds from converging on the
+// same code.
+func buildCoderPrompt(intent string, plan string, feedback string, assumptions []state.Assumption, rewindContexts []state.RewindContext) string {
 	var b strings.Builder
 
 	b.WriteString("## Task Intent\n")
@@ -168,6 +177,15 @@ func buildCoderPrompt(intent string, plan string, feedback string, assumptions [
 	b.WriteString("## Approved Plan\n")
 	b.WriteString(plan)
 	b.WriteString("\n")
+
+	if len(rewindContexts) > 0 {
+		b.WriteString("\n## Rewind Context (previous outer cycles)\n")
+		b.WriteString("Earlier plan→code→quality cycles failed and the outer loop rewound back to code. ")
+		b.WriteString("You must NOT reproduce the approaches below. Your implementation must explicitly address every failure listed.\n")
+		for _, rc := range rewindContexts {
+			rc.RenderPromptBlock(&b)
+		}
+	}
 
 	b.WriteString("\n")
 	b.WriteString(standards.Block)
