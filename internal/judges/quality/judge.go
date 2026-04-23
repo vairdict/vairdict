@@ -318,6 +318,12 @@ escalate.
    repo-wide gaps (e.g. "missing CI workflow", "no README section"). Gaps
    without an anchor cannot be posted as inline PR comments, so defaulting
    to file/line keeps reviewers' feedback visible where it belongs.
+   Every added ('+') line in the diff is pre-labelled "+L<n>: ..." where
+   <n> is its absolute new-file line number — copy that number verbatim
+   into "line". Do NOT count lines yourself from the @@ hunk header; use
+   the label. If the line you want to reference is unchanged context
+   (not a '+' line), pick the nearest adjacent '+' line and anchor
+   there — GitHub review comments can only attach to changed lines.
 5. For gaps with file/line, you may also set "suggestion" — the exact replacement
    code for the line(s) at that location. The suggestion is rendered as a GitHub
    suggestion block that the author can apply with one click. Rules:
@@ -493,6 +499,8 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	diffSection := diff
 	if strings.TrimSpace(diffSection) == "" {
 		diffSection = "(no diff provided — judge cannot evaluate code changes)"
+	} else {
+		diffSection = annotateDiff(diffSection)
 	}
 
 	var facts string
