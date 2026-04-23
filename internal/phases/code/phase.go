@@ -36,7 +36,7 @@ type CodePhase struct {
 	judge      Judge
 	cfg        config.CodePhaseConfig
 	workDir    string
-	OnProgress func(loop, max int, step string, score float64, pass bool)
+	OnProgress func(loop, max int, step string, score float64, pass bool, gaps []state.Gap)
 }
 
 // New creates a CodePhase with the given coder, judge, config, and work directory.
@@ -49,9 +49,9 @@ func New(coder Coder, judge Judge, cfg config.CodePhaseConfig, workDir string) *
 	}
 }
 
-func (p *CodePhase) notify(loop, max int, step string, score float64, pass bool) {
+func (p *CodePhase) notify(loop, max int, step string, score float64, pass bool, gaps []state.Gap) {
 	if p.OnProgress != nil {
-		p.OnProgress(loop, max, step, score, pass)
+		p.OnProgress(loop, max, step, score, pass, gaps)
 	}
 }
 
@@ -77,7 +77,7 @@ func (p *CodePhase) Run(ctx context.Context, task *state.Task, plan string) (*Ph
 		prompt := buildCoderPrompt(task.Intent, plan, lastFeedback, task.Assumptions)
 
 		// Run the coder agent.
-		p.notify(loop+1, p.cfg.MaxLoops, "coding", 0, false)
+		p.notify(loop+1, p.cfg.MaxLoops, "coding", 0, false, nil)
 		_, err := p.coder.Run(ctx, prompt, p.workDir)
 		if err != nil {
 			return nil, fmt.Errorf("running coder agent: %w", err)
@@ -89,13 +89,13 @@ func (p *CodePhase) Run(ctx context.Context, task *state.Task, plan string) (*Ph
 		}
 
 		// Run the judge.
-		p.notify(loop+1, p.cfg.MaxLoops, "judging code", 0, false)
+		p.notify(loop+1, p.cfg.MaxLoops, "judging code", 0, false, nil)
 		verdict, err := p.judge.Judge(ctx, p.workDir)
 		if err != nil {
 			return nil, fmt.Errorf("running code judge: %w", err)
 		}
 
-		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass)
+		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass, verdict.Gaps)
 
 		lastScore = verdict.Score
 

@@ -44,6 +44,14 @@ func (r *ciRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, 
 	r.printf("vairdict: phase loop phase=%s loop=%d/%d score=%.0f pass=%v\n", phase, loop, max, score, pass)
 }
 
+func (r *ciRenderer) PhaseLoopBlockingGaps(gaps []state.Gap) {
+	for _, g := range gaps {
+		if g.Blocking {
+			r.printf("vairdict: gap [%s] %s\n", g.Severity, g.Description)
+		}
+	}
+}
+
 func (r *ciRenderer) PhaseDone(
 	phase state.Phase,
 	outcome PhaseOutcome,

@@ -52,7 +52,7 @@ type QualityPhase struct {
 	judge      Judge
 	cfg        config.QualityPhaseConfig
 	diff       string
-	OnProgress func(loop, max int, step string, score float64, pass bool)
+	OnProgress func(loop, max int, step string, score float64, pass bool, gaps []state.Gap)
 }
 
 // New creates a QualityPhase with the given judge, config, and diff. The
@@ -67,9 +67,9 @@ func New(judge Judge, cfg config.QualityPhaseConfig, diff string) *QualityPhase 
 	}
 }
 
-func (p *QualityPhase) notify(loop, max int, step string, score float64, pass bool) {
+func (p *QualityPhase) notify(loop, max int, step string, score float64, pass bool, gaps []state.Gap) {
 	if p.OnProgress != nil {
-		p.OnProgress(loop, max, step, score, pass)
+		p.OnProgress(loop, max, step, score, pass, gaps)
 	}
 }
 
@@ -95,13 +95,13 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 			return nil, fmt.Errorf("transitioning to quality review: %w", err)
 		}
 
-		p.notify(loop+1, p.cfg.MaxLoops, "reviewing", 0, false)
+		p.notify(loop+1, p.cfg.MaxLoops, "reviewing", 0, false, nil)
 		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff)
 		if err != nil {
 			return nil, fmt.Errorf("running quality judge: %w", err)
 		}
 
-		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass)
+		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass, verdict.Gaps)
 
 		lastScore = verdict.Score
 

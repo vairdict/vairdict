@@ -999,13 +999,18 @@ func emitPhaseAttempts(r ui.Renderer, task *state.Task, phase state.Phase, maxLo
 
 // phaseProgressHandler returns a callback for phase.OnProgress that updates
 // the spinner label on step changes and emits PhaseLoop lines in real time
-// when a loop completes.
-func phaseProgressHandler(spin *ui.Spinner, r ui.Renderer, phase state.Phase) func(loop, max int, step string, score float64, pass bool) {
-	return func(loop, max int, step string, score float64, pass bool) {
+// when a loop completes. On failed loops it also renders blocking gaps so
+// the user can see *why* a loop was rejected without digging into logs.
+func phaseProgressHandler(spin *ui.Spinner, r ui.Renderer, phase state.Phase) func(loop, max int, step string, score float64, pass bool, gaps []state.Gap) {
+	return func(loop, max int, step string, score float64, pass bool, gaps []state.Gap) {
 		if step == "done" {
 			// Loop finished — stop spinner, print result, restart spinner.
 			spin.Stop()
 			r.PhaseLoop(phase, loop, max, score, pass)
+			if !pass && len(gaps) > 0 {
+				// Show blocking gaps inline so the user sees why this loop failed.
+				r.PhaseLoopBlockingGaps(gaps)
+			}
 			if !pass {
 				spin.Reset()
 				spin.SetLabel(fmt.Sprintf("loop %d/%d: retrying...", loop+1, max))
