@@ -243,12 +243,16 @@ func resumeTask(taskID string, store *state.Store, mode ui.Mode, colors ui.Color
 
 // clearPID unsets the task's PID on exit so stale pid entries don't
 // make `status` misreport a dead task as running. Called via defer from
-// resumeTask; errors are logged but do not fail the run.
+// resumeTask; errors are logged at Error level since a failure here
+// leaves a stale PID in the database that will confuse future `status`
+// calls (they will show a dead task as running). Returning the error
+// would force every caller into bool-coerced teardown for a condition
+// they can't meaningfully react to.
 func clearPID(store *state.Store, task *state.Task) {
 	task.PID = 0
 	task.UpdatedAt = time.Now()
 	if err := store.UpdateTask(task); err != nil {
-		slog.Debug("failed to clear pid", "task", task.ID, "error", err)
+		slog.Error("failed to clear pid — status may report stale running state", "task", task.ID, "error", err)
 	}
 }
 

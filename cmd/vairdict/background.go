@@ -60,10 +60,10 @@ func spawnBackground(taskID string, passthroughArgs []string, banner io.Writer) 
 	// so the parent doesn't hold the file open unnecessarily.
 	_ = logFile.Close()
 
-	fmt.Fprintf(banner, "task %s running in background (pid %d)\n", taskID, cmd.Process.Pid)
-	fmt.Fprintf(banner, "  status: vairdict status %s\n", taskID)
-	fmt.Fprintf(banner, "  logs:   vairdict logs %s -f\n", taskID)
-	fmt.Fprintf(banner, "  resume: vairdict resume %s\n", taskID)
+	_, _ = fmt.Fprintf(banner, "task %s running in background (pid %d)\n", taskID, cmd.Process.Pid)
+	_, _ = fmt.Fprintf(banner, "  status: vairdict status %s\n", taskID)
+	_, _ = fmt.Fprintf(banner, "  logs:   vairdict logs %s -f\n", taskID)
+	_, _ = fmt.Fprintf(banner, "  resume: vairdict resume %s\n", taskID)
 
 	// Release the child so the parent can exit cleanly without waiting.
 	if err := cmd.Process.Release(); err != nil {

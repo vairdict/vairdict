@@ -79,7 +79,7 @@ func showLogs(taskID string, lines int, follow bool, out io.Writer) error {
 	for {
 		line, err := reader.ReadString('\n')
 		if line != "" {
-			fmt.Fprint(out, formatLogLine(line))
+			_, _ = fmt.Fprint(out, formatLogLine(line))
 		}
 		if err == nil {
 			continue
@@ -112,7 +112,7 @@ func tailPrint(r io.Reader, lines int, out io.Writer) error {
 
 	if lines <= 0 {
 		for scanner.Scan() {
-			fmt.Fprint(out, formatLogLine(scanner.Text()+"\n"))
+			_, _ = fmt.Fprint(out, formatLogLine(scanner.Text()+"\n"))
 		}
 		return scanner.Err()
 	}
@@ -131,7 +131,7 @@ func tailPrint(r io.Reader, lines int, out io.Writer) error {
 		return fmt.Errorf("scanning log: %w", err)
 	}
 	for _, l := range ring {
-		fmt.Fprint(out, formatLogLine(l+"\n"))
+		_, _ = fmt.Fprint(out, formatLogLine(l+"\n"))
 	}
 	return nil
 }
