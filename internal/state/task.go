@@ -298,7 +298,13 @@ type Task struct {
 	// by `vairdict status` to render a RUNNING indicator via a kill(pid, 0)
 	// liveness check; stale PIDs (process died without cleanup) show as
 	// not running and the task is resumable.
-	PID       int       `json:"pid,omitempty"`
+	PID int `json:"pid,omitempty"`
+	// Notes are transient, per-phase user guidance drained from the
+	// interactive run loop (#91). Never persisted (the `json:"-"` tag
+	// keeps them out of the DB column) — consumed exactly once by the
+	// next plan or code prompt, then cleared. A fresh `vairdict run`
+	// or `resume` starts with no pending notes.
+	Notes     []string  `json:"-"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

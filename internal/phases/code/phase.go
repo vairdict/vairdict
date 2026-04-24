@@ -73,9 +73,17 @@ func (p *CodePhase) Run(ctx context.Context, task *state.Task, plan string) (*Ph
 			"max_loops", p.cfg.MaxLoops,
 		)
 
-		// Build the coder prompt.
+		// Build the coder prompt. task.Notes are user guidance queued
+		// from the interactive run loop (#91) — consume them on the
+		// first loop and clear so subsequent requeues don't repeat the
+		// same note.
 		prompt := buildCoderPrompt(task.Intent, plan, lastFeedback, task.Assumptions,
-			state.RewindContextsFor(task.RewindContexts, state.PhaseCode))
+			state.RewindContextsFor(task.RewindContexts, state.PhaseCode),
+			task.Notes)
+		if len(task.Notes) > 0 {
+			slog.Info("consumed user notes into code prompt", "task_id", task.ID, "count", len(task.Notes))
+			task.Notes = nil
+		}
 
 		// Run the coder agent.
 		p.notify(loop+1, p.cfg.MaxLoops, "coding", 0, false, nil)
@@ -167,7 +175,7 @@ func (p *CodePhase) Run(ctx context.Context, task *state.Task, plan string) (*Ph
 // Your plan must explicitly address Z." framing from issue #86 — that
 // constraint is what stops successive rewinds from converging on the
 // same code.
-func buildCoderPrompt(intent string, plan string, feedback string, assumptions []state.Assumption, rewindContexts []state.RewindContext) string {
+func buildCoderPrompt(intent string, plan string, feedback string, assumptions []state.Assumption, rewindContexts []state.RewindContext, notes []string) string {
 	var b strings.Builder
 
 	b.WriteString("## Task Intent\n")
@@ -177,6 +185,14 @@ func buildCoderPrompt(intent string, plan string, feedback string, assumptions [
 	b.WriteString("## Approved Plan\n")
 	b.WriteString(plan)
 	b.WriteString("\n")
+
+	if len(notes) > 0 {
+		b.WriteString("\n## Notes from User\n")
+		b.WriteString("The user queued the following guidance between phases. Incorporate every note into your implementation:\n")
+		for _, n := range notes {
+			fmt.Fprintf(&b, "- %s\n", n)
+		}
+	}
 
 	if len(rewindContexts) > 0 {
 		b.WriteString("\n## Rewind Context (previous outer cycles)\n")

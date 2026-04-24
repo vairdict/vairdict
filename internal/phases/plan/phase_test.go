@@ -508,7 +508,7 @@ func TestPlanPhase_ContextCancellation(t *testing.T) {
 }
 
 func TestBuildPlannerPrompt_NoFeedback(t *testing.T) {
-	prompt := buildPlannerPrompt("build an API", "", nil, nil, nil)
+	prompt := buildPlannerPrompt("build an API", "", nil, nil, nil, nil)
 
 	if !strings.Contains(prompt, "## Task Intent") {
 		t.Error("expected intent header")
@@ -528,7 +528,7 @@ func TestBuildPlannerPrompt_NoFeedback(t *testing.T) {
 }
 
 func TestBuildPlannerPrompt_WithFeedback(t *testing.T) {
-	prompt := buildPlannerPrompt("build an API", "missing auth", nil, nil, nil)
+	prompt := buildPlannerPrompt("build an API", "missing auth", nil, nil, nil, nil)
 
 	if !strings.Contains(prompt, "Previous Attempt Feedback") {
 		t.Error("expected feedback section")
@@ -542,7 +542,7 @@ func TestBuildPlannerPrompt_WithAssumptions(t *testing.T) {
 	assumptions := []state.Assumption{
 		{Description: "using PostgreSQL", Severity: state.SeverityP2, Phase: state.PhasePlan},
 	}
-	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions, nil, nil)
+	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions, nil, nil, nil)
 
 	if !strings.Contains(prompt, "Assumptions from Previous Loops") {
 		t.Error("expected assumptions section")
@@ -560,7 +560,7 @@ func TestBuildPlannerPrompt_WithHardConstraints(t *testing.T) {
 		"[quality judge, P0] /admin/users is not protected by auth middleware",
 		"[quality judge, P1] /admin/logs bypasses the same middleware",
 	}
-	prompt := buildPlannerPrompt("build an API", "", nil, constraints, nil)
+	prompt := buildPlannerPrompt("build an API", "", nil, constraints, nil, nil)
 
 	if !strings.Contains(prompt, "Hard Constraints") {
 		t.Error("expected hard constraints section")
@@ -588,7 +588,7 @@ func TestBuildPlannerPrompt_WithRewindContext(t *testing.T) {
 			Failure:       []string{"[P0] brute-force possible"},
 		},
 	}
-	prompt := buildPlannerPrompt("build an API", "", nil, nil, contexts)
+	prompt := buildPlannerPrompt("build an API", "", nil, nil, contexts, nil)
 
 	if !strings.Contains(prompt, "Rewind Context") {
 		t.Error("expected rewind context section header")
@@ -621,7 +621,7 @@ func TestBuildPlannerPrompt_MultipleRewindsAccumulate(t *testing.T) {
 		{Cycle: 1, Target: state.PhasePlan, RootCause: "cause A", TriedApproach: "plan A"},
 		{Cycle: 2, Target: state.PhasePlan, RootCause: "cause B", TriedApproach: "plan B"},
 	}
-	prompt := buildPlannerPrompt("build an API", "", nil, nil, contexts)
+	prompt := buildPlannerPrompt("build an API", "", nil, nil, contexts, nil)
 
 	if !strings.Contains(prompt, "Cycle 1") || !strings.Contains(prompt, "Cycle 2") {
 		t.Error("expected headings for every cycle so history accumulates")

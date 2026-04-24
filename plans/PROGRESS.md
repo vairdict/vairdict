@@ -10,11 +10,10 @@ Update this file when opening, completing, or blocking an issue.
 ---
 
 ## Ready to Start
-- #90 cmd/resume: resume interrupted run from last checkpoint
-- #91 cmd/interactive: status, notes, pause/continue during execution
 - #82 perf: load test 5 concurrent tasks
 
 ## In Progress
+- #91 cmd/interactive: status, notes, pause/continue during execution
 
 ## Blocked
 
@@ -71,6 +70,7 @@ Update this file when opening, completing, or blocking an issue.
 - #111 cmd: @vairdict explain — answer questions about PR changes inline
 - #112 cmd: @vairdict fix — push code changes from PR comments
 - #113 cmd: @vairdict run — trigger full plan/code/quality loop from PR comment
+- #90 cmd/resume: resume interrupted run from last checkpoint
 
 ---
 
@@ -166,6 +166,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 14/17       |
+| M5        | in progress | 15/17       |
 | M6        | not started | 0/7         |
 | M7+       | not started | —           |

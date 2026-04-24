@@ -497,20 +497,24 @@ func TestBuildQualityHardConstraints_NilVerdict(t *testing.T) {
 // the last entry once exhausted.
 
 type fakePlanRunner struct {
-	result     *planphase.PhaseResult
-	gaps       []state.Gap
-	results    []*planphase.PhaseResult
-	gapsByCall [][]state.Gap
-	err        error
-	called     bool
-	calls      int
-	lastTask   *state.Task
+	result        *planphase.PhaseResult
+	gaps          []state.Gap
+	results       []*planphase.PhaseResult
+	gapsByCall    [][]state.Gap
+	err           error
+	called        bool
+	calls         int
+	lastTask      *state.Task
+	capturedNotes []string // snapshot of task.Notes at Run() entry; used by #91 tests
 }
 
 func (f *fakePlanRunner) Run(_ context.Context, task *state.Task) (*planphase.PhaseResult, error) {
 	f.called = true
 	f.calls++
 	f.lastTask = task
+	if len(task.Notes) > 0 {
+		f.capturedNotes = append([]string(nil), task.Notes...)
+	}
 	result, gaps := f.pick()
 	if result != nil {
 		// Mimic the production plan phase's state transitions so the
