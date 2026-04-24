@@ -286,9 +286,36 @@ type Task struct {
 	// Priority is one of "high", "normal", "low". Drives dispatch order
 	// in the scheduler when multiple tasks are ready at once. Empty or
 	// missing is treated as normal.
-	Priority  string    `json:"priority,omitempty"`
+	Priority string `json:"priority,omitempty"`
+	// PlanOutput is the rendered plan text (requirements + implementation
+	// plan) produced by the plan phase. Persisted so `vairdict resume`
+	// can continue a later phase without regenerating a different plan
+	// than the one the code on the worktree branch was built from.
+	PlanOutput string `json:"plan_output,omitempty"`
+	// PID is the OS process id of the currently attached runner, or 0
+	// when no process is attached. Written when `vairdict run` (or
+	// `resume`) begins orchestration and cleared on a clean exit. Used
+	// by `vairdict status` to render a RUNNING indicator via a kill(pid, 0)
+	// liveness check; stale PIDs (process died without cleanup) show as
+	// not running and the task is resumable.
+	PID       int       `json:"pid,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// IsResumable reports whether the task is in a non-terminal state and
+// can be picked up by `vairdict resume`. Terminal states (done,
+// escalated, blocked) return false; StatePending also returns false
+// because a pending task has never started and should be launched via
+// `vairdict run`, not resumed.
+func (t *Task) IsResumable() bool {
+	switch t.State {
+	case StatePlanning, StatePlanReview,
+		StateCoding, StateCodeReview,
+		StateQuality, StateQualityReview:
+		return true
+	}
+	return false
 }
 
 // ErrInvalidTransition is returned when an invalid state transition is attempted.

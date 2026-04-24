@@ -37,14 +37,15 @@ const (
 )
 
 var (
-	issueFlags    []int
-	outputFlag    string
-	colorsFlag    string
-	asciiFlag     bool
-	envFlag       string
-	manifestFlag  string
-	dependsOnFlag []string
-	priorityFlag  string
+	issueFlags     []int
+	outputFlag     string
+	colorsFlag     string
+	asciiFlag      bool
+	envFlag        string
+	manifestFlag   string
+	dependsOnFlag  []string
+	priorityFlag   string
+	backgroundFlag bool
 )
 
 var runCmd = &cobra.Command{
@@ -115,7 +116,28 @@ Use --issue to fetch intents from GitHub issues:
 			if len(issues) > 0 {
 				issueNum = issues[0]
 			}
+
+			// --background: re-exec this binary detached so the run
+			// survives the terminal closing, then exit with a banner
+			// pointing at `status` and `logs`. The re-exec child sets
+			// VAIRDICT_FOREGROUND=1 to bypass this branch and actually
+			// do the work.
+			if backgroundFlag && !shouldRunForeground() {
+				taskID := uuid.New().String()[:8]
+				args := backgroundArgsForRun(intents, issues, envFlag, priorityFlag, dependsOnFlag)
+				// Pass the pre-generated task id through so the banner the
+				// parent prints matches the id the child uses.
+				if err := os.Setenv("VAIRDICT_TASK_ID", taskID); err != nil {
+					return fmt.Errorf("setting task id env: %w", err)
+				}
+				return spawnBackground(taskID, args, os.Stdout)
+			}
+
 			return runTask(intents[0], issueNum, mode, colors, asciiFlag, dependsOnFlag, priorityFlag)
+		}
+
+		if backgroundFlag {
+			return fmt.Errorf("--background is only supported with a single intent")
 		}
 
 		if len(dependsOnFlag) > 0 {
@@ -137,6 +159,7 @@ func init() {
 	runCmd.Flags().StringVar(&manifestFlag, "manifest", "", "path to a YAML manifest declaring multiple tasks with dependencies (see docs for format)")
 	runCmd.Flags().StringSliceVar(&dependsOnFlag, "depends-on", nil, "task ID(s) this run depends on. The new task will wait (or start blocked) until each listed task is StateDone in the store.")
 	runCmd.Flags().StringVar(&priorityFlag, "priority", "", "task priority: high|normal|low (default: normal). Higher-priority tasks are dispatched first when multiple are ready.")
+	runCmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "run detached so the task survives terminal exit. Prints the task id, then returns. Use 'vairdict status <id>' and 'vairdict logs <id> -f' to follow progress.")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -203,6 +226,7 @@ type runDeps struct {
 	conflicts    conflictChecker
 	workDir      string
 	commit       func(ctx context.Context, task *state.Task) error
+	persistTask  func(task *state.Task) error
 	onEscalation func(ctx context.Context, task *state.Task, result escalation.Result) error
 	issueNumber  int
 	autoMerge    bool
@@ -255,6 +279,10 @@ func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, wo
 		commit: func(ctx context.Context, task *state.Task) error {
 			return commitChanges(ctx, task, workDir, r)
 		},
+		persistTask: func(task *state.Task) error {
+			task.UpdatedAt = time.Now()
+			return store.UpdateTask(task)
+		},
 		onEscalation: func(ctx context.Context, task *state.Task, result escalation.Result) error {
 			return escalateAndExit(ctx, task, result, cfg.Escalation, ghClient)
 		},
@@ -295,8 +323,14 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 		return err
 	}
 
-	// Create task.
-	taskID := uuid.New().String()[:8]
+	// Create task. When spawned detached via --background, the parent
+	// pre-generates the id and hands it over so its banner references
+	// the same task the child actually runs.
+	taskID := os.Getenv("VAIRDICT_TASK_ID")
+	if taskID == "" {
+		taskID = uuid.New().String()[:8]
+	}
+	_ = os.Unsetenv("VAIRDICT_TASK_ID")
 	task := state.NewTask(taskID, intent)
 	task.DependsOn = dependsOn
 	task.Priority = priority
@@ -355,9 +389,11 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 
 	slog.Info("task created", "id", task.ID, "intent", intent)
 
-	// Set up context with signal handling.
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
+	// Context + interrupt handler: first signal cancels gracefully and
+	// prints a resume hint; second force-exits. `vairdict resume` uses
+	// the same plumbing.
+	ctx, done := withInterruptHandler(context.Background(), task.ID)
+	defer done()
 
 	// Resolve working directory — the repo root where vairdict was invoked.
 	repoRoot, err := os.Getwd()
@@ -381,6 +417,17 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	ghClient := github.New(ghRunner)
 
 	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, issueNumber)
+
+	// Claim the run with this PID so `vairdict status` shows it as
+	// running. Cleared on normal exit; a crash leaves a stale PID, which
+	// the liveness check (kill -0) treats as not-running.
+	task.PID = os.Getpid()
+	task.UpdatedAt = time.Now()
+	if err := store.UpdateTask(task); err != nil {
+		slog.Warn("failed to claim pid", "error", err)
+	}
+	defer clearPID(store, task)
+
 	return runOrchestration(ctx, deps, task, r)
 }
 
@@ -566,6 +613,26 @@ func runSingleTask(
 // with one spare attempt.
 const maxOuterCycles = 3
 
+// resumeState carries the starting point for `vairdict resume` into the
+// orchestration loop. When empty (normal `vairdict run`), the loop starts
+// from the plan phase on a new branch. When populated, the loop skips
+// past phases the task already completed in an earlier invocation.
+type resumeState struct {
+	// plan, when non-empty, is the rendered plan text from the task's
+	// original plan phase. Seeds planResult so the plan phase is
+	// skipped on the first outer cycle — a resume must use the exact
+	// plan the existing code on the branch was built from.
+	plan string
+	// branch, when non-empty, is the existing branch name created in
+	// the original run. Skips CreateBranch on the first outer cycle.
+	branch string
+	// fromPhase is the phase the task was in when it was interrupted
+	// (plan / code / quality). PhaseQuality additionally skips the
+	// code phase on the first outer cycle because the code has
+	// already been committed.
+	fromPhase state.Phase
+}
+
 // runOrchestration is the testable core of runTask. It receives all
 // dependencies via deps so tests can substitute fakes for every
 // external interaction (phases, GitHub, git commit, escalation).
@@ -575,12 +642,29 @@ const maxOuterCycles = 3
 // to Plan, in which case HardConstraints capture the quality failure and
 // the plan phase runs again to produce a new plan that addresses them.
 func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.Renderer) error {
+	return runOrchestrationWithResume(ctx, deps, task, r, resumeState{})
+}
+
+// runOrchestrationWithResume is runOrchestration with an explicit resume
+// entry point. Exported-ish only to resume.go within the same package;
+// external callers go through runOrchestration with zero-value resume
+// state.
+func runOrchestrationWithResume(ctx context.Context, deps runDeps, task *state.Task, r ui.Renderer, resume resumeState) error {
 	var (
 		planResult    *planphase.PhaseResult
 		branch        string
 		branchCreated bool
 		qualityResult *qualityphase.PhaseResult
 	)
+
+	if resume.plan != "" {
+		planResult = &planphase.PhaseResult{Plan: resume.plan, Pass: true}
+	}
+	if resume.branch != "" {
+		branch = resume.branch
+		branchCreated = true
+	}
+	skipCodeFirstCycle := resume.fromPhase == state.PhaseQuality
 
 	for cycle := 0; cycle < maxOuterCycles; cycle++ {
 		// --- Plan phase (first cycle, or after rewind to plan) ---
@@ -602,6 +686,15 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 					Gaps:      gaps,
 				})
 			}
+
+			// Persist the plan text so `vairdict resume` can reuse the
+			// exact plan the branch was built from after an interrupt.
+			task.PlanOutput = planResult.Plan
+			if deps.persistTask != nil {
+				if err := deps.persistTask(task); err != nil {
+					slog.Warn("failed to persist plan output", "error", err)
+				}
+			}
 		}
 
 		// --- Create branch once, before the first code phase ---
@@ -617,31 +710,44 @@ func runOrchestration(ctx context.Context, deps runDeps, task *state.Task, r ui.
 		}
 
 		// --- Code phase ---
-		codeResult, err := deps.code.Run(ctx, task, planResult.Plan)
-		if err != nil {
-			r.Error(err)
-			return err
-		}
+		// On a quality-phase resume the code has already been committed
+		// in an earlier invocation; re-running the coder would overwrite
+		// it. Skip the code phase and its commit for the first outer
+		// cycle only — subsequent cycles (after a ReturnToCode rewind)
+		// must run the coder normally.
+		var codeFeedback string
+		if cycle == 0 && skipCodeFirstCycle {
+			if v := lastVerdictForPhase(task, state.PhaseCode); v != nil {
+				codeFeedback = v.Summary
+			}
+		} else {
+			codeResult, err := deps.code.Run(ctx, task, planResult.Plan)
+			if err != nil {
+				r.Error(err)
+				return err
+			}
 
-		if codeResult.Escalate {
-			gaps := lastGapsForPhase(task, state.PhaseCode)
-			r.Escalation(task.ID, state.PhaseCode, codeResult.Loops, codeResult.LastScore, gaps)
-			return deps.onEscalation(ctx, task, escalation.Result{
-				Phase:     state.PhaseCode,
-				Loops:     codeResult.Loops,
-				LastScore: codeResult.LastScore,
-				Gaps:      gaps,
-			})
-		}
+			if codeResult.Escalate {
+				gaps := lastGapsForPhase(task, state.PhaseCode)
+				r.Escalation(task.ID, state.PhaseCode, codeResult.Loops, codeResult.LastScore, gaps)
+				return deps.onEscalation(ctx, task, escalation.Result{
+					Phase:     state.PhaseCode,
+					Loops:     codeResult.Loops,
+					LastScore: codeResult.LastScore,
+					Gaps:      gaps,
+				})
+			}
 
-		// --- Commit any changes the coder made ---
-		if err := deps.commit(ctx, task); err != nil {
-			r.Error(err)
-			return err
+			// --- Commit any changes the coder made ---
+			if err := deps.commit(ctx, task); err != nil {
+				r.Error(err)
+				return err
+			}
+			codeFeedback = codeResult.Feedback
 		}
 
 		// --- Quality phase (gates the PR) ---
-		qResult, err := deps.quality.Run(ctx, task, planResult.Plan, codeResult.Feedback)
+		qResult, err := deps.quality.Run(ctx, task, planResult.Plan, codeFeedback)
 		if err != nil {
 			r.Error(err)
 			return err
