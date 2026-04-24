@@ -20,6 +20,7 @@ import (
 	"github.com/vairdict/vairdict/internal/deps"
 	"github.com/vairdict/vairdict/internal/escalation"
 	"github.com/vairdict/vairdict/internal/github"
+	"github.com/vairdict/vairdict/internal/interactive"
 	codejudge "github.com/vairdict/vairdict/internal/judges/code"
 	planjudge "github.com/vairdict/vairdict/internal/judges/plan"
 	qualityjudge "github.com/vairdict/vairdict/internal/judges/quality"
@@ -46,6 +47,7 @@ var (
 	dependsOnFlag  []string
 	priorityFlag   string
 	backgroundFlag bool
+	noTTYFlag      bool
 )
 
 var runCmd = &cobra.Command{
@@ -160,6 +162,7 @@ func init() {
 	runCmd.Flags().StringSliceVar(&dependsOnFlag, "depends-on", nil, "task ID(s) this run depends on. The new task will wait (or start blocked) until each listed task is StateDone in the store.")
 	runCmd.Flags().StringVar(&priorityFlag, "priority", "", "task priority: high|normal|low (default: normal). Higher-priority tasks are dispatched first when multiple are ready.")
 	runCmd.Flags().BoolVarP(&backgroundFlag, "background", "b", false, "run detached so the task survives terminal exit. Prints the task id, then returns. Use 'vairdict status <id>' and 'vairdict logs <id> -f' to follow progress.")
+	runCmd.Flags().BoolVar(&noTTYFlag, "no-tty", false, "disable the interactive input loop (status/note/pause/continue). Auto-enabled when stdin is not a TTY (e.g. piped or under CI).")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -230,6 +233,29 @@ type runDeps struct {
 	onEscalation func(ctx context.Context, task *state.Task, result escalation.Result) error
 	issueNumber  int
 	autoMerge    bool
+	// interactive, when non-nil, gates phase/loop entry on the user's
+	// pause flag and drains queued notes into task.Notes before each
+	// phase call. Nil in tests and in --no-tty / piped-stdin runs.
+	interactive *interactive.State
+}
+
+// gateBeforePhase runs the interactive pause-and-drain step that every
+// phase entry shares. Split out of the orchestration body so tests can
+// leave deps.interactive nil without branching noise at every call
+// site. Returns ctx.Err() on cancellation during a pause.
+func (d runDeps) gateBeforePhase(ctx context.Context, task *state.Task, phase state.Phase, loop, maxLoop int) error {
+	if d.interactive == nil {
+		return nil
+	}
+	d.interactive.UpdatePhase(phase, loop, maxLoop)
+	if err := d.interactive.WaitWhilePaused(ctx); err != nil {
+		return err
+	}
+	notes := d.interactive.DrainNotes()
+	if len(notes) > 0 {
+		task.Notes = append(task.Notes, notes...)
+	}
+	return nil
 }
 
 // --- Default (production) phase runner implementations ---
@@ -418,6 +444,17 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 
 	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, issueNumber)
 
+	// Interactive input loop: if stdin is a TTY and --no-tty is not
+	// set, spawn a goroutine that reads commands from the user and
+	// lets them steer the run (status / note / pause / continue).
+	// Orchestration and the input loop share an interactive.State.
+	if shouldRunInteractive() {
+		iState := interactive.New()
+		deps.interactive = iState
+		r.Note("interactive", "type 'status' / 'note <text>' / 'pause' / 'continue' — or 'help'")
+		go interactive.RunLoop(ctx, iState, os.Stdin, os.Stdout)
+	}
+
 	// Claim the run with this PID so `vairdict status` shows it as
 	// running. Cleared on normal exit; a crash leaves a stale PID, which
 	// the liveness check (kill -0) treats as not-running.
@@ -429,6 +466,24 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	defer clearPID(store, task)
 
 	return runOrchestration(ctx, deps, task, r)
+}
+
+// shouldRunInteractive reports whether the interactive input loop
+// should start. Off when --no-tty is set or stdin isn't a terminal
+// (piped, CI, test harness) — the AC requires non-interactive mode to
+// behave exactly as before. Also off when the process was re-execed by
+// --background, whose stdin points at /dev/null in the child and would
+// otherwise spin EOF forever.
+func shouldRunInteractive() bool {
+	if noTTYFlag {
+		return false
+	}
+	if shouldRunForeground() {
+		// Running as the detached child of --background — no user on
+		// this process's stdin, don't attach an input loop.
+		return false
+	}
+	return ui.IsTerminal(os.Stdin)
 }
 
 // taskResult records the outcome of a single concurrent task.
@@ -669,6 +724,9 @@ func runOrchestrationWithResume(ctx context.Context, deps runDeps, task *state.T
 	for cycle := 0; cycle < maxOuterCycles; cycle++ {
 		// --- Plan phase (first cycle, or after rewind to plan) ---
 		if planResult == nil {
+			if err := deps.gateBeforePhase(ctx, task, state.PhasePlan, 0, 0); err != nil {
+				return err
+			}
 			pr, err := deps.plan.Run(ctx, task)
 			if err != nil {
 				r.Error(err)
@@ -721,6 +779,9 @@ func runOrchestrationWithResume(ctx context.Context, deps runDeps, task *state.T
 				codeFeedback = v.Summary
 			}
 		} else {
+			if err := deps.gateBeforePhase(ctx, task, state.PhaseCode, 0, 0); err != nil {
+				return err
+			}
 			codeResult, err := deps.code.Run(ctx, task, planResult.Plan)
 			if err != nil {
 				r.Error(err)
@@ -747,6 +808,9 @@ func runOrchestrationWithResume(ctx context.Context, deps runDeps, task *state.T
 		}
 
 		// --- Quality phase (gates the PR) ---
+		if err := deps.gateBeforePhase(ctx, task, state.PhaseQuality, 0, 0); err != nil {
+			return err
+		}
 		qResult, err := deps.quality.Run(ctx, task, planResult.Plan, codeFeedback)
 		if err != nil {
 			r.Error(err)

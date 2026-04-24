@@ -14,7 +14,7 @@ import (
 func TestBuildCoderPrompt_IncludesBaseline(t *testing.T) {
 	// #84: the coder must see the non-negotiable standards so it doesn't
 	// write code that would be flagged during quality.
-	prompt := buildCoderPrompt("do stuff", "step 1", "", nil, nil)
+	prompt := buildCoderPrompt("do stuff", "step 1", "", nil, nil, nil)
 	if !strings.Contains(prompt, standards.Block) {
 		t.Error("coder prompt must include the baseline standards block")
 	}
@@ -228,7 +228,7 @@ func TestRun_AttemptsStored(t *testing.T) {
 func TestBuildCoderPrompt(t *testing.T) {
 	prompt := buildCoderPrompt("intent", "plan", "fix tests", []state.Assumption{
 		{Severity: state.SeverityP2, Description: "assumed X"},
-	}, nil)
+	}, nil, nil)
 
 	if !containsStr(prompt, "intent") {
 		t.Error("prompt should contain intent")
@@ -262,7 +262,7 @@ func TestBuildCoderPrompt_WithRewindContext(t *testing.T) {
 			Failure:       []string{"[P0] TestRetryLimit failed"},
 		},
 	}
-	prompt := buildCoderPrompt("intent", "plan", "", nil, contexts)
+	prompt := buildCoderPrompt("intent", "plan", "", nil, contexts, nil)
 
 	if !strings.Contains(prompt, "Rewind Context") {
 		t.Error("expected rewind context section header")

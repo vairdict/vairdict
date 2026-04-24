@@ -108,9 +108,17 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 			return nil, fmt.Errorf("running plan phase: unexpected state %s", task.State)
 		}
 
-		// Build the planner prompt.
+		// Build the planner prompt. task.Notes are user guidance queued
+		// from the interactive run loop (#91) — consume them on the
+		// first loop and clear so subsequent requeues don't repeat the
+		// same note.
 		prompt := buildPlannerPrompt(task.Intent, lastFeedback, task.Assumptions, task.HardConstraints,
-			state.RewindContextsFor(task.RewindContexts, state.PhasePlan))
+			state.RewindContextsFor(task.RewindContexts, state.PhasePlan),
+			task.Notes)
+		if len(task.Notes) > 0 {
+			slog.Info("consumed user notes into plan prompt", "task_id", task.ID, "count", len(task.Notes))
+			task.Notes = nil
+		}
 
 		// Call the planner agent.
 		p.notify(loop+1, p.cfg.MaxLoops, "generating plan", 0, false, nil)
@@ -234,12 +242,20 @@ func (p *PlanPhase) processGaps(task *state.Task, gaps []state.Gap) {
 // Your plan must explicitly address Z." framing from issue #86 —
 // without that constraint, successive rewinds tend to converge on the
 // same plan and the outer loop spins instead of terminating.
-func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assumption, hardConstraints []string, rewindContexts []state.RewindContext) string {
+func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assumption, hardConstraints []string, rewindContexts []state.RewindContext, notes []string) string {
 	var b strings.Builder
 
 	b.WriteString("## Task Intent\n")
 	b.WriteString(intent)
 	b.WriteString("\n")
+
+	if len(notes) > 0 {
+		b.WriteString("\n## Notes from User\n")
+		b.WriteString("The user queued the following guidance between phases. Fold every note into your plan:\n")
+		for _, n := range notes {
+			fmt.Fprintf(&b, "- %s\n", n)
+		}
+	}
 
 	if len(rewindContexts) > 0 {
 		b.WriteString("\n## Rewind Context (previous outer cycles)\n")
