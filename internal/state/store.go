@@ -93,6 +93,8 @@ func (s *Store) migrate() error {
 		{"priority", `ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'`},
 		{"hard_constraints", `ALTER TABLE tasks ADD COLUMN hard_constraints TEXT NOT NULL DEFAULT '[]'`},
 		{"rewind_contexts", `ALTER TABLE tasks ADD COLUMN rewind_contexts TEXT NOT NULL DEFAULT '[]'`},
+		{"plan_output", `ALTER TABLE tasks ADD COLUMN plan_output TEXT NOT NULL DEFAULT ''`},
+		{"pid", `ALTER TABLE tasks ADD COLUMN pid INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if _, err := s.db.Exec(alter.stmt); err != nil && !isDuplicateColumnErr(err) {
 			return fmt.Errorf("adding %s column: %w", alter.column, err)
@@ -147,11 +149,12 @@ func (s *Store) CreateTask(t *Task) error {
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO tasks (id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, plan_output, pid, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Intent, string(t.State), string(t.Phase),
 		string(loopJSON), string(assumptionsJSON), string(attemptsJSON), string(dependsOnJSON),
 		priority, string(hardConstraintsJSON), string(rewindContextsJSON),
+		t.PlanOutput, t.PID,
 		t.CreatedAt.Format(time.RFC3339Nano), t.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -163,7 +166,7 @@ func (s *Store) CreateTask(t *Task) error {
 // GetTask retrieves a task by ID. Returns sql.ErrNoRows if not found.
 func (s *Store) GetTask(id string) (*Task, error) {
 	row := s.db.QueryRow(
-		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at
+		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, plan_output, pid, created_at, updated_at
 		 FROM tasks WHERE id = ?`, id,
 	)
 	return s.scanTask(row)
@@ -202,11 +205,12 @@ func (s *Store) UpdateTask(t *Task) error {
 	}
 
 	result, err := s.db.Exec(
-		`UPDATE tasks SET intent=?, state=?, phase=?, loop_count=?, assumptions=?, attempts=?, depends_on=?, priority=?, hard_constraints=?, rewind_contexts=?, updated_at=?
+		`UPDATE tasks SET intent=?, state=?, phase=?, loop_count=?, assumptions=?, attempts=?, depends_on=?, priority=?, hard_constraints=?, rewind_contexts=?, plan_output=?, pid=?, updated_at=?
 		 WHERE id=?`,
 		t.Intent, string(t.State), string(t.Phase),
 		string(loopJSON), string(assumptionsJSON), string(attemptsJSON), string(dependsOnJSON),
 		priority, string(hardConstraintsJSON), string(rewindContextsJSON),
+		t.PlanOutput, t.PID,
 		t.UpdatedAt.Format(time.RFC3339Nano), t.ID,
 	)
 	if err != nil {
@@ -231,12 +235,12 @@ func (s *Store) ListTasks(filterState TaskState) ([]*Task, error) {
 
 	if filterState == "" {
 		rows, err = s.db.Query(
-			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at
+			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, plan_output, pid, created_at, updated_at
 			 FROM tasks ORDER BY created_at ASC`,
 		)
 	} else {
 		rows, err = s.db.Query(
-			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, created_at, updated_at
+			`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, plan_output, pid, created_at, updated_at
 			 FROM tasks WHERE state = ? ORDER BY created_at ASC`,
 			string(filterState),
 		)
@@ -256,6 +260,36 @@ func (s *Store) ListTasks(filterState TaskState) ([]*Task, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+// ListResumable returns every task in a non-terminal, resumable state
+// (see Task.IsResumable), sorted most-recently-updated first. Used by
+// `vairdict resume` with no args and by `vairdict status` to surface
+// unfinished work ahead of completed runs.
+func (s *Store) ListResumable() ([]*Task, error) {
+	rows, err := s.db.Query(
+		`SELECT id, intent, state, phase, loop_count, assumptions, attempts, depends_on, priority, hard_constraints, rewind_contexts, plan_output, pid, created_at, updated_at
+		 FROM tasks
+		 WHERE state IN ('planning','plan_review','coding','code_review','quality','quality_review')
+		 ORDER BY updated_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying resumable tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tasks []*Task
+	for rows.Next() {
+		t, err := s.scanTaskRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating resumable tasks: %w", err)
 	}
 	return tasks, nil
 }
@@ -284,6 +318,8 @@ func (s *Store) scanFromScanner(sc scanner) (*Task, error) {
 		priority            string
 		hardConstraintsJSON string
 		rewindContextsJSON  string
+		planOutput          string
+		pid                 int
 		createdAt           string
 		updatedAt           string
 	)
@@ -291,11 +327,14 @@ func (s *Store) scanFromScanner(sc scanner) (*Task, error) {
 	err := sc.Scan(&t.ID, &t.Intent, &state, &phase,
 		&loopJSON, &assumptionsJSON, &attemptsJSON, &dependsOnJSON, &priority,
 		&hardConstraintsJSON, &rewindContextsJSON,
+		&planOutput, &pid,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("scanning task: %w", err)
 	}
 	t.Priority = priority
+	t.PlanOutput = planOutput
+	t.PID = pid
 
 	t.State = TaskState(state)
 	t.Phase = Phase(phase)

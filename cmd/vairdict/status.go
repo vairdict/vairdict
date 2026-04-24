@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -62,9 +64,16 @@ func listTasks(store *state.Store) error {
 		return nil
 	}
 
+	// Sort most-recently-updated first so running/recent tasks bubble
+	// to the top. The ListTasks default order is created_at ASC, which
+	// buries the task you just started.
+	sort.Slice(tasks, func(i, j int) bool {
+		return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
+	})
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tSTATE\tPHASE\tLOOPS\tLAST SCORE\tPRIORITY\tDEPS\tINTENT")
-	_, _ = fmt.Fprintln(w, "--\t-----\t-----\t-----\t----------\t--------\t----\t------")
+	_, _ = fmt.Fprintln(w, "ID\tRUN\tSTATE\tPHASE\tLOOPS\tLAST SCORE\tPRIORITY\tDEPS\tINTENT")
+	_, _ = fmt.Fprintln(w, "--\t---\t-----\t-----\t-----\t----------\t--------\t----\t------")
 
 	for _, t := range tasks {
 		loops := totalLoops(t)
@@ -78,11 +87,32 @@ func listTasks(store *state.Store) error {
 		if priority == "" {
 			priority = "normal"
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
-			t.ID, t.State, t.Phase, loops, score, priority, deps, intent)
+		run := "-"
+		if isRunning(t) {
+			run = "*"
+		}
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+			t.ID, run, t.State, t.Phase, loops, score, priority, deps, intent)
 	}
 
 	return w.Flush()
+}
+
+// isRunning reports whether the task's stored PID corresponds to a live
+// process on this machine. Uses kill(pid, 0) which does not deliver a
+// signal but returns success iff the process exists and the caller has
+// permission to signal it. Works on unix; on Windows it degrades to a
+// "probably not running" no-op (acceptable — Windows support is not a
+// current dogfood surface).
+func isRunning(t *state.Task) bool {
+	if t == nil || t.PID <= 0 {
+		return false
+	}
+	proc, err := os.FindProcess(t.PID)
+	if err != nil {
+		return false
+	}
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 
 func showTaskDetail(store *state.Store, id string) error {
@@ -105,6 +135,13 @@ func showTaskDetail(store *state.Store, id string) error {
 	}
 	fmt.Printf("Created: %s\n", task.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Updated: %s\n", task.UpdatedAt.Format("2006-01-02 15:04:05"))
+
+	if isRunning(task) {
+		logPath, _ := logPathForTask(task.ID)
+		fmt.Printf("Running: yes (pid %d, log %s)\n", task.PID, logPath)
+	} else if task.PID > 0 {
+		fmt.Printf("Running: no (stale pid %d recorded — process likely crashed; resumable with 'vairdict resume %s')\n", task.PID, task.ID)
+	}
 
 	// Loop counts.
 	fmt.Println("\nLoop Counts:")

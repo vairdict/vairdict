@@ -73,6 +73,52 @@ type Workspace struct {
 	taskID string
 }
 
+// Attach returns a Workspace for an existing task, reusing the on-disk
+// worktree if it is still registered with git, or re-attaching the
+// deterministic `vairdict/<taskID>` branch to a fresh worktree
+// directory if the previous one was cleaned up (crash, prune, laptop
+// close). Used by `vairdict resume` so a run can pick up exactly where
+// it was interrupted without regenerating the plan or losing the code
+// the coder already committed.
+//
+// If neither the worktree nor the branch exists, Attach returns an
+// error — resume cannot recover from a missing branch because the code
+// the task produced is lost.
+func (m *Manager) Attach(ctx context.Context, taskID string) (*Workspace, error) {
+	branch := "vairdict/" + taskID
+	worktreePath := filepath.Join(m.repoRoot, m.baseDir, taskID)
+
+	// Case 1: worktree is still registered with git and the directory
+	// exists — just reuse it.
+	if _, err := os.Stat(worktreePath); err == nil {
+		active := m.listActiveWorktrees(ctx)
+		if active[worktreePath] {
+			slog.Info("workspace reattached (existing worktree)", "task", taskID, "path", worktreePath, "branch", branch)
+			return &Workspace{Path: worktreePath, Branch: branch, mgr: m, taskID: taskID}, nil
+		}
+		// Directory exists but git doesn't know about it (partially
+		// cleaned up). Remove it so `git worktree add` below succeeds.
+		_ = os.RemoveAll(worktreePath)
+	}
+
+	// Case 2: branch exists but the worktree is gone. Recreate the
+	// worktree pointed at the existing branch so the committed code is
+	// restored at worktreePath.
+	if _, err := m.runner.Run(ctx, m.repoRoot, "git", "rev-parse", "--verify", branch); err != nil {
+		return nil, fmt.Errorf("branch %s not found — cannot resume: %w", branch, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+		return nil, fmt.Errorf("creating worktree base dir: %w", err)
+	}
+	if _, err := m.runner.Run(ctx, m.repoRoot, "git", "worktree", "add", worktreePath, branch); err != nil {
+		return nil, fmt.Errorf("re-attaching worktree for branch %s: %w", branch, err)
+	}
+
+	slog.Info("workspace reattached (recreated worktree)", "task", taskID, "path", worktreePath, "branch", branch)
+	return &Workspace{Path: worktreePath, Branch: branch, mgr: m, taskID: taskID}, nil
+}
+
 // Create creates a new git worktree for the given task. The worktree is
 // based on the current HEAD of the main branch. Returns a Workspace that
 // must be cleaned up with Cleanup() when the task is done.

@@ -16,10 +16,10 @@ var allPhases = []state.Phase{state.PhasePlan, state.PhaseCode, state.PhaseQuali
 type phaseStatus int
 
 const (
-	phasePending  phaseStatus = iota
-	phaseActive               // currently running
-	phasePassed               // completed successfully
-	phaseFailed               // completed with failure
+	phasePending phaseStatus = iota
+	phaseActive              // currently running
+	phasePassed              // completed successfully
+	phaseFailed              // completed with failure
 )
 
 // cliRenderer prints sectioned, colored, emoji-decorated output for human
@@ -34,18 +34,18 @@ type cliRenderer struct {
 	useASCI bool
 
 	// Task-list state: tracks each phase's status for checklist display.
-	phases    map[state.Phase]phaseStatus
-	scores    map[state.Phase]float64
-	activeStep string // current sub-step within the active phase
+	phases     map[state.Phase]phaseStatus
+	scores     map[state.Phase]float64
+	activeStep string                   // current sub-step within the active phase
 	doneSteps  map[state.Phase][]string // completed sub-steps per phase
 }
 
 func newCLIRenderer(out io.Writer, colors ColorScheme, ascii bool) *cliRenderer {
 	r := &cliRenderer{
-		w:       bufio.NewWriter(out),
-		pal:     paletteFor(colors),
-		colors:  colors,
-		useASCI: ascii,
+		w:         bufio.NewWriter(out),
+		pal:       paletteFor(colors),
+		colors:    colors,
+		useASCI:   ascii,
 		phases:    make(map[state.Phase]phaseStatus),
 		scores:    make(map[state.Phase]float64),
 		doneSteps: make(map[state.Phase][]string),
