@@ -132,18 +132,22 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 > Claude Code is the default. Any CLI agent can replace it.
 
 **Definition of done:**
-- Codex CLI usable as a completer backend
-- Gemini CLI usable as a completer backend
+- Codex CLI usable as a completer **and** coder backend
+- Gemini CLI usable as a completer **and** coder backend
 - Backend selectable per phase in vairdict.yaml
 - Judge model swappable independently of completer model
-- Auto-resolver picks the best available backend like the existing claude resolver
+- Auto-resolver picks the best available backend for both completer
+  and coder roles, like the existing claude resolver
 
 **Issues:**
 - [ ] agents/codex: Codex CLI completer
 - [ ] agents/gemini: Gemini CLI completer
+- [ ] agents/codex: Codex CLI coder (file-editing driver)
+- [ ] agents/gemini: Gemini CLI coder (file-editing driver)
 - [ ] config: per-phase backend selection in vairdict.yaml
 - [ ] judge/pluggable: swap judge model in vairdict.yaml
-- [ ] resolver: extend auto backend resolver to all agents
+- [ ] resolver: extend auto backend resolver to all agents (completer + coder)
+- [ ] test/m6: cross-backend integration + e2e tests (gated)
 - [ ] docs: agent backend selection guide
 
 ---
