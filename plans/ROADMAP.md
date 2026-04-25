@@ -147,6 +147,7 @@ Progress is tracked in [PROGRESS.md](./PROGRESS.md).
 - [ ] config: per-phase backend selection in vairdict.yaml
 - [ ] judge/pluggable: swap judge model in vairdict.yaml
 - [ ] resolver: extend auto backend resolver to all agents (completer + coder)
+- [ ] test/m6: cross-backend integration + e2e tests (gated)
 - [ ] docs: agent backend selection guide
 
 ---
