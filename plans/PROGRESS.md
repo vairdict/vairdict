@@ -167,5 +167,5 @@ reviewed by the agent judge, only then created in GitHub.
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
 | M5        | in progress | 15/17       |
-| M6        | not started | 0/7         |
+| M6        | not started | 0/6         |
 | M7+       | not started | —           |
