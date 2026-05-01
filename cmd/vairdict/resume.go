@@ -168,7 +168,11 @@ func resumeTask(taskID string, store *state.Store, mode ui.Mode, colors ui.Color
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	client, backend, err := resolveCompleter(cfg)
+	if err := validateBackends(cfg, defaultBackendProbes()); err != nil {
+		return fmt.Errorf("backend validation: %w", err)
+	}
+
+	comps, err := resolveAllCompleters(cfg)
 	if err != nil {
 		return err
 	}
@@ -196,7 +200,7 @@ func resumeTask(taskID string, store *state.Store, mode ui.Mode, colors ui.Color
 	defer func() { _ = r.Close() }()
 
 	r.RunStart(task.ID, task.Intent, logPath)
-	r.Note("completer", string(backend))
+	r.Note("completer", completerNote(comps))
 	r.Note("resume", fmt.Sprintf("from [%s/%s]", task.Phase, task.State))
 
 	slog.Info("task resumed", "id", task.ID, "phase", task.Phase, "state", task.State)
@@ -223,7 +227,7 @@ func resumeTask(taskID string, store *state.Store, mode ui.Mode, colors ui.Color
 
 	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
-	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, 0)
+	deps := defaultRunDeps(cfg, comps, store, workDir, r, ghClient, 0)
 
 	// Claim the run with this PID so `vairdict status` shows it as
 	// running while the resumed orchestration is in flight.

@@ -42,7 +42,11 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 	}
 	defer func() { _ = store.Close() }()
 
-	client, _, err := resolveCompleter(cfg)
+	if err := validateBackends(cfg, defaultBackendProbes()); err != nil {
+		return fmt.Errorf("backend validation: %w", err)
+	}
+
+	comps, err := resolveAllCompleters(cfg)
 	if err != nil {
 		return err
 	}
@@ -129,7 +133,7 @@ func runManifest(manifest *Manifest, mode ui.Mode, colors ui.ColorScheme, ascii 
 				defer func() { <-sem }()
 
 				t := tasks[id]
-				res := runSingleTask(ctx, cfg, client, store, repoRoot, t.Intent, issueByID[id], t.Priority)
+				res := runSingleTask(ctx, cfg, comps, store, repoRoot, t.Intent, issueByID[id], t.Priority)
 				// runSingleTask generated its own task ID for the run; we
 				// want the manifest ID to be the authoritative record
 				// surfaced to the user. The per-goroutine subtask ID is

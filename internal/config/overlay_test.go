@@ -79,6 +79,39 @@ escalation:
 	}
 }
 
+// TestLoadConfigWithOverlay_PerPhaseOverride covers the M6 schema:
+// base sets the flat agents.judge, overlay sets a single per-phase
+// override. Only that phase should pick up the new backend; the
+// untouched phases must keep inheriting the base Judge.
+func TestLoadConfigWithOverlay_PerPhaseOverride(t *testing.T) {
+	dir := t.TempDir()
+	base := writeFile(t, dir, "vairdict.yaml", baseYAML)
+	overlay := writeFile(t, dir, "vairdict.ci.yaml", `
+agents:
+  quality_judge: claude-api
+`)
+
+	cfg, err := LoadConfigWithOverlay(base, overlay)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents.Judge != "claude" {
+		t.Errorf("Judge = %q, want claude (base preserved)", cfg.Agents.Judge)
+	}
+	if cfg.Agents.QualityJudge != "claude-api" {
+		t.Errorf("QualityJudge = %q, want claude-api (overlay)", cfg.Agents.QualityJudge)
+	}
+	if cfg.Agents.PlanJudgeBackend() != "claude" {
+		t.Errorf("PlanJudgeBackend = %q, want claude (untouched)", cfg.Agents.PlanJudgeBackend())
+	}
+	if cfg.Agents.CodeJudgeBackend() != "claude" {
+		t.Errorf("CodeJudgeBackend = %q, want claude (untouched)", cfg.Agents.CodeJudgeBackend())
+	}
+	if cfg.Agents.QualityJudgeBackend() != "claude-api" {
+		t.Errorf("QualityJudgeBackend = %q, want claude-api", cfg.Agents.QualityJudgeBackend())
+	}
+}
+
 func TestLoadConfigWithOverlay_OverlayMissing(t *testing.T) {
 	dir := t.TempDir()
 	base := writeFile(t, dir, "vairdict.yaml", baseYAML)

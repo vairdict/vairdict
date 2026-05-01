@@ -3,7 +3,8 @@
 // in internal/agents/claudecode which uses tools and edits the filesystem).
 //
 // Three values are accepted in vairdict.yaml under agents.planner /
-// agents.judge:
+// agents.judge (and the per-phase overrides agents.plan_judge,
+// agents.code_judge, agents.quality_judge):
 //
 //	claude      — smart default: try claude-cli, fall back to claude-api
 //	claude-cli  — strict local subprocess (errors if `claude` not on PATH)
@@ -17,6 +18,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os/exec"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecli"
@@ -32,6 +34,18 @@ type completer interface {
 	CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, handlers map[string]claude.ToolHandler, target any) error
 }
 
+// completerRole names a completer slot in the orchestration pipeline.
+// Each role reads its backend from a different field in agents.* (with
+// per-phase judges falling back to agents.judge).
+type completerRole string
+
+const (
+	rolePlanner      completerRole = "planner"
+	rolePlanJudge    completerRole = "plan_judge"
+	roleCodeJudge    completerRole = "code_judge"
+	roleQualityJudge completerRole = "quality_judge"
+)
+
 // backendKind is the resolved backend identifier returned alongside the
 // completer instance so it can be surfaced in CLI output and logs. Note
 // this is the *resolved* kind — `claude` (smart) is never returned here;
@@ -43,6 +57,24 @@ const (
 	backendClaudeAPI backendKind = "claude-api" // HTTP API
 )
 
+// backendForRole reads the configured backend string for the given role
+// from cfg.Agents, applying the per-phase fallback to Judge for the
+// three judge slots.
+func backendForRole(cfg *config.Config, role completerRole) string {
+	switch role {
+	case rolePlanner:
+		return cfg.Agents.Planner
+	case rolePlanJudge:
+		return cfg.Agents.PlanJudgeBackend()
+	case roleCodeJudge:
+		return cfg.Agents.CodeJudgeBackend()
+	case roleQualityJudge:
+		return cfg.Agents.QualityJudgeBackend()
+	default:
+		return ""
+	}
+}
+
 // chooseBackend returns the resolved backend for the given config setting.
 // `cliAvailable` is injected (via claudecli.IsAvailable in production) so
 // the resolver is deterministic and unit-testable without touching PATH.
@@ -51,7 +83,14 @@ const (
 //	"claude-cli" → claude-cli (caller errors later if PATH lookup fails)
 //	"claude-api" → claude-api (caller errors later if no API key)
 //	"auto"       → deprecated alias for "claude" — accepted with no warn
+//
+// roleName is included in the error message for unknown values so the
+// user can see which slot needs fixing.
 func chooseBackend(setting string, cliAvailable bool) (backendKind, error) {
+	return chooseBackendForRole("agents.judge", setting, cliAvailable)
+}
+
+func chooseBackendForRole(roleName, setting string, cliAvailable bool) (backendKind, error) {
 	switch setting {
 	case "", "claude", "auto":
 		if cliAvailable {
@@ -63,15 +102,16 @@ func chooseBackend(setting string, cliAvailable bool) (backendKind, error) {
 	case "claude-api":
 		return backendClaudeAPI, nil
 	default:
-		return "", fmt.Errorf("unknown agents.judge backend %q (want claude|claude-cli|claude-api)", setting)
+		return "", fmt.Errorf("unknown %s backend %q (want claude|claude-cli|claude-api)", roleName, setting)
 	}
 }
 
-// resolveCompleter picks a backend per chooseBackend and constructs the
-// matching client. The returned backendKind is informational (rendered as
-// a `completer:` note in CLI mode).
-func resolveCompleter(cfg *config.Config) (completer, backendKind, error) {
-	kind, err := chooseBackend(cfg.Agents.Judge, claudecli.IsAvailable())
+// resolveCompleter picks a backend for the given role per chooseBackend
+// and constructs the matching client. The returned backendKind is
+// informational (rendered as a `completer:` note in CLI mode).
+func resolveCompleter(cfg *config.Config, role completerRole) (completer, backendKind, error) {
+	setting := backendForRole(cfg, role)
+	kind, err := chooseBackendForRole("agents."+string(role), setting, claudecli.IsAvailable())
 	if err != nil {
 		return nil, "", err
 	}
@@ -96,5 +136,98 @@ func resolveCompleter(cfg *config.Config) (completer, backendKind, error) {
 		return c, kind, nil
 	default:
 		return nil, "", fmt.Errorf("unreachable backend kind: %s", kind)
+	}
+}
+
+// backendProbes injects the side-effects validateBackends needs (PATH
+// lookups, API key probe). Production wires these to exec.LookPath and
+// config.ResolveAPIKey; tests set deterministic stubs.
+type backendProbes struct {
+	cliAvailable  func(name string) bool
+	apiKeyPresent func() bool
+}
+
+// defaultBackendProbes returns probes that hit the real environment.
+// Kept as a constructor so callers don't have to re-import os/exec or
+// the config package just to do a pre-flight check.
+func defaultBackendProbes() backendProbes {
+	return backendProbes{
+		cliAvailable: func(name string) bool {
+			_, err := exec.LookPath(name)
+			return err == nil
+		},
+		apiKeyPresent: func() bool {
+			return config.ResolveAPIKey() != ""
+		},
+	}
+}
+
+// validateBackends walks every resolved completer role plus the coder
+// and verifies that the chosen backend is actually usable: CLI binary
+// on PATH for *-cli / family CLIs, API key configured for *-api.
+//
+// Smart defaults ("", "claude", "auto") never trigger errors — they
+// fall through to whichever family is available at runtime. Validation
+// only fires for explicit pinned backends so users who want VAIrdict
+// to "just work" with whichever family they happen to have aren't
+// blocked by missing alternatives.
+//
+// The function is pure: no network, no slog, no global state — just
+// probes injected via the parameter so tests can drive it.
+func validateBackends(cfg *config.Config, probes backendProbes) error {
+	checks := []struct {
+		name    string
+		setting string
+	}{
+		{"agents.planner", cfg.Agents.Planner},
+		{"agents.plan_judge", cfg.Agents.PlanJudgeBackend()},
+		{"agents.code_judge", cfg.Agents.CodeJudgeBackend()},
+		{"agents.quality_judge", cfg.Agents.QualityJudgeBackend()},
+	}
+	for _, c := range checks {
+		if err := validateCompleterBackend(c.name, c.setting, probes); err != nil {
+			return err
+		}
+	}
+	return validateCoderBackend(cfg.Agents.Coder, probes)
+}
+
+// validateCompleterBackend covers the planner / judge slots which all
+// share the same {claude, claude-cli, claude-api, auto} taxonomy.
+func validateCompleterBackend(roleName, setting string, probes backendProbes) error {
+	switch setting {
+	case "", "claude", "auto":
+		// Smart default — let runtime fall through to whichever family
+		// is available. AC explicitly requires no error here.
+		return nil
+	case "claude-cli":
+		if !probes.cliAvailable("claude") {
+			return fmt.Errorf("%s: claude-cli requires the `claude` binary on PATH", roleName)
+		}
+		return nil
+	case "claude-api":
+		if !probes.apiKeyPresent() {
+			return fmt.Errorf("%s: claude-api requires ANTHROPIC_API_KEY (env var or ~/.config/vairdict/config.yaml)", roleName)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%s: unknown backend %q (want claude|claude-cli|claude-api)", roleName, setting)
+	}
+}
+
+// validateCoderBackend covers agents.coder, which today only supports
+// claude-code (the family CLI runner used by internal/agents/claudecode).
+// Listed separately because the taxonomy is different from the completer
+// slots — claude-code is the only legal value, and it requires the
+// `claude` binary to be on PATH.
+func validateCoderBackend(setting string, probes backendProbes) error {
+	switch setting {
+	case "", "claude-code":
+		if !probes.cliAvailable("claude") {
+			return fmt.Errorf("agents.coder: claude-code requires the `claude` binary on PATH")
+		}
+		return nil
+	default:
+		return fmt.Errorf("agents.coder: unknown backend %q (want claude-code)", setting)
 	}
 }

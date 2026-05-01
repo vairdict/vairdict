@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/vairdict/vairdict/internal/config"
+)
 
 func TestChooseBackend(t *testing.T) {
 	cases := []struct {
@@ -40,5 +45,198 @@ func TestChooseBackend(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBackendForRole(t *testing.T) {
+	// Flat-only — every judge role inherits agents.judge.
+	flat := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude-cli",
+	}}
+	if got := backendForRole(flat, rolePlanner); got != "claude" {
+		t.Errorf("rolePlanner = %q, want claude", got)
+	}
+	if got := backendForRole(flat, rolePlanJudge); got != "claude-cli" {
+		t.Errorf("rolePlanJudge (flat) = %q, want claude-cli", got)
+	}
+	if got := backendForRole(flat, roleCodeJudge); got != "claude-cli" {
+		t.Errorf("roleCodeJudge (flat) = %q, want claude-cli", got)
+	}
+	if got := backendForRole(flat, roleQualityJudge); got != "claude-cli" {
+		t.Errorf("roleQualityJudge (flat) = %q, want claude-cli", got)
+	}
+
+	// Mixed — one phase override, others inherit.
+	mixed := &config.Config{Agents: config.AgentsConfig{
+		Planner:      "claude",
+		Judge:        "claude-cli",
+		QualityJudge: "claude-api",
+	}}
+	if got := backendForRole(mixed, rolePlanJudge); got != "claude-cli" {
+		t.Errorf("rolePlanJudge (mixed) = %q, want claude-cli", got)
+	}
+	if got := backendForRole(mixed, roleQualityJudge); got != "claude-api" {
+		t.Errorf("roleQualityJudge (mixed) = %q, want claude-api", got)
+	}
+}
+
+// TestValidateBackends_FlatOnlyLegacy: a config that only sets the flat
+// fields must validate identically to pre-issue-128 behavior. With CLI
+// available and Judge=claude (smart), no error.
+func TestValidateBackends_FlatOnlyLegacy(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude",
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return true },
+		apiKeyPresent: func() bool { return false },
+	}
+	if err := validateBackends(cfg, probes); err != nil {
+		t.Errorf("flat legacy config should validate, got: %v", err)
+	}
+}
+
+// TestValidateBackends_PerPhaseOnly: explicit pinned backends per phase
+// validate when their requirements are met.
+func TestValidateBackends_PerPhaseOnly(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner:      "claude-api",
+		Coder:        "claude-code",
+		Judge:        "claude-api",
+		PlanJudge:    "claude-cli",
+		CodeJudge:    "claude-api",
+		QualityJudge: "claude-cli",
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return true },
+		apiKeyPresent: func() bool { return true },
+	}
+	if err := validateBackends(cfg, probes); err != nil {
+		t.Errorf("per-phase config with all reqs met should validate, got: %v", err)
+	}
+}
+
+// TestValidateBackends_MissingBinary: claude-cli pinned but `claude` not
+// on PATH → must error and name both the role and the missing binary.
+func TestValidateBackends_MissingBinary(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude",
+		// PlanJudge is the explicit pinned slot that should fail validation.
+		PlanJudge: "claude-cli",
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return false }, // no claude
+		apiKeyPresent: func() bool { return true },
+	}
+	err := validateBackends(cfg, probes)
+	if err == nil {
+		t.Fatal("expected error for missing claude binary")
+	}
+	if !strings.Contains(err.Error(), "plan_judge") {
+		t.Errorf("error should name the role (plan_judge), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "claude") {
+		t.Errorf("error should name the missing binary, got: %v", err)
+	}
+}
+
+// TestValidateBackends_MissingAPIKey: claude-api pinned but no key →
+// must error.
+func TestValidateBackends_MissingAPIKey(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude",
+		// CodeJudge is the explicit pinned slot that should fail validation.
+		CodeJudge: "claude-api",
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return true },
+		apiKeyPresent: func() bool { return false },
+	}
+	err := validateBackends(cfg, probes)
+	if err == nil {
+		t.Fatal("expected error for missing API key")
+	}
+	if !strings.Contains(err.Error(), "code_judge") {
+		t.Errorf("error should name the role (code_judge), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Errorf("error should name the missing requirement, got: %v", err)
+	}
+}
+
+// TestValidateBackends_UnknownBackend: an unknown name on any role must
+// error and name the role and the bad value.
+func TestValidateBackends_UnknownBackend(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude",
+		// Quality judge has a typo — should fail.
+		QualityJudge: "openai",
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return true },
+		apiKeyPresent: func() bool { return true },
+	}
+	err := validateBackends(cfg, probes)
+	if err == nil {
+		t.Fatal("expected error for unknown backend")
+	}
+	if !strings.Contains(err.Error(), "quality_judge") {
+		t.Errorf("error should name the role (quality_judge), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "openai") {
+		t.Errorf("error should echo the bad value, got: %v", err)
+	}
+}
+
+// TestValidateBackends_AutoDoesNotErrorWhenFamilyUnavailable: per AC,
+// smart defaults ("claude" / "auto" / empty) MUST NOT error even when
+// no family is available — they fall through at runtime.
+func TestValidateBackends_AutoDoesNotErrorWhenFamilyUnavailable(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "auto",
+	}}
+	// Neither the CLI nor an API key — but every completer slot uses
+	// the smart default, so validation must still pass. Coder still
+	// needs the binary, so we pretend that's available.
+	probes := backendProbes{
+		cliAvailable:  func(name string) bool { return name == "claude" },
+		apiKeyPresent: func() bool { return false },
+	}
+	if err := validateBackends(cfg, probes); err != nil {
+		t.Errorf("smart-default config should not error, got: %v", err)
+	}
+}
+
+// TestValidateBackends_CoderNeedsBinary: claude-code is the family CLI
+// runner — it requires `claude` on PATH. Validating with no binary
+// must error and name agents.coder.
+func TestValidateBackends_CoderNeedsBinary(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude-api",
+		Coder:   "claude-code",
+		Judge:   "claude-api",
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return false }, // no claude on PATH
+		apiKeyPresent: func() bool { return true },
+	}
+	err := validateBackends(cfg, probes)
+	if err == nil {
+		t.Fatal("expected error when claude is missing for the coder")
+	}
+	if !strings.Contains(err.Error(), "agents.coder") {
+		t.Errorf("error should name the coder role, got: %v", err)
 	}
 }

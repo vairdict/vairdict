@@ -743,7 +743,9 @@ func runExplainQuestion(ctx context.Context, diff, question string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("loading config: %w", err)
 	}
-	client, _, err := resolveCompleter(cfg)
+	// @vairdict explain is a free-form Q&A about a PR — closest to the
+	// quality judge's role since it's reasoning over a finished diff.
+	client, _, err := resolveCompleter(cfg, roleQualityJudge)
 	if err != nil {
 		return "", fmt.Errorf("resolving completer: %w", err)
 	}
