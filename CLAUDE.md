@@ -194,6 +194,27 @@ Do not start work on an issue that is still "Blocked" in `plans/PROGRESS.md`.
 Do not exceed the scope defined in the issue.
 Do not open a PR without a passing verdict (M3+).
 
+## Working Without VAIrdict (manual / Claude Code sessions)
+
+When a task or issue is being worked on directly (not through
+`vairdict run`), follow this order — no exceptions:
+
+1. **Plan first.** Read the full issue, identify the files / packages
+   you'll touch, sketch the approach, and present the plan back to the
+   user. Do not start editing until the user confirms.
+2. **Tests next.** Tests are part of the task's definition of done —
+   not an afterthought. Write the tests for the new behavior before
+   the implementation code (or alongside it for plumbing-only changes
+   where pure-tests-first is impractical, but never after).
+3. **Then implementation.** Make the tests pass. Keep changes scoped
+   to what the plan agreed on.
+4. **Verify at the end.** Run the relevant test suite (`make test` or
+   the targeted package) and confirm the new tests pass before
+   reporting the task as done.
+
+The "tests pass" check is non-negotiable — a task is not done until
+its tests are written AND green.
+
 ## What NOT to do
 
 - Do not commit directly to main — all code changes go through PRs
