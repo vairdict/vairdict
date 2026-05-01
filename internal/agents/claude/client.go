@@ -209,6 +209,7 @@ type Client struct {
 	endpoint    string
 	httpClient  HTTPClient
 	temperature *float64
+	maxTokens   int
 }
 
 // Option configures a Client.
@@ -243,6 +244,19 @@ func WithTemperature(t float64) Option {
 	}
 }
 
+// WithMaxTokens caps max_tokens on every request from this client.
+// Defaults to defaultMaxTokens (4096). The plan judge uses this with
+// 1024 — verdicts are typically 300-800 tokens, the larger default
+// just buys headroom that's never used. Non-positive values are
+// ignored so callers can pass a config-derived 0 without surprise.
+func WithMaxTokens(n int) Option {
+	return func(cl *Client) {
+		if n > 0 {
+			cl.maxTokens = n
+		}
+	}
+}
+
 // NewClient creates a new Anthropic API client. It resolves the API key from:
 // 1. ANTHROPIC_API_KEY environment variable
 // 2. ~/.config/vairdict/config.yaml
@@ -267,6 +281,7 @@ func NewClient(cfg *config.Config, opts ...Option) (*Client, error) {
 		model:      model,
 		endpoint:   defaultEndpoint,
 		httpClient: &http.Client{Timeout: 120 * time.Second},
+		maxTokens:  defaultMaxTokens,
 	}
 
 	for _, opt := range opts {
@@ -288,12 +303,18 @@ func (c *Client) Complete(ctx context.Context, prompt string, target any) error 
 // it so PR comments and logs can show which model graded the change.
 func (c *Client) Model() string { return c.model }
 
+// MaxTokens returns the max_tokens value the client caps every request
+// at. Defaults to defaultMaxTokens (4096); the plan judge constructs
+// a client with WithMaxTokens(1024). Exposed for symmetry with Model()
+// so the resolver can be unit-tested.
+func (c *Client) MaxTokens() int { return c.maxTokens }
+
 // CompleteWithSystem sends a prompt with a system message to the Anthropic
 // Messages API and unmarshals the JSON response into the target struct.
 func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, target any) error {
 	reqBody := messagesRequest{
 		Model:       c.model,
-		MaxTokens:   defaultMaxTokens,
+		MaxTokens:   c.maxTokens,
 		System:      systemPayload(system),
 		Messages:    []message{{Role: "user", Content: prompt}},
 		Temperature: c.temperature,
@@ -310,7 +331,7 @@ func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, 
 func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, tool Tool, target any) error {
 	reqBody := messagesRequest{
 		Model:       c.model,
-		MaxTokens:   defaultMaxTokens,
+		MaxTokens:   c.maxTokens,
 		System:      systemPayload(system),
 		Messages:    []message{{Role: "user", Content: prompt}},
 		Temperature: c.temperature,
@@ -358,7 +379,7 @@ func (c *Client) CompleteWithTools(
 
 		reqBody := multiTurnRequest{
 			Model:       c.model,
-			MaxTokens:   defaultMaxTokens,
+			MaxTokens:   c.maxTokens,
 			System:      systemPayload(system),
 			Messages:    messages,
 			Temperature: c.temperature,

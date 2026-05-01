@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
 )
 
@@ -168,6 +169,44 @@ func TestResolveCompleter_JudgeModelOverride(t *testing.T) {
 		if got := c.Model(); got != "claude-opus-4-7" {
 			t.Errorf("%s client model = %q, want claude-opus-4-7 (judge_model)", role, got)
 		}
+	}
+}
+
+// TestResolveCompleter_PlanJudgeCapsMaxTokens: the plan-judge API
+// client must cap max_tokens at 1024 (planJudgeMaxTokens) so verdicts
+// don't pay 4096 headroom they never use. Other roles keep the 4096
+// default. #137.
+func TestResolveCompleter_PlanJudgeCapsMaxTokens(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-maxtokens")
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude-api",
+		Judge:   "claude-api",
+		Model:   "claude-sonnet-4-20250514",
+	}}
+
+	cases := []struct {
+		role completerRole
+		want int
+	}{
+		{rolePlanJudge, planJudgeMaxTokens},
+		{rolePlanner, 4096},
+		{roleQualityJudge, 4096},
+		{roleCodeJudge, 4096},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.role), func(t *testing.T) {
+			c, _, err := resolveCompleter(cfg, tc.role)
+			if err != nil {
+				t.Fatalf("resolveCompleter(%s): %v", tc.role, err)
+			}
+			cc, ok := c.(*claude.Client)
+			if !ok {
+				t.Fatalf("expected *claude.Client for %s, got %T", tc.role, c)
+			}
+			if got := cc.MaxTokens(); got != tc.want {
+				t.Errorf("%s max_tokens = %d, want %d", tc.role, got, tc.want)
+			}
+		})
 	}
 }
 

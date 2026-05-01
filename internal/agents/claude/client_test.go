@@ -1008,6 +1008,116 @@ func truncateForLog(s string, n int) string {
 	return s[:n] + "...(truncated)"
 }
 
+// --- Per-client max_tokens tests (#137) ---
+
+func TestWithMaxTokens_DefaultsTo4096(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	if err := c.Complete(context.Background(), "p", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != defaultMaxTokens {
+		t.Errorf("expected default max_tokens=%d, got %d", defaultMaxTokens, captured.MaxTokens)
+	}
+}
+
+func TestWithMaxTokens_OverridesDefault(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithMaxTokens(1024))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	if err := c.Complete(context.Background(), "p", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != 1024 {
+		t.Errorf("expected max_tokens=1024, got %d", captured.MaxTokens)
+	}
+}
+
+func TestWithMaxTokens_NonPositiveIgnored(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	// 0 should fall through to the default — protects callers that
+	// pass a config-derived value without a sentinel guard.
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithMaxTokens(0))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	if err := c.Complete(context.Background(), "p", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != defaultMaxTokens {
+		t.Errorf("expected default max_tokens when 0 passed, got %d", captured.MaxTokens)
+	}
+}
+
+func TestWithMaxTokens_AppliesToToolCall(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		resp := messagesResponse{
+			Content: []contentBlock{{
+				Type:  "tool_use",
+				Name:  "submit_verdict",
+				Input: json.RawMessage(`{"answer":"ok"}`),
+			}},
+			StopReason: "tool_use",
+		}
+		data, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithMaxTokens(1024))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	tool := Tool{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}
+	if err := c.CompleteWithTool(context.Background(), "", "p", tool, &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != 1024 {
+		t.Errorf("expected max_tokens=1024 on tool call, got %d", captured.MaxTokens)
+	}
+}
+
 func TestExtractJSON(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -49,6 +49,12 @@ const (
 	roleQualityJudge completerRole = "quality_judge"
 )
 
+// planJudgeMaxTokens caps the plan-judge response at a tighter budget
+// than the planner. Verdicts are typically 300-800 tokens; the larger
+// 4096 default just buys headroom that's never used and adds latency.
+// #137.
+const planJudgeMaxTokens = 1024
+
 // backendKind is the resolved backend identifier returned alongside the
 // completer instance so it can be surfaced in CLI output and logs. Note
 // this is the *resolved* kind — `claude` (smart) is never returned here;
@@ -168,6 +174,11 @@ func resolveCompleter(cfg *config.Config, role completerRole) (completer, backen
 		opts := []claude.Option{claude.WithTemperature(0)}
 		if model != "" {
 			opts = append(opts, claude.WithModel(model))
+		}
+		// Plan-judge verdicts are short structured payloads — cap
+		// max_tokens so the judge doesn't pay headroom it never uses.
+		if role == rolePlanJudge {
+			opts = append(opts, claude.WithMaxTokens(planJudgeMaxTokens))
 		}
 		c, err := claude.NewClient(cfg, opts...)
 		if err != nil {
