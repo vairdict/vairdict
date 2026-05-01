@@ -538,16 +538,37 @@ func TestJudge_SecurityChecksAreBlocking(t *testing.T) {
 
 func TestJudge_SystemPromptForbidsSilenceOnSubstantiveDiff(t *testing.T) {
 	// PR #107 was a 1200-line / 16-file diff that the judge passed with
-	// zero gaps. The prompt must keep an explicit hard rule against that
-	// failure mode so a future prompt edit cannot silently soften it.
+	// zero gaps. The prompt must keep an explicit guard against that
+	// failure mode — but via a severity-ordered scan, not a count anchor
+	// (which earlier wording produced "always 3 P3 nits" false positives).
 	for _, keyword := range []string{
 		"Substantive-diff rule",
-		"MUST produce at least one entry",
 		">200 lines",
 		">3 files",
+		"severity-ordered scan",
+		"without performing the scan is a failure mode",
+		// Example 5 demonstrates the empty-gaps-on-substantive-diff
+		// outcome. Pin it so a future edit cannot quietly delete the
+		// concrete training signal while leaving the abstract rule.
+		"Example 5",
+		"severity scan surfaced no concerns",
 	} {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing substantive-diff rule marker %q", keyword)
+		}
+	}
+
+	// Guard against re-introducing count anchors. These phrases were
+	// the root cause of the "judge always emits ~3 soft P3 gaps"
+	// regression that this rewrite fixes.
+	for _, banned := range []string{
+		"typically 2–3",
+		"typically 2-3",
+		"MUST produce at least one entry",
+		"expected floor",
+	} {
+		if strings.Contains(systemPrompt, banned) {
+			t.Errorf("system prompt contains banned count-anchor phrase %q — use severity-ordered scan instead", banned)
 		}
 	}
 }
