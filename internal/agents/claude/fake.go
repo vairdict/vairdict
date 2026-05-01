@@ -18,7 +18,15 @@ type FakeClient struct {
 
 	// Calls records each prompt sent to Complete for assertions.
 	Calls []FakeCall
+
+	// ModelName is the value Model() reports. Tests that need to
+	// assert verdicts are stamped with the right model set this.
+	ModelName string
 }
+
+// Model returns the configured ModelName so FakeClient satisfies the
+// same {Complete*, Model} interface real clients do.
+func (f *FakeClient) Model() string { return f.ModelName }
 
 // FakeCall records a single invocation of Complete, CompleteWithSystem, or
 // CompleteWithTool. ToolName is empty for non-tool calls.

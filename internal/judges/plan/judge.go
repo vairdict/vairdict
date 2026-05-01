@@ -17,9 +17,12 @@ import (
 )
 
 // Completer is the interface for sending prompts to an LLM. Plan judge uses
-// tool-use exclusively so responses conform to a strict schema.
+// tool-use exclusively so responses conform to a strict schema. Model()
+// reports the model the client routes calls to so the verdict can be
+// stamped with the model that produced it.
 type Completer interface {
 	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
+	Model() string
 }
 
 // PlanJudge evaluates a plan against an intent and returns a typed Verdict.
@@ -191,6 +194,7 @@ func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, ackno
 
 	verdict.Score = verdictschema.ComputeScoreWithAcknowledged(verdict.Gaps, acknowledged)
 	verdict.Pass = verdict.Score >= j.cfg.CoverageThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
+	verdict.Model = j.client.Model()
 
 	return &verdict, nil
 }

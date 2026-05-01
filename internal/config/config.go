@@ -45,6 +45,21 @@ type AgentsConfig struct {
 	PlanJudge    string `yaml:"plan_judge,omitempty"`
 	CodeJudge    string `yaml:"code_judge,omitempty"`
 	QualityJudge string `yaml:"quality_judge,omitempty"`
+
+	// JudgeModel pins a model for every judge slot, overriding Model.
+	// Per-phase fields below override JudgeModel for that slot only.
+	// All judge_*_model fields fall back to JudgeModel, then to Model,
+	// so configs that only set Model keep working unchanged.
+	//
+	// CodeJudgeModel is reserved for parity with the per-phase judge
+	// backend fields; the current code judge runs deterministic shell
+	// checks (lint/test/build) and does not call an LLM, so the value
+	// is accepted but unused until a future LLM-backed code judge
+	// lands.
+	JudgeModel        string `yaml:"judge_model,omitempty"`
+	PlanJudgeModel    string `yaml:"plan_judge_model,omitempty"`
+	CodeJudgeModel    string `yaml:"code_judge_model,omitempty"`
+	QualityJudgeModel string `yaml:"quality_judge_model,omitempty"`
 }
 
 // PlanJudgeBackend returns the backend setting for the plan judge,
@@ -75,6 +90,39 @@ func (a AgentsConfig) QualityJudgeBackend() string {
 		return a.QualityJudge
 	}
 	return a.Judge
+}
+
+// PlanJudgeModelResolved returns the model the plan judge should use,
+// applying the fallback chain plan_judge_model → judge_model → model.
+// Empty string means "let the underlying client pick its default".
+func (a AgentsConfig) PlanJudgeModelResolved() string {
+	return firstNonEmpty(a.PlanJudgeModel, a.JudgeModel, a.Model)
+}
+
+// CodeJudgeModelResolved mirrors PlanJudgeModelResolved for the code
+// judge slot. The current code judge does not call an LLM so the value
+// is unused at runtime; the resolver exists so configs are accepted
+// uniformly and the field can be wired the day an LLM-backed code
+// judge lands.
+func (a AgentsConfig) CodeJudgeModelResolved() string {
+	return firstNonEmpty(a.CodeJudgeModel, a.JudgeModel, a.Model)
+}
+
+// QualityJudgeModelResolved returns the model the quality judge should
+// use, applying the fallback chain quality_judge_model → judge_model
+// → model. Empty string means "let the underlying client pick its
+// default".
+func (a AgentsConfig) QualityJudgeModelResolved() string {
+	return firstNonEmpty(a.QualityJudgeModel, a.JudgeModel, a.Model)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 type EnvironmentConfig struct {
@@ -366,6 +414,18 @@ func Merge(base *Config, overrides Config) *Config {
 	}
 	if overrides.Agents.QualityJudge != "" {
 		merged.Agents.QualityJudge = overrides.Agents.QualityJudge
+	}
+	if overrides.Agents.JudgeModel != "" {
+		merged.Agents.JudgeModel = overrides.Agents.JudgeModel
+	}
+	if overrides.Agents.PlanJudgeModel != "" {
+		merged.Agents.PlanJudgeModel = overrides.Agents.PlanJudgeModel
+	}
+	if overrides.Agents.CodeJudgeModel != "" {
+		merged.Agents.CodeJudgeModel = overrides.Agents.CodeJudgeModel
+	}
+	if overrides.Agents.QualityJudgeModel != "" {
+		merged.Agents.QualityJudgeModel = overrides.Agents.QualityJudgeModel
 	}
 
 	// Environment

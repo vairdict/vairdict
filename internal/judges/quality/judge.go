@@ -24,9 +24,11 @@ import (
 
 // Completer is the interface for sending prompts to an LLM. Quality judge uses
 // multi-turn tool-use so the model can call auxiliary tools (like check_path)
-// before submitting the final verdict.
+// before submitting the final verdict. Model() reports the model the client
+// routes calls to so the verdict can be stamped with the model that produced it.
 type Completer interface {
 	CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, handlers map[string]claude.ToolHandler, target any) error
+	Model() string
 }
 
 // CommandRunner executes a command and returns its output and error.
@@ -597,11 +599,13 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
 	verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
 	verdict.ReturnTo = normaliseReturnTo(verdict.ReturnTo, verdict.Pass, verdict.Gaps)
+	verdict.Model = j.client.Model()
 
 	slog.Info("quality judge verdict",
 		"score", verdict.Score,
 		"pass", verdict.Pass,
 		"gaps", len(verdict.Gaps),
+		"model", verdict.Model,
 	)
 
 	return verdict, nil

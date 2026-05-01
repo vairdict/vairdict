@@ -228,6 +228,11 @@ func (c *Client) Complete(ctx context.Context, prompt string, target any) error 
 	return c.CompleteWithSystem(ctx, "", prompt, target)
 }
 
+// Model returns the model name the client sends with each request.
+// Used by judges to stamp the verdict with the model that produced
+// it so PR comments and logs can show which model graded the change.
+func (c *Client) Model() string { return c.model }
+
 // CompleteWithSystem sends a prompt with a system message to the Anthropic
 // Messages API and unmarshals the JSON response into the target struct.
 func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, target any) error {

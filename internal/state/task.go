@@ -154,6 +154,12 @@ type Verdict struct {
 	// it to drive outer-loop rewinds rather than just retrying the same
 	// phase.
 	ReturnTo ReturnTo `json:"return_to,omitempty"`
+	// Model identifies the LLM that produced this verdict. Surfaced in
+	// PR comments and logs so reviewers can see which judge model
+	// graded the change — useful when a config swaps the judge model
+	// independently of the producer model. Empty for verdicts produced
+	// without an LLM (e.g. the code judge's deterministic shell checks).
+	Model string `json:"model,omitempty"`
 }
 
 // Attempt records one execution of a phase.

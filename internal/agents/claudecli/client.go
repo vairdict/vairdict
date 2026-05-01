@@ -79,6 +79,7 @@ type Client struct {
 	timeout    time.Duration
 	cmdFactory CommandFactory
 	extraArgs  []string
+	model      string
 }
 
 // Option configures a Client.
@@ -103,6 +104,14 @@ func WithExtraArgs(args ...string) Option {
 	return func(c *Client) { c.extraArgs = append(c.extraArgs, args...) }
 }
 
+// WithModel pins the Claude CLI subprocess to a specific model via the
+// `--model` flag. Empty string is a no-op (the CLI picks its default).
+// Use this when the judge model must be different from whatever the
+// `claude` install would otherwise select.
+func WithModel(model string) Option {
+	return func(c *Client) { c.model = model }
+}
+
 // New constructs a Client with the given options.
 func New(opts ...Option) *Client {
 	c := &Client{
@@ -122,6 +131,11 @@ func IsAvailable() bool {
 	_, err := exec.LookPath("claude")
 	return err == nil
 }
+
+// Model returns the model the client is pinned to via WithModel, or
+// empty string when the client uses the CLI's default. Callers that
+// stamp verdicts with the model that produced them read this.
+func (c *Client) Model() string { return c.model }
 
 // Complete is a convenience wrapper for CompleteWithSystem with an empty
 // system prompt. It exists so Client satisfies any narrow Completer-style
@@ -214,6 +228,9 @@ func (c *Client) completeWithOpts(ctx context.Context, system, prompt string, no
 	if system != "" {
 		args = append(args, "--append-system-prompt", system)
 	}
+	if c.model != "" {
+		args = append(args, "--model", c.model)
+	}
 	args = append(args, c.extraArgs...)
 	args = append(args, prompt)
 
@@ -290,6 +307,9 @@ func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, 
 	args := []string{"-p", "--output-format", "json"}
 	if system != "" {
 		args = append(args, "--append-system-prompt", system)
+	}
+	if c.model != "" {
+		args = append(args, "--model", c.model)
 	}
 	args = append(args, c.extraArgs...)
 	args = append(args, prompt)

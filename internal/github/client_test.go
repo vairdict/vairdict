@@ -489,6 +489,42 @@ func TestFormatVerdictComment_NoGaps(t *testing.T) {
 	}
 }
 
+func TestFormatVerdictComment_RendersModel(t *testing.T) {
+	// AC: verdict output records which model produced the verdict so PR
+	// comments can show it. When Model is set, the score line surfaces it
+	// alongside score/phase/loop.
+	verdict := &state.Verdict{
+		Score: 95,
+		Pass:  true,
+		Model: "claude-opus-4-7",
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseQuality, 1, nil)
+
+	if !contains(comment, "claude-opus-4-7") {
+		t.Errorf("comment must mention the model that produced the verdict, got:\n%s", comment)
+	}
+	if !contains(comment, "**Model:**") {
+		t.Errorf("comment must label the model, got:\n%s", comment)
+	}
+}
+
+func TestFormatVerdictComment_NoModelOmitted(t *testing.T) {
+	// Code judge runs deterministic shell checks (lint/test/build) and
+	// leaves Model empty. The score line must omit the model field
+	// rather than render an empty `Model: \`\`` artifact.
+	verdict := &state.Verdict{
+		Score: 100,
+		Pass:  true,
+	}
+
+	comment := FormatVerdictComment(verdict, state.PhaseCode, 1, nil)
+
+	if contains(comment, "**Model:**") {
+		t.Errorf("comment must omit Model label when verdict has no model, got:\n%s", comment)
+	}
+}
+
 func TestFormatVerdictComment_FailWithNoGaps_NoSuchMessage(t *testing.T) {
 	// "No issues found" is a PASS-only affirmation. A failing verdict
 	// (even one without structured gaps) must never render it.

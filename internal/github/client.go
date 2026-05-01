@@ -619,7 +619,7 @@ func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict 
 			slog.Warn("review with inline comments failed, falling back to plain comment",
 				"pr", prNumber, "inline_comments", len(inlineComments), "error", err)
 		} else {
-			slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "review", "inline_comments", len(inlineComments))
+			slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "model", verdict.Model, "mode", "review", "inline_comments", len(inlineComments))
 			return nil
 		}
 	}
@@ -629,7 +629,7 @@ func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict 
 	if verdict.Pass {
 		err := c.ApprovePR(ctx, prNumber, comment)
 		if err == nil {
-			slog.Info("verdict posted", "pr", prNumber, "pass", true, "score", verdict.Score, "mode", "approval")
+			slog.Info("verdict posted", "pr", prNumber, "pass", true, "score", verdict.Score, "model", verdict.Model, "mode", "approval")
 			return nil
 		}
 		// Approval denied (self-authored PR, Actions token, etc).
@@ -640,7 +640,7 @@ func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict 
 	if err := c.AddComment(ctx, prNumber, comment); err != nil {
 		return fmt.Errorf("posting verdict comment: %w", err)
 	}
-	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "mode", "comment")
+	slog.Info("verdict posted", "pr", prNumber, "pass", verdict.Pass, "score", verdict.Score, "model", verdict.Model, "mode", "comment")
 	return nil
 }
 
@@ -897,8 +897,14 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 		fmt.Fprintf(&b, "<h2><img src=\"%s\" alt=\"VAIrdict\" height=\"24\"> VAIrdict Verdict: ❌ FAIL</h2>\n\n", LogoURL)
 	}
 
-	// Summary line.
-	fmt.Fprintf(&b, "**Score:** %.0f%% | **Phase:** %s | **Loop:** %d\n\n", verdict.Score, phase, loop)
+	// Summary line. The model field is appended when the judge stamped
+	// it (every LLM-backed judge does); deterministic judges that don't
+	// call an LLM leave it empty and the field is omitted from the line.
+	fmt.Fprintf(&b, "**Score:** %.0f%% | **Phase:** %s | **Loop:** %d", verdict.Score, phase, loop)
+	if verdict.Model != "" {
+		fmt.Fprintf(&b, " | **Model:** `%s`", verdict.Model)
+	}
+	b.WriteString("\n\n")
 
 	// Judge narrative (Reviewed / Notes sections). Without this, a passing
 	// verdict with no gaps renders as just the score line, hiding everything

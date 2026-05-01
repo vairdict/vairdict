@@ -27,11 +27,14 @@ import (
 
 // completer is the narrow interface that the plan / quality judges and the
 // plan phase's Planner all share. Both claude.Client and claudecli.Client
-// satisfy it structurally.
+// satisfy it structurally. Model() is exposed so judges can stamp the
+// verdict with the model that produced it without each call site
+// having to plumb the resolved model through separately.
 type completer interface {
 	CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
 	CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
 	CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, handlers map[string]claude.ToolHandler, target any) error
+	Model() string
 }
 
 // completerRole names a completer slot in the orchestration pipeline.
@@ -75,6 +78,29 @@ func backendForRole(cfg *config.Config, role completerRole) string {
 	}
 }
 
+// modelForRole returns the model name the given role should pin. The
+// planner shares the global agents.model — its output is consumed by
+// a judge anyway, so swapping its model independently is out of scope
+// for this knob. Each judge applies the
+// {plan,code,quality}_judge_model → judge_model → model fallback so a
+// user can grade plans with a stricter model than the one that
+// produced them. Empty string means "let the underlying client pick
+// its default".
+func modelForRole(cfg *config.Config, role completerRole) string {
+	switch role {
+	case rolePlanner:
+		return cfg.Agents.Model
+	case rolePlanJudge:
+		return cfg.Agents.PlanJudgeModelResolved()
+	case roleCodeJudge:
+		return cfg.Agents.CodeJudgeModelResolved()
+	case roleQualityJudge:
+		return cfg.Agents.QualityJudgeModelResolved()
+	default:
+		return ""
+	}
+}
+
 // chooseBackend returns the resolved backend for the given config setting.
 // `cliAvailable` is injected (via claudecli.IsAvailable in production) so
 // the resolver is deterministic and unit-testable without touching PATH.
@@ -108,7 +134,11 @@ func chooseBackendForRole(roleName, setting string, cliAvailable bool) (backendK
 
 // resolveCompleter picks a backend for the given role per chooseBackend
 // and constructs the matching client. The returned backendKind is
-// informational (rendered as a `completer:` note in CLI mode).
+// informational (rendered as a `completer:` note in CLI mode). The
+// model is resolved via modelForRole so a user can swap the judge
+// model independently of the producer model — the override flows into
+// the underlying client (claude.WithModel / claudecli.WithModel) so
+// the actual API call uses it.
 func resolveCompleter(cfg *config.Config, role completerRole) (completer, backendKind, error) {
 	setting := backendForRole(cfg, role)
 	kind, err := chooseBackendForRole("agents."+string(role), setting, claudecli.IsAvailable())
@@ -116,20 +146,30 @@ func resolveCompleter(cfg *config.Config, role completerRole) (completer, backen
 		return nil, "", err
 	}
 
+	model := modelForRole(cfg, role)
+
 	switch kind {
 	case backendClaudeCLI:
 		// --dangerously-skip-permissions lets the subprocess call tools
 		// without interactive prompts, matching the claudecode runner.
-		return claudecli.New(
+		opts := []claudecli.Option{
 			claudecli.WithExtraArgs("--dangerously-skip-permissions"),
-		), kind, nil
+		}
+		if model != "" {
+			opts = append(opts, claudecli.WithModel(model))
+		}
+		return claudecli.New(opts...), kind, nil
 	case backendClaudeAPI:
 		// Judges must be deterministic — temperature=0 removes sampling
 		// variance so the same (prompt, diff) pair produces the same verdict
 		// structure across runs. The planner shares this client, which is
 		// fine: its output is consumed by a judge anyway, so determinism
 		// flows through the whole pipeline.
-		c, err := claude.NewClient(cfg, claude.WithTemperature(0))
+		opts := []claude.Option{claude.WithTemperature(0)}
+		if model != "" {
+			opts = append(opts, claude.WithModel(model))
+		}
+		c, err := claude.NewClient(cfg, opts...)
 		if err != nil {
 			return nil, "", fmt.Errorf("creating claude client: %w", err)
 		}

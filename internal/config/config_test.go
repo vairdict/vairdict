@@ -420,6 +420,101 @@ func TestMerge_PerPhaseJudges(t *testing.T) {
 	}
 }
 
+func TestAgentsConfig_JudgeModelFallback(t *testing.T) {
+	// Existing-config shape: only Model is set. Every judge resolves to
+	// it. Guards AC: configs that only set agents.model keep working.
+	flat := AgentsConfig{Model: "claude-sonnet-4-20250514"}
+	if got := flat.PlanJudgeModelResolved(); got != "claude-sonnet-4-20250514" {
+		t.Errorf("flat plan judge model = %q, want claude-sonnet (Model fallback)", got)
+	}
+	if got := flat.CodeJudgeModelResolved(); got != "claude-sonnet-4-20250514" {
+		t.Errorf("flat code judge model = %q, want claude-sonnet (Model fallback)", got)
+	}
+	if got := flat.QualityJudgeModelResolved(); got != "claude-sonnet-4-20250514" {
+		t.Errorf("flat quality judge model = %q, want claude-sonnet (Model fallback)", got)
+	}
+
+	// JudgeModel pins all judges; Model stays as the producer model so
+	// `agents.judge_model` is the one knob that swaps every judge.
+	withGlobalJudge := AgentsConfig{
+		Model:      "claude-haiku-4-5",
+		JudgeModel: "claude-opus-4-7",
+	}
+	if got := withGlobalJudge.PlanJudgeModelResolved(); got != "claude-opus-4-7" {
+		t.Errorf("plan judge model with judge_model = %q, want claude-opus", got)
+	}
+	if got := withGlobalJudge.QualityJudgeModelResolved(); got != "claude-opus-4-7" {
+		t.Errorf("quality judge model with judge_model = %q, want claude-opus", got)
+	}
+
+	// Per-phase wins over global judge_model wins over model — the AC
+	// fallback chain. quality_judge_model overrides; plan inherits the
+	// global judge_model; the producer model (Model) never leaks into a
+	// judge slot when judge_model is set.
+	mixed := AgentsConfig{
+		Model:             "claude-haiku-4-5",
+		JudgeModel:        "claude-sonnet-4-6",
+		QualityJudgeModel: "claude-opus-4-7",
+	}
+	if got := mixed.PlanJudgeModelResolved(); got != "claude-sonnet-4-6" {
+		t.Errorf("plan judge model = %q, want claude-sonnet-4-6 (judge_model fallback)", got)
+	}
+	if got := mixed.QualityJudgeModelResolved(); got != "claude-opus-4-7" {
+		t.Errorf("quality judge model = %q, want claude-opus-4-7 (per-phase override)", got)
+	}
+}
+
+func TestParseConfig_JudgeModelFields(t *testing.T) {
+	data := []byte(`
+project:
+  name: judgemodel
+agents:
+  model: claude-sonnet-4-20250514
+  judge_model: claude-opus-4-7
+  plan_judge_model: claude-sonnet-4-6
+  quality_judge_model: claude-opus-4-7
+`)
+	cfg, err := ParseConfig(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents.JudgeModel != "claude-opus-4-7" {
+		t.Errorf("judge_model = %q, want claude-opus-4-7", cfg.Agents.JudgeModel)
+	}
+	if cfg.Agents.PlanJudgeModel != "claude-sonnet-4-6" {
+		t.Errorf("plan_judge_model = %q, want claude-sonnet-4-6", cfg.Agents.PlanJudgeModel)
+	}
+	if cfg.Agents.QualityJudgeModel != "claude-opus-4-7" {
+		t.Errorf("quality_judge_model = %q, want claude-opus-4-7", cfg.Agents.QualityJudgeModel)
+	}
+}
+
+func TestMerge_JudgeModelOverlay(t *testing.T) {
+	// Overlay (e.g. vairdict.ci.yaml) introduces a stricter judge model
+	// while leaving the producer model alone — the canonical use case
+	// from the issue: "swap the judge model in CI without touching the
+	// completer's model".
+	base := Defaults()
+	base.Project.Name = "base"
+	base.Agents.Model = "claude-haiku-4-5"
+
+	overrides := Config{
+		Agents: AgentsConfig{
+			JudgeModel: "claude-opus-4-7",
+		},
+	}
+	merged := Merge(&base, overrides)
+	if merged.Agents.Model != "claude-haiku-4-5" {
+		t.Errorf("model = %q, want claude-haiku-4-5 (producer preserved)", merged.Agents.Model)
+	}
+	if merged.Agents.JudgeModel != "claude-opus-4-7" {
+		t.Errorf("judge_model = %q, want claude-opus-4-7", merged.Agents.JudgeModel)
+	}
+	if got := merged.Agents.PlanJudgeModelResolved(); got != "claude-opus-4-7" {
+		t.Errorf("plan judge model = %q, want claude-opus-4-7", got)
+	}
+}
+
 func TestMerge_DoesNotMutateBase(t *testing.T) {
 	base := Defaults()
 	base.Project.Name = "original"
