@@ -375,6 +375,178 @@ func (c *Client) deletePreviousVerdicts(ctx context.Context, prNumber int) {
 	}
 }
 
+// reviewThreadsQuery fetches review threads on a PR along with the
+// authenticated user's login. The viewer login is used to filter threads
+// down to ones authored by the current actor (the VAIrdict bot in CI;
+// a human running `vairdict review` locally) so we never resolve another
+// reviewer's threads. comments.totalCount lets us distinguish a solo
+// bot comment from a thread someone has replied to.
+const reviewThreadsQuery = `query ($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+  viewer { login }
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          comments(first: 1) { totalCount nodes { author { login } } }
+        }
+      }
+    }
+  }
+}`
+
+const resolveReviewThreadMutation = `mutation ($id: ID!) {
+  resolveReviewThread(input: {threadId: $id}) { thread { id } }
+}`
+
+// reviewThreadsResponse mirrors the GraphQL shape we care about. Extra
+// fields are tolerated.
+type reviewThreadsResponse struct {
+	Data struct {
+		Viewer struct {
+			Login string `json:"login"`
+		} `json:"viewer"`
+		Repository struct {
+			PullRequest struct {
+				ReviewThreads struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []struct {
+						ID         string `json:"id"`
+						IsResolved bool   `json:"isResolved"`
+						Comments   struct {
+							TotalCount int `json:"totalCount"`
+							Nodes      []struct {
+								Author struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
+					} `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+// resolveOwnerRepo returns "owner/name" for the current repo via gh.
+// Used by the GraphQL helpers because gh's REST {owner}/{repo}
+// placeholder substitution doesn't extend to the graphql endpoint.
+func (c *Client) resolveOwnerRepo(ctx context.Context) (string, string, error) {
+	out, err := c.runner.Run(ctx, "gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	if err != nil {
+		return "", "", fmt.Errorf("resolving repo: %w", err)
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("unexpected nameWithOwner output: %q", string(out))
+	}
+	return parts[0], parts[1], nil
+}
+
+// listUnresolvedSelfThreadIDs walks every review thread on prNumber and
+// returns the GraphQL node IDs of those that are (a) not yet resolved
+// and (b) authored by the currently authenticated gh user. Pagination
+// is followed transparently. Filtering on "viewer" — rather than a
+// hardcoded bot login — keeps the helper symmetric for human use of
+// `vairdict review` and for the bot in CI.
+func (c *Client) listUnresolvedSelfThreadIDs(ctx context.Context, prNumber int) ([]string, error) {
+	owner, repo, err := c.resolveOwnerRepo(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	cursor := ""
+	for {
+		args := []string{
+			"api", "graphql",
+			"-f", "owner=" + owner,
+			"-f", "repo=" + repo,
+			"-F", fmt.Sprintf("pr=%d", prNumber),
+			"-f", "query=" + reviewThreadsQuery,
+		}
+		if cursor != "" {
+			args = append(args, "-f", "cursor="+cursor)
+		}
+		out, err := c.runner.Run(ctx, "gh", args...)
+		if err != nil {
+			return nil, fmt.Errorf("listing review threads on PR #%d: %w", prNumber, err)
+		}
+
+		var resp reviewThreadsResponse
+		if err := json.Unmarshal(out, &resp); err != nil {
+			return nil, fmt.Errorf("decoding review threads response: %w", err)
+		}
+
+		viewer := resp.Data.Viewer.Login
+		threads := resp.Data.Repository.PullRequest.ReviewThreads
+		for _, node := range threads.Nodes {
+			if node.IsResolved {
+				continue
+			}
+			if len(node.Comments.Nodes) == 0 {
+				continue
+			}
+			if !strings.EqualFold(node.Comments.Nodes[0].Author.Login, viewer) {
+				continue
+			}
+			// Preserve threads someone has replied to. totalCount > 1
+			// means the bot's original comment has at least one reply
+			// — auto-resolving would hide ongoing discussion.
+			if node.Comments.TotalCount > 1 {
+				continue
+			}
+			ids = append(ids, node.ID)
+		}
+
+		if !threads.PageInfo.HasNextPage || threads.PageInfo.EndCursor == "" {
+			break
+		}
+		cursor = threads.PageInfo.EndCursor
+	}
+	return ids, nil
+}
+
+// resolveReviewThread marks the GraphQL review thread with the given
+// node ID as resolved. Idempotent at the API level — calling it twice
+// is a no-op.
+func (c *Client) resolveReviewThread(ctx context.Context, threadID string) error {
+	_, err := c.runner.Run(ctx, "gh", "api", "graphql",
+		"-f", "id="+threadID,
+		"-f", "query="+resolveReviewThreadMutation,
+	)
+	if err != nil {
+		return fmt.Errorf("resolving review thread %s: %w", threadID, err)
+	}
+	return nil
+}
+
+// resolveSelfReviewThreads resolves every unresolved review thread on
+// prNumber that the current actor authored. Mirrors the best-effort
+// posture of deletePreviousVerdicts — failures are logged at debug,
+// never bubbled up: the new review must still be posted even if
+// thread cleanup fails (e.g. fine-grained PAT without write:discussion,
+// API hiccup, etc.).
+func (c *Client) resolveSelfReviewThreads(ctx context.Context, prNumber int) {
+	ids, err := c.listUnresolvedSelfThreadIDs(ctx, prNumber)
+	if err != nil {
+		slog.Debug("failed to list prior review threads for cleanup", "pr", prNumber, "error", err)
+		return
+	}
+	for _, id := range ids {
+		if err := c.resolveReviewThread(ctx, id); err != nil {
+			slog.Debug("failed to resolve prior review thread", "id", id, "error", err)
+			continue
+		}
+		slog.Debug("resolved prior review thread", "id", id)
+	}
+}
+
 // InlineComment represents a single inline review comment on a PR diff.
 type InlineComment struct {
 	Path     string `json:"path"`
@@ -399,6 +571,11 @@ func (c *Client) PostVerdict(ctx context.Context, prNumber int, verdict *state.V
 // the same review as the verdict summary — a single cohesive review.
 func (c *Client) PostVerdictWithDiff(ctx context.Context, prNumber int, verdict *state.Verdict, phase state.Phase, loop int, diff string) error {
 	c.deletePreviousVerdicts(ctx, prNumber)
+	// Cleans up inline review threads from any previous review the
+	// current actor posted on this PR. Without this, every push leaves
+	// the prior round's nits visible alongside the new ones — see
+	// https://github.com/vairdict/vairdict/pull/138 for the symptom.
+	c.resolveSelfReviewThreads(ctx, prNumber)
 
 	// Build inline comments from gaps with file:line info.
 	var inlineResult *InlineReviewResult
