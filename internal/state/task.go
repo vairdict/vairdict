@@ -415,6 +415,14 @@ type Task struct {
 	// liveness check; stale PIDs (process died without cleanup) show as
 	// not running and the task is resumable.
 	PID int `json:"pid,omitempty"`
+	// CLISessionIDs maps a completer role name (planner / plan_judge /
+	// quality_judge) to the most recent Claude CLI session ID captured
+	// from that role's claudecli client. `vairdict resume` reads this
+	// to reattach to the same session a previous run established
+	// instead of starting fresh and re-paying the system-prompt cost.
+	// Empty for tasks that ran on the API path (claudecli not used)
+	// or that were created before #137 — additive, no migration.
+	CLISessionIDs map[string]string `json:"cli_session_ids,omitempty"`
 	// Notes are transient, per-phase user guidance drained from the
 	// interactive run loop (#91). Never persisted (the `json:"-"` tag
 	// keeps them out of the DB column) — consumed exactly once by the

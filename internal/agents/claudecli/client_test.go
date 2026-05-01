@@ -349,3 +349,255 @@ func TestExtractJSON(t *testing.T) {
 		})
 	}
 }
+
+// --- Session reuse tests (#137) ---
+
+// stdoutCmdWithStderr is a fake exec.Cmd that prints stdout AND stderr.
+// Used for expired-session tests so the script can exit non-zero with
+// a stderr message resembling Claude's "session not found" wording.
+func stdoutCmdWithStderr(ctx context.Context, stdout, stderr string, exit int) *exec.Cmd {
+	script := `printf '%s' "$FAKE_STDOUT"; printf '%s' "$FAKE_STDERR" >&2; exit ${FAKE_EXIT:-0}`
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Env = append(os.Environ(),
+		"FAKE_STDOUT="+stdout,
+		"FAKE_STDERR="+stderr,
+		"FAKE_EXIT="+itoa(exit),
+	)
+	return cmd
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	digits := []byte{}
+	neg := false
+	if n < 0 {
+		neg = true
+		n = -n
+	}
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	if neg {
+		return "-" + string(digits)
+	}
+	return string(digits)
+}
+
+func TestCompleteWithSystem_FirstCallSendsFullSystemPrompt(t *testing.T) {
+	// First call (no prior session) must send --append-system-prompt
+	// AND must NOT include --resume.
+	envelope := `{"type":"result","is_error":false,"result":"{}","session_id":"sess_abc"}`
+	var captured []string
+	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		captured = append([]string{name}, args...)
+		return stdoutCmd(ctx, envelope)
+	}))
+
+	var got map[string]any
+	if err := c.CompleteWithSystem(context.Background(), "the system prompt", "p", &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	joined := strings.Join(captured, " ")
+	if !strings.Contains(joined, "--append-system-prompt the system prompt") {
+		t.Errorf("first call must include --append-system-prompt, got: %s", joined)
+	}
+	if strings.Contains(joined, "--resume") {
+		t.Errorf("first call must NOT include --resume, got: %s", joined)
+	}
+	if c.SessionID() != "sess_abc" {
+		t.Errorf("session id not captured: got %q, want sess_abc", c.SessionID())
+	}
+}
+
+func TestCompleteWithSystem_SecondCallResumesAndSkipsSystemPrompt(t *testing.T) {
+	// Second call (session id captured from first) must include
+	// --resume <id> and must NOT re-send --append-system-prompt — that's
+	// the whole point of the optimization.
+	envelopes := []string{
+		`{"type":"result","is_error":false,"result":"{}","session_id":"sess_abc"}`,
+		`{"type":"result","is_error":false,"result":"{}","session_id":"sess_abc"}`,
+	}
+	var capturedRuns [][]string
+	idx := 0
+	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedRuns = append(capturedRuns, append([]string{name}, args...))
+		env := envelopes[idx]
+		idx++
+		return stdoutCmd(ctx, env)
+	}))
+
+	var got map[string]any
+	if err := c.CompleteWithSystem(context.Background(), "system prompt v1", "p1", &got); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if err := c.CompleteWithSystem(context.Background(), "system prompt v1", "p2", &got); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+
+	if len(capturedRuns) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(capturedRuns))
+	}
+	first := strings.Join(capturedRuns[0], " ")
+	second := strings.Join(capturedRuns[1], " ")
+
+	if !strings.Contains(first, "--append-system-prompt") {
+		t.Errorf("first call should include --append-system-prompt, got: %s", first)
+	}
+	if !strings.Contains(second, "--resume sess_abc") {
+		t.Errorf("second call should include --resume sess_abc, got: %s", second)
+	}
+	if strings.Contains(second, "--append-system-prompt") {
+		t.Errorf("second call must NOT re-send --append-system-prompt, got: %s", second)
+	}
+}
+
+func TestWithSessionID_FirstCallResumesImmediately(t *testing.T) {
+	// Construction-time session id (e.g. from `vairdict resume`)
+	// must take effect on the very first call.
+	envelope := `{"type":"result","is_error":false,"result":"{}","session_id":"sess_xyz"}`
+	var captured []string
+	c := New(
+		WithSessionID("sess_xyz"),
+		WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			captured = append([]string{name}, args...)
+			return stdoutCmd(ctx, envelope)
+		}),
+	)
+	var got map[string]any
+	if err := c.CompleteWithSystem(context.Background(), "system prompt", "p", &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join(captured, " ")
+	if !strings.Contains(joined, "--resume sess_xyz") {
+		t.Errorf("seeded session must --resume on first call, got: %s", joined)
+	}
+	if strings.Contains(joined, "--append-system-prompt") {
+		t.Errorf("seeded session must NOT re-send system prompt, got: %s", joined)
+	}
+}
+
+func TestSetSessionID_RoundTrips(t *testing.T) {
+	c := New()
+	if c.SessionID() != "" {
+		t.Errorf("fresh client should have empty session id, got %q", c.SessionID())
+	}
+	c.SetSessionID("manual_id")
+	if c.SessionID() != "manual_id" {
+		t.Errorf("SetSessionID round-trip failed: got %q", c.SessionID())
+	}
+	c.SetSessionID("")
+	if c.SessionID() != "" {
+		t.Errorf("empty SetSessionID should clear, got %q", c.SessionID())
+	}
+}
+
+func TestCompleteWithSystem_ExpiredSessionRetriesFresh(t *testing.T) {
+	// First call: success, captures session id.
+	// Second call: simulates expired session — exits non-zero with
+	// stderr matching "session not found". Client must clear the
+	// session id and retry once with a fresh full-args invocation.
+	successEnv := `{"type":"result","is_error":false,"result":"{}","session_id":"sess_old"}`
+	freshEnv := `{"type":"result","is_error":false,"result":"{}","session_id":"sess_new"}`
+
+	var capturedRuns [][]string
+	calls := 0
+	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		capturedRuns = append(capturedRuns, append([]string{name}, args...))
+		calls++
+		switch calls {
+		case 1:
+			return stdoutCmd(ctx, successEnv)
+		case 2:
+			// Resume attempt — fail with expired-session stderr.
+			return stdoutCmdWithStderr(ctx, "", "Error: session not found\n", 1)
+		default:
+			// Fresh retry succeeds.
+			return stdoutCmd(ctx, freshEnv)
+		}
+	}))
+
+	var got map[string]any
+	if err := c.CompleteWithSystem(context.Background(), "sys", "p1", &got); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if err := c.CompleteWithSystem(context.Background(), "sys", "p2", &got); err != nil {
+		t.Fatalf("second call after expired-session retry: %v", err)
+	}
+
+	if calls != 3 {
+		t.Errorf("expected 3 subprocess invocations (initial, expired resume, fresh retry), got %d", calls)
+	}
+	joinedRetry := strings.Join(capturedRuns[2], " ")
+	if strings.Contains(joinedRetry, "--resume") {
+		t.Errorf("retry after expired session should NOT --resume, got: %s", joinedRetry)
+	}
+	if !strings.Contains(joinedRetry, "--append-system-prompt") {
+		t.Errorf("retry after expired session should re-send --append-system-prompt, got: %s", joinedRetry)
+	}
+	if c.SessionID() != "sess_new" {
+		t.Errorf("after retry, session id should be sess_new, got %q", c.SessionID())
+	}
+}
+
+func TestLooksLikeSessionExpired(t *testing.T) {
+	cases := []struct {
+		stderr string
+		want   bool
+	}{
+		{"Error: session not found", true},
+		{"session expired", true},
+		{"Session does not exist for id sess_xyz", true},
+		{"no such session", true},
+		{"invalid session", true},
+		{"connection timeout", false},
+		{"some other error", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := looksLikeSessionExpired(tc.stderr); got != tc.want {
+			t.Errorf("looksLikeSessionExpired(%q) = %v, want %v", tc.stderr, got, tc.want)
+		}
+	}
+}
+
+func TestBuildArgs_Shape(t *testing.T) {
+	t.Run("no_session_with_system", func(t *testing.T) {
+		args := buildArgs("", "sys", "", nil, "p", false)
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "-p --output-format json") {
+			t.Errorf("missing core flags: %s", joined)
+		}
+		if !strings.Contains(joined, "--append-system-prompt sys") {
+			t.Errorf("missing system: %s", joined)
+		}
+		if strings.Contains(joined, "--resume") {
+			t.Errorf("must not include --resume: %s", joined)
+		}
+		if args[len(args)-1] != "p" {
+			t.Errorf("prompt must be last: %v", args)
+		}
+	})
+
+	t.Run("with_session_skips_system", func(t *testing.T) {
+		args := buildArgs("sess_id", "sys", "", nil, "p", false)
+		joined := strings.Join(args, " ")
+		if !strings.HasPrefix(joined, "--resume sess_id") {
+			t.Errorf("--resume must come first, got: %s", joined)
+		}
+		if strings.Contains(joined, "--append-system-prompt") {
+			t.Errorf("must not include --append-system-prompt on resume: %s", joined)
+		}
+	})
+
+	t.Run("notools_flag", func(t *testing.T) {
+		args := buildArgs("", "", "", nil, "p", true)
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, "--tools") {
+			t.Errorf("expected --tools flag: %s", joined)
+		}
+	})
+}

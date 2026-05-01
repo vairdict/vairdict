@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
@@ -73,13 +74,21 @@ func (e *ExitError) Unwrap() error { return e.Err }
 // (typically `sh -c` or a TestHelperProcess-style re-invocation).
 type CommandFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 
-// Client is a Completer backed by the Claude Code CLI. It holds no state
-// between calls; options only affect argument construction and the exec seam.
+// Client is a Completer backed by the Claude Code CLI. It holds the
+// in-flight Claude session ID so calls 2+ within the same plan run
+// can `--resume <id>` instead of re-sending the full system prompt
+// and standards block on every loop. The session ID is mutex-guarded
+// because Completer methods may be invoked from different goroutines
+// in the orchestrator (each loop is sequential, but state.Store
+// access is on a separate timeline).
 type Client struct {
 	timeout    time.Duration
 	cmdFactory CommandFactory
 	extraArgs  []string
 	model      string
+
+	mu        sync.Mutex
+	sessionID string
 }
 
 // Option configures a Client.
@@ -112,6 +121,15 @@ func WithModel(model string) Option {
 	return func(c *Client) { c.model = model }
 }
 
+// WithSessionID seeds the initial Claude session ID at construction.
+// When set, the very first call switches from `-p` to
+// `--resume <id> -p` and skips re-sending the system prompt — used by
+// `vairdict resume` to reattach to the session a previous run
+// established. Empty string (the default) means "start fresh."
+func WithSessionID(id string) Option {
+	return func(c *Client) { c.sessionID = id }
+}
+
 // New constructs a Client with the given options.
 func New(opts ...Option) *Client {
 	c := &Client{
@@ -136,6 +154,26 @@ func IsAvailable() bool {
 // empty string when the client uses the CLI's default. Callers that
 // stamp verdicts with the model that produced them read this.
 func (c *Client) Model() string { return c.model }
+
+// SessionID returns the most recent Claude session ID captured from
+// the CLI envelope, or empty string when no session has been
+// established yet. The orchestrator reads this after each phase to
+// persist the session on state.Task so `vairdict resume` can
+// reattach.
+func (c *Client) SessionID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessionID
+}
+
+// SetSessionID seeds (or clears) the session ID at runtime. Used on
+// resume to restore the session a previous run established. Pass ""
+// to force a fresh session on the next call.
+func (c *Client) SetSessionID(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionID = id
+}
 
 // Complete is a convenience wrapper for CompleteWithSystem with an empty
 // system prompt. It exists so Client satisfies any narrow Completer-style
@@ -201,14 +239,16 @@ func (c *Client) CompleteWithTools(ctx context.Context, system, prompt string, t
 	return fmt.Errorf("final tool %q not found in tools list", finalTool)
 }
 
-// envelope is the subset of Claude Code's `--output-format json` result that
-// we care about. We explicitly decode only the fields we need so the rest
-// (session_id, cost, usage, …) are tolerated as extras.
+// envelope is the subset of Claude Code's `--output-format json` result
+// that we care about. SessionID was previously discarded; #137 captures
+// it so subsequent calls can `--resume <id>` instead of re-sending the
+// full system prompt on every loop.
 type envelope struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
-	IsError bool   `json:"is_error"`
-	Result  string `json:"result"`
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
+	IsError   bool   `json:"is_error"`
+	Result    string `json:"result"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // completeWithOpts is the core CLI invocation. When noTools is true it
@@ -216,59 +256,28 @@ type envelope struct {
 // response. This is critical for judge calls that must return JSON directly
 // rather than spending turns reading files.
 func (c *Client) completeWithOpts(ctx context.Context, system, prompt string, noTools bool, target any) error {
-	start := time.Now()
+	return c.runAndDecode(ctx, system, prompt, noTools, target)
+}
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	args := []string{"-p", "--output-format", "json"}
-	if noTools {
-		args = append(args, "--tools", "")
-	}
-	if system != "" {
-		args = append(args, "--append-system-prompt", system)
-	}
-	if c.model != "" {
-		args = append(args, "--model", c.model)
-	}
-	args = append(args, c.extraArgs...)
-	args = append(args, prompt)
-
-	cmd := c.cmdFactory(ctx, "claude", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	slog.Debug("running claude cli", "args", args, "noTools", noTools, "timeout", c.timeout)
-
-	if err := cmd.Run(); err != nil {
-		if execErr, ok := err.(*exec.Error); ok {
-			return &NotInstalledError{Err: execErr}
+// runAndDecode handles session-aware CLI invocation: builds args based
+// on the current session ID, runs the subprocess, decodes the envelope,
+// captures the new session_id, and unmarshals the result into target.
+// On a stderr that looks like an expired/missing session it transparently
+// clears the session ID and retries once with full args (start fresh).
+func (c *Client) runAndDecode(ctx context.Context, system, prompt string, noTools bool, target any) error {
+	env, err := c.runOnce(ctx, system, prompt, noTools)
+	if err != nil {
+		// If the failure looks like an expired session, drop the
+		// stored ID and try once more from scratch. We log the
+		// reason so an operator can see the resume cycle in
+		// `vairdict logs`.
+		if c.maybeClearExpiredSession(err) {
+			slog.Info("claude cli session expired, retrying with fresh session", "err", err.Error())
+			env, err = c.runOnce(ctx, system, prompt, noTools)
 		}
-		if ctx.Err() != nil {
-			return fmt.Errorf("claude cli cancelled: %w", ctx.Err())
+		if err != nil {
+			return err
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return &ExitError{
-				ExitCode: exitErr.ExitCode(),
-				Stderr:   stderr.String(),
-				Err:      err,
-			}
-		}
-		return fmt.Errorf("running claude cli: %w", err)
-	}
-
-	slog.Debug("claude cli completed", "duration", time.Since(start), "noTools", noTools)
-
-	var env envelope
-	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
-		return &ParseError{Raw: stdout.String(), Err: fmt.Errorf("decoding envelope: %w", err)}
-	}
-	if env.IsError {
-		return &ParseError{Raw: env.Result, Err: fmt.Errorf("claude cli returned is_error=true (subtype=%s)", env.Subtype)}
-	}
-	if env.Result == "" {
-		return &ParseError{Raw: stdout.String(), Err: fmt.Errorf("empty result field in envelope")}
 	}
 
 	cleaned := extractJSON(env.Result)
@@ -285,92 +294,162 @@ func (c *Client) completeWithOpts(ctx context.Context, system, prompt string, no
 	return nil
 }
 
+// runOnce executes a single CLI subprocess attempt. Returns the decoded
+// envelope on success; typed errors (NotInstalledError, ExitError,
+// ParseError) on failure. Captures and stores the envelope's session_id
+// so subsequent calls within this Client lifetime can --resume.
+func (c *Client) runOnce(ctx context.Context, system, prompt string, noTools bool) (envelope, error) {
+	start := time.Now()
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	c.mu.Lock()
+	sessionID := c.sessionID
+	c.mu.Unlock()
+
+	args := buildArgs(sessionID, system, c.model, c.extraArgs, prompt, noTools)
+	cmd := c.cmdFactory(ctx, "claude", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	slog.Debug("running claude cli",
+		"args", args,
+		"noTools", noTools,
+		"timeout", c.timeout,
+		"resumed", sessionID != "",
+	)
+
+	if err := cmd.Run(); err != nil {
+		if execErr, ok := err.(*exec.Error); ok {
+			return envelope{}, &NotInstalledError{Err: execErr}
+		}
+		if ctx.Err() != nil {
+			return envelope{}, fmt.Errorf("claude cli cancelled: %w", ctx.Err())
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return envelope{}, &ExitError{
+				ExitCode: exitErr.ExitCode(),
+				Stderr:   stderr.String(),
+				Err:      err,
+			}
+		}
+		return envelope{}, fmt.Errorf("running claude cli: %w", err)
+	}
+
+	slog.Debug("claude cli completed", "duration", time.Since(start), "noTools", noTools)
+
+	var env envelope
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		return envelope{}, &ParseError{Raw: stdout.String(), Err: fmt.Errorf("decoding envelope: %w", err)}
+	}
+	if env.IsError {
+		return envelope{}, &ParseError{Raw: env.Result, Err: fmt.Errorf("claude cli returned is_error=true (subtype=%s)", env.Subtype)}
+	}
+	if env.Result == "" {
+		return envelope{}, &ParseError{Raw: stdout.String(), Err: fmt.Errorf("empty result field in envelope")}
+	}
+
+	if env.SessionID != "" {
+		c.mu.Lock()
+		c.sessionID = env.SessionID
+		c.mu.Unlock()
+	}
+
+	return env, nil
+}
+
+// buildArgs returns the argv for one `claude -p` invocation. When
+// sessionID is non-empty the call uses `--resume <id>` and skips
+// `--append-system-prompt` (the system prompt is already in the
+// resumed session); otherwise it sends the full first-call args.
+// Pulled out as a free function so it's trivially unit-testable.
+func buildArgs(sessionID, system, model string, extra []string, prompt string, noTools bool) []string {
+	args := make([]string, 0, 12)
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	args = append(args, "-p", "--output-format", "json")
+	if noTools {
+		args = append(args, "--tools", "")
+	}
+	if sessionID == "" && system != "" {
+		args = append(args, "--append-system-prompt", system)
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, extra...)
+	args = append(args, prompt)
+	return args
+}
+
+// maybeClearExpiredSession inspects an error from a `claude` invocation
+// and, if it looks like an expired/missing session, clears the stored
+// session ID and returns true so the caller knows to retry. Returns
+// false (and leaves state alone) when the error is unrelated to
+// session lifecycle. We only consider clearing when a session was
+// actually in use — otherwise there's nothing to clear.
+func (c *Client) maybeClearExpiredSession(err error) bool {
+	c.mu.Lock()
+	hadSession := c.sessionID != ""
+	c.mu.Unlock()
+	if !hadSession {
+		return false
+	}
+
+	exitErr, ok := err.(*ExitError)
+	if !ok {
+		return false
+	}
+	if !looksLikeSessionExpired(exitErr.Stderr) {
+		return false
+	}
+
+	c.mu.Lock()
+	c.sessionID = ""
+	c.mu.Unlock()
+	return true
+}
+
+// looksLikeSessionExpired matches the Claude CLI's stderr signatures
+// for an unusable session id. Kept loose because the CLI's wording has
+// drifted across versions; false positives just cause an extra fresh
+// invocation, which is cheap.
+func looksLikeSessionExpired(stderr string) bool {
+	if stderr == "" {
+		return false
+	}
+	low := strings.ToLower(stderr)
+	if !strings.Contains(low, "session") {
+		return false
+	}
+	for _, marker := range []string{"expired", "not found", "no such", "invalid", "does not exist"} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // CompleteWithSystem runs `claude -p --output-format json` with the given
 // system and user prompts and unmarshals the assistant's JSON output into
 // target. Structure:
 //
-//  1. Spawn `claude` with args built from the options.
-//  2. Read the envelope and extract envelope.Result.
+//  1. Spawn `claude` with args built from the options (including
+//     `--resume <id>` when a prior session ID is on the Client).
+//  2. Read the envelope and extract envelope.Result. Capture
+//     envelope.SessionID so subsequent calls can resume.
 //  3. Pass envelope.Result through extractJSON (strips markdown fences).
 //  4. json.Unmarshal into target.
 //
 // Errors are typed: NotInstalledError when the binary is missing, ExitError
 // when the process exits non-zero, ParseError for any JSON decode failure.
 // ctx cancellation and the configured timeout are both honored via
-// CommandContext.
+// CommandContext. Tool use is left enabled (this is the planner path).
 func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, target any) error {
-	start := time.Now()
-
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	args := []string{"-p", "--output-format", "json"}
-	if system != "" {
-		args = append(args, "--append-system-prompt", system)
-	}
-	if c.model != "" {
-		args = append(args, "--model", c.model)
-	}
-	args = append(args, c.extraArgs...)
-	args = append(args, prompt)
-
-	cmd := c.cmdFactory(ctx, "claude", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	slog.Debug("running claude cli", "args", args, "timeout", c.timeout)
-
-	if err := cmd.Run(); err != nil {
-		// Binary not found: exec.Error wraps the LookPath failure.
-		if execErr, ok := err.(*exec.Error); ok {
-			return &NotInstalledError{Err: execErr}
-		}
-		// ctx.Err() check must come before ExitError: a killed process
-		// also surfaces as an ExitError but the root cause is the
-		// cancellation / timeout.
-		if ctx.Err() != nil {
-			return fmt.Errorf("claude cli cancelled: %w", ctx.Err())
-		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return &ExitError{
-				ExitCode: exitErr.ExitCode(),
-				Stderr:   stderr.String(),
-				Err:      err,
-			}
-		}
-		return fmt.Errorf("running claude cli: %w", err)
-	}
-
-	slog.Debug("claude cli completed", "duration", time.Since(start))
-
-	var env envelope
-	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
-		return &ParseError{Raw: stdout.String(), Err: fmt.Errorf("decoding envelope: %w", err)}
-	}
-	if env.IsError {
-		return &ParseError{Raw: env.Result, Err: fmt.Errorf("claude cli returned is_error=true (subtype=%s)", env.Subtype)}
-	}
-	if env.Result == "" {
-		return &ParseError{Raw: stdout.String(), Err: fmt.Errorf("empty result field in envelope")}
-	}
-
-	cleaned := extractJSON(env.Result)
-	if err := json.Unmarshal([]byte(cleaned), target); err != nil {
-		// Log the raw output so operators can diagnose what Claude
-		// actually said when the extract+parse path fails. Slog debug
-		// only — the ParseError itself truncates to 200 chars for
-		// display, which isn't enough to see what went wrong.
-		slog.Debug("claude cli parse failed",
-			"err", err,
-			"raw_len", len(env.Result),
-			"cleaned_len", len(cleaned),
-			"raw_head", truncate(env.Result, 500),
-			"cleaned_head", truncate(cleaned, 500),
-		)
-		return &ParseError{Raw: env.Result, Err: fmt.Errorf("decoding result into target: %w", err)}
-	}
-	return nil
+	return c.runAndDecode(ctx, system, prompt, false, target)
 }
 
 // truncate returns the first n characters of s (never panics on short

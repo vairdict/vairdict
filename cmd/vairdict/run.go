@@ -586,11 +586,6 @@ func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorSchem
 		return fmt.Errorf("backend validation: %w", err)
 	}
 
-	comps, err := resolveAllCompleters(cfg)
-	if err != nil {
-		return err
-	}
-
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolving working directory: %w", err)
@@ -619,7 +614,16 @@ func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorSchem
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			results[idx] = runSingleTask(ctx, cfg, comps, store, repoRoot, intent, issueNum, priority)
+			// #137: each task gets its own completer instances so
+			// claudecli session state doesn't bleed between
+			// concurrent tasks. Each session belongs to exactly
+			// one logical task.
+			perTaskComps, err := resolveAllCompleters(cfg)
+			if err != nil {
+				results[idx] = taskResult{Intent: intent, Err: err}
+				return
+			}
+			results[idx] = runSingleTask(ctx, cfg, perTaskComps, store, repoRoot, intent, issueNum, priority)
 			r := results[idx]
 			status := "pass"
 			if r.Err != nil {
@@ -1171,6 +1175,13 @@ func lastGapsForPhase(task *state.Task, phase state.Phase) []state.Gap {
 func runPlanPhase(ctx context.Context, cfg *config.Config, planner, judgeClient completer, store *state.Store, task *state.Task, r ui.Renderer) (*planphase.PhaseResult, error) {
 	r.PhaseStart(state.PhasePlan)
 
+	// #137: reattach to any persisted Claude CLI session so loop 2+
+	// of this phase (or a `vairdict resume` continuation) skips
+	// re-sending the system prompt and standards block. No-op when
+	// the client is the HTTP API path or no prior session exists.
+	seedCLISession(planner, task, rolePlanner)
+	seedCLISession(judgeClient, task, rolePlanJudge)
+
 	judge := planjudge.New(judgeClient, cfg.Phases.Plan)
 	phase := planphase.New(planner, judge, cfg.Phases.Plan)
 
@@ -1193,6 +1204,11 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, planner, judgeClient 
 
 	result, err := phase.Run(ctx, task)
 	spin.Stop()
+	// Capture session IDs BEFORE returning so the persisted task
+	// row carries the session ids even on the error path. The next
+	// `vairdict resume` will reuse them.
+	captureCLISession(planner, task, rolePlanner)
+	captureCLISession(judgeClient, task, rolePlanJudge)
 	if err != nil {
 		if updateErr := store.UpdateTask(task); updateErr != nil {
 			slog.Error("failed to persist task state", "error", updateErr)
@@ -1430,6 +1446,10 @@ func runQualityPhase(
 ) (*qualityphase.PhaseResult, error) {
 	r.PhaseStart(state.PhaseQuality)
 
+	// #137: reattach to any persisted Claude CLI session for the
+	// quality judge. Same lifecycle as the plan phase wiring.
+	seedCLISession(client, task, roleQualityJudge)
+
 	judge := qualityjudge.New(client, &qualityjudge.ExecRunner{}, *cfg).WithCodeFacts(codeFacts)
 	// Compute the unified diff once, here, so the judge gets concrete
 	// code content rather than just a working-directory path. The diff
@@ -1443,6 +1463,7 @@ func runQualityPhase(
 
 	result, err := phase.Run(ctx, task, plan)
 	spin.Stop()
+	captureCLISession(client, task, roleQualityJudge)
 	if err != nil {
 		if updateErr := store.UpdateTask(task); updateErr != nil {
 			slog.Error("failed to persist task state", "error", updateErr)
