@@ -261,14 +261,15 @@ func (d runDeps) gateBeforePhase(ctx context.Context, task *state.Task, phase st
 // --- Default (production) phase runner implementations ---
 
 type defaultPlanRunner struct {
-	cfg    *config.Config
-	client completer
-	store  *state.Store
-	r      ui.Renderer
+	cfg     *config.Config
+	planner completer
+	judge   completer
+	store   *state.Store
+	r       ui.Renderer
 }
 
 func (d *defaultPlanRunner) Run(ctx context.Context, task *state.Task) (*planphase.PhaseResult, error) {
-	return runPlanPhase(ctx, d.cfg, d.client, d.store, task, d.r)
+	return runPlanPhase(ctx, d.cfg, d.planner, d.judge, d.store, task, d.r)
 }
 
 type defaultCodeRunner struct {
@@ -294,11 +295,52 @@ func (d *defaultQualityRunner) Run(ctx context.Context, task *state.Task, plan s
 	return runQualityPhase(ctx, d.cfg, d.client, d.store, task, plan, codeFacts, d.workDir, d.r)
 }
 
-func defaultRunDeps(cfg *config.Config, client completer, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client, issueNumber int) runDeps {
+// completers bundles the three LLM clients the orchestrator needs, one
+// per role. resolveAllCompleters fills this struct from the config so a
+// single agents.judge value still works (every slot resolves to the
+// same client) while users with per-phase overrides get distinct ones.
+type completers struct {
+	planner      completer
+	planJudge    completer
+	qualityJudge completer
+	// plannerKind / planJudgeKind / qualityJudgeKind are surfaced in
+	// the CLI banner so users can see which backend each role landed on.
+	plannerKind      backendKind
+	planJudgeKind    backendKind
+	qualityJudgeKind backendKind
+}
+
+// resolveAllCompleters builds the planner / plan judge / quality judge
+// clients from the config in one call. Each role goes through
+// resolveCompleter independently so per-phase overrides take effect.
+func resolveAllCompleters(cfg *config.Config) (completers, error) {
+	planner, plannerKind, err := resolveCompleter(cfg, rolePlanner)
+	if err != nil {
+		return completers{}, err
+	}
+	planJudge, planJudgeKind, err := resolveCompleter(cfg, rolePlanJudge)
+	if err != nil {
+		return completers{}, err
+	}
+	qualityJudge, qualityJudgeKind, err := resolveCompleter(cfg, roleQualityJudge)
+	if err != nil {
+		return completers{}, err
+	}
+	return completers{
+		planner:          planner,
+		planJudge:        planJudge,
+		qualityJudge:     qualityJudge,
+		plannerKind:      plannerKind,
+		planJudgeKind:    planJudgeKind,
+		qualityJudgeKind: qualityJudgeKind,
+	}, nil
+}
+
+func defaultRunDeps(cfg *config.Config, comps completers, store *state.Store, workDir string, r ui.Renderer, ghClient *github.Client, issueNumber int) runDeps {
 	return runDeps{
-		plan:      &defaultPlanRunner{cfg: cfg, client: client, store: store, r: r},
+		plan:      &defaultPlanRunner{cfg: cfg, planner: comps.planner, judge: comps.planJudge, store: store, r: r},
 		code:      &defaultCodeRunner{cfg: cfg, store: store, workDir: workDir, r: r},
-		quality:   &defaultQualityRunner{cfg: cfg, client: client, store: store, workDir: workDir, r: r},
+		quality:   &defaultQualityRunner{cfg: cfg, client: comps.qualityJudge, store: store, workDir: workDir, r: r},
 		gh:        ghClient,
 		conflicts: conflicts.New(&workspace.ExecRunner{}),
 		workDir:   workDir,
@@ -342,9 +384,17 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	}
 	defer func() { _ = store.Close() }()
 
-	// Resolve the completer backend — HTTP claude.Client or local
-	// claude CLI wrapper — based on agents.judge and the environment.
-	client, backend, err := resolveCompleter(cfg)
+	// Pre-flight: catch a missing CLI binary or missing API key now,
+	// before any task state is created, so the user gets one clear
+	// error in the first second instead of a mid-phase failure.
+	if err := validateBackends(cfg, defaultBackendProbes()); err != nil {
+		return fmt.Errorf("backend validation: %w", err)
+	}
+
+	// Resolve the completer backends — one per role so per-phase
+	// overrides take effect. Without overrides every role lands on
+	// the same backend, matching pre-issue-128 behavior.
+	comps, err := resolveAllCompleters(cfg)
 	if err != nil {
 		return err
 	}
@@ -408,7 +458,7 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	defer func() { _ = r.Close() }()
 
 	r.RunStart(task.ID, intent, logPath)
-	r.Note("completer", string(backend))
+	r.Note("completer", completerNote(comps))
 	if issueNumber > 0 {
 		r.Note("issue", fmt.Sprintf("#%d", issueNumber))
 	}
@@ -442,7 +492,7 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
 
-	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, issueNumber)
+	deps := defaultRunDeps(cfg, comps, store, workDir, r, ghClient, issueNumber)
 
 	// Interactive input loop: if stdin is a TTY and --no-tty is not
 	// set, spawn a goroutine that reads commands from the user and
@@ -466,6 +516,18 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	defer clearPID(store, task)
 
 	return runOrchestration(ctx, deps, task, r)
+}
+
+// completerNote produces the value rendered for the `completer:` line
+// in the CLI banner. When all three roles resolved to the same backend
+// the line is just that one kind ("claude-cli"); when they differ, it
+// shows each role explicitly so the user sees the per-phase split.
+func completerNote(c completers) string {
+	if c.plannerKind == c.planJudgeKind && c.planJudgeKind == c.qualityJudgeKind {
+		return string(c.plannerKind)
+	}
+	return fmt.Sprintf("planner=%s plan_judge=%s quality_judge=%s",
+		c.plannerKind, c.planJudgeKind, c.qualityJudgeKind)
 }
 
 // shouldRunInteractive reports whether the interactive input loop
@@ -520,7 +582,11 @@ func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorSchem
 	}
 	defer func() { _ = store.Close() }()
 
-	client, _, err := resolveCompleter(cfg)
+	if err := validateBackends(cfg, defaultBackendProbes()); err != nil {
+		return fmt.Errorf("backend validation: %w", err)
+	}
+
+	comps, err := resolveAllCompleters(cfg)
 	if err != nil {
 		return err
 	}
@@ -553,7 +619,7 @@ func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorSchem
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			results[idx] = runSingleTask(ctx, cfg, client, store, repoRoot, intent, issueNum, priority)
+			results[idx] = runSingleTask(ctx, cfg, comps, store, repoRoot, intent, issueNum, priority)
 			r := results[idx]
 			status := "pass"
 			if r.Err != nil {
@@ -592,7 +658,7 @@ func runTasks(intents []string, issues []int, mode ui.Mode, colors ui.ColorSchem
 func runSingleTask(
 	ctx context.Context,
 	cfg *config.Config,
-	client completer,
+	comps completers,
 	store *state.Store,
 	repoRoot string,
 	intent string,
@@ -647,7 +713,7 @@ func runSingleTask(
 	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
 
-	deps := defaultRunDeps(cfg, client, store, workDir, r, ghClient, issueNumber)
+	deps := defaultRunDeps(cfg, comps, store, workDir, r, ghClient, issueNumber)
 	// In concurrent mode, escalation returns an error instead of os.Exit.
 	deps.onEscalation = func(ctx context.Context, task *state.Task, result escalation.Result) error {
 		if err := dispatchEscalation(ctx, task, result, cfg.Escalation, logWriter, ghClient); err != nil {
@@ -1102,11 +1168,11 @@ func lastGapsForPhase(task *state.Task, phase state.Phase) []state.Gap {
 	return nil
 }
 
-func runPlanPhase(ctx context.Context, cfg *config.Config, client completer, store *state.Store, task *state.Task, r ui.Renderer) (*planphase.PhaseResult, error) {
+func runPlanPhase(ctx context.Context, cfg *config.Config, planner, judgeClient completer, store *state.Store, task *state.Task, r ui.Renderer) (*planphase.PhaseResult, error) {
 	r.PhaseStart(state.PhasePlan)
 
-	judge := planjudge.New(client, cfg.Phases.Plan)
-	phase := planphase.New(client, judge, cfg.Phases.Plan)
+	judge := planjudge.New(judgeClient, cfg.Phases.Plan)
+	phase := planphase.New(planner, judge, cfg.Phases.Plan)
 
 	spin := ui.NewSpinner(os.Stdout, "", ui.PaletteForCLI(r), ui.IsASCII(r))
 	phase.OnProgress = phaseProgressHandler(spin, r, state.PhasePlan)

@@ -37,6 +37,44 @@ type AgentsConfig struct {
 	Coder   string `yaml:"coder"`
 	Judge   string `yaml:"judge"`
 	Model   string `yaml:"model"`
+
+	// PlanJudge, CodeJudge, and QualityJudge override Judge for that
+	// phase only. Empty means "inherit Judge". Existing configs that
+	// only set Judge keep behaving exactly as before — every judge
+	// resolves to the flat value.
+	PlanJudge    string `yaml:"plan_judge,omitempty"`
+	CodeJudge    string `yaml:"code_judge,omitempty"`
+	QualityJudge string `yaml:"quality_judge,omitempty"`
+}
+
+// PlanJudgeBackend returns the backend setting for the plan judge,
+// honoring the per-phase override when set and falling back to the
+// flat Judge field otherwise.
+func (a AgentsConfig) PlanJudgeBackend() string {
+	if a.PlanJudge != "" {
+		return a.PlanJudge
+	}
+	return a.Judge
+}
+
+// CodeJudgeBackend returns the backend setting for the code judge,
+// honoring the per-phase override when set and falling back to the
+// flat Judge field otherwise.
+func (a AgentsConfig) CodeJudgeBackend() string {
+	if a.CodeJudge != "" {
+		return a.CodeJudge
+	}
+	return a.Judge
+}
+
+// QualityJudgeBackend returns the backend setting for the quality
+// judge, honoring the per-phase override when set and falling back
+// to the flat Judge field otherwise.
+func (a AgentsConfig) QualityJudgeBackend() string {
+	if a.QualityJudge != "" {
+		return a.QualityJudge
+	}
+	return a.Judge
 }
 
 type EnvironmentConfig struct {
@@ -319,6 +357,15 @@ func Merge(base *Config, overrides Config) *Config {
 	}
 	if overrides.Agents.Model != "" {
 		merged.Agents.Model = overrides.Agents.Model
+	}
+	if overrides.Agents.PlanJudge != "" {
+		merged.Agents.PlanJudge = overrides.Agents.PlanJudge
+	}
+	if overrides.Agents.CodeJudge != "" {
+		merged.Agents.CodeJudge = overrides.Agents.CodeJudge
+	}
+	if overrides.Agents.QualityJudge != "" {
+		merged.Agents.QualityJudge = overrides.Agents.QualityJudge
 	}
 
 	// Environment

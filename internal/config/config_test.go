@@ -322,6 +322,104 @@ func TestMerge_ParallelZeroNoOverride(t *testing.T) {
 	}
 }
 
+func TestAgentsConfig_PerPhaseFallback(t *testing.T) {
+	// Flat-only config: every per-phase getter falls back to Judge.
+	// This is the legacy shape — we MUST preserve it.
+	flat := AgentsConfig{Planner: "claude", Judge: "claude-cli"}
+	if got := flat.PlanJudgeBackend(); got != "claude-cli" {
+		t.Errorf("flat PlanJudgeBackend = %q, want claude-cli (fallback to Judge)", got)
+	}
+	if got := flat.CodeJudgeBackend(); got != "claude-cli" {
+		t.Errorf("flat CodeJudgeBackend = %q, want claude-cli (fallback to Judge)", got)
+	}
+	if got := flat.QualityJudgeBackend(); got != "claude-cli" {
+		t.Errorf("flat QualityJudgeBackend = %q, want claude-cli (fallback to Judge)", got)
+	}
+
+	// Per-phase only: each override is honored, no Judge to inherit.
+	perPhase := AgentsConfig{
+		PlanJudge:    "claude-api",
+		CodeJudge:    "claude-cli",
+		QualityJudge: "claude",
+	}
+	if got := perPhase.PlanJudgeBackend(); got != "claude-api" {
+		t.Errorf("per-phase PlanJudgeBackend = %q, want claude-api", got)
+	}
+	if got := perPhase.CodeJudgeBackend(); got != "claude-cli" {
+		t.Errorf("per-phase CodeJudgeBackend = %q, want claude-cli", got)
+	}
+	if got := perPhase.QualityJudgeBackend(); got != "claude" {
+		t.Errorf("per-phase QualityJudgeBackend = %q, want claude", got)
+	}
+
+	// Flat with one phase overridden: the override wins for that phase
+	// only; the other phases still inherit from Judge.
+	mixed := AgentsConfig{Judge: "claude-cli", QualityJudge: "claude-api"}
+	if got := mixed.PlanJudgeBackend(); got != "claude-cli" {
+		t.Errorf("mixed PlanJudgeBackend = %q, want claude-cli (inherits Judge)", got)
+	}
+	if got := mixed.CodeJudgeBackend(); got != "claude-cli" {
+		t.Errorf("mixed CodeJudgeBackend = %q, want claude-cli (inherits Judge)", got)
+	}
+	if got := mixed.QualityJudgeBackend(); got != "claude-api" {
+		t.Errorf("mixed QualityJudgeBackend = %q, want claude-api (override)", got)
+	}
+}
+
+func TestParseConfig_PerPhaseJudges(t *testing.T) {
+	data := []byte(`
+project:
+  name: perphase
+agents:
+  judge: claude
+  plan_judge: claude-api
+  code_judge: claude-cli
+  quality_judge: claude-api
+`)
+	cfg, err := ParseConfig(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Agents.Judge != "claude" {
+		t.Errorf("agents.judge = %q, want claude", cfg.Agents.Judge)
+	}
+	if cfg.Agents.PlanJudge != "claude-api" {
+		t.Errorf("agents.plan_judge = %q, want claude-api", cfg.Agents.PlanJudge)
+	}
+	if cfg.Agents.CodeJudge != "claude-cli" {
+		t.Errorf("agents.code_judge = %q, want claude-cli", cfg.Agents.CodeJudge)
+	}
+	if cfg.Agents.QualityJudge != "claude-api" {
+		t.Errorf("agents.quality_judge = %q, want claude-api", cfg.Agents.QualityJudge)
+	}
+}
+
+func TestMerge_PerPhaseJudges(t *testing.T) {
+	base := Defaults()
+	base.Project.Name = "base"
+	base.Agents.Judge = "claude"
+
+	overrides := Config{
+		Agents: AgentsConfig{
+			QualityJudge: "claude-api",
+		},
+	}
+	merged := Merge(&base, overrides)
+
+	if merged.Agents.Judge != "claude" {
+		t.Errorf("Judge = %q, want claude (base preserved)", merged.Agents.Judge)
+	}
+	if merged.Agents.QualityJudge != "claude-api" {
+		t.Errorf("QualityJudge = %q, want claude-api (overlay)", merged.Agents.QualityJudge)
+	}
+	if merged.Agents.PlanJudgeBackend() != "claude" {
+		t.Errorf("PlanJudgeBackend = %q, want claude (inherits Judge)", merged.Agents.PlanJudgeBackend())
+	}
+	if merged.Agents.CodeJudgeBackend() != "claude" {
+		t.Errorf("CodeJudgeBackend = %q, want claude (inherits Judge)", merged.Agents.CodeJudgeBackend())
+	}
+}
+
 func TestMerge_DoesNotMutateBase(t *testing.T) {
 	base := Defaults()
 	base.Project.Name = "original"

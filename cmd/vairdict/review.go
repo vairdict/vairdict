@@ -108,7 +108,13 @@ func runReview(prNumber int) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	client, _, err := resolveCompleter(cfg)
+	if err := validateBackends(cfg, defaultBackendProbes()); err != nil {
+		return fmt.Errorf("backend validation: %w", err)
+	}
+
+	// vairdict review only runs the quality judge, so we resolve just
+	// that role. Per-phase overrides (agents.quality_judge) take effect.
+	client, _, err := resolveCompleter(cfg, roleQualityJudge)
 	if err != nil {
 		return err
 	}
