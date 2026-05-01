@@ -538,16 +538,81 @@ func TestJudge_SecurityChecksAreBlocking(t *testing.T) {
 
 func TestJudge_SystemPromptForbidsSilenceOnSubstantiveDiff(t *testing.T) {
 	// PR #107 was a 1200-line / 16-file diff that the judge passed with
-	// zero gaps. The prompt must keep an explicit hard rule against that
-	// failure mode so a future prompt edit cannot silently soften it.
+	// zero gaps. The prompt must keep an explicit guard against that
+	// failure mode — but via a severity-ordered scan, not a count anchor
+	// (which earlier wording produced "always 3 P3 nits" false positives).
 	for _, keyword := range []string{
 		"Substantive-diff rule",
-		"MUST produce at least one entry",
 		">200 lines",
 		">3 files",
+		"severity-ordered scan",
+		"without performing the scan is a failure mode",
+		// Example 5 demonstrates the empty-gaps-on-substantive-diff
+		// outcome. Pin it so a future edit cannot quietly delete the
+		// concrete training signal while leaving the abstract rule.
+		"Example 5",
+		"severity scan surfaced no concerns",
 	} {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing substantive-diff rule marker %q", keyword)
+		}
+	}
+
+	// Guard against re-introducing count anchors. These phrases were
+	// the root cause of the "judge always emits ~3 soft P3 gaps"
+	// regression that this rewrite fixes.
+	for _, banned := range []string{
+		"typically 2–3",
+		"typically 2-3",
+		"MUST produce at least one entry",
+		"expected floor",
+	} {
+		if strings.Contains(systemPrompt, banned) {
+			t.Errorf("system prompt contains banned count-anchor phrase %q — use severity-ordered scan instead", banned)
+		}
+	}
+}
+
+func TestJudge_SystemPromptRequiresReadingTheWholeHunk(t *testing.T) {
+	// PR #140 was a 491-line / 15-file diff where the judge posted three
+	// inline P2/P3 gaps asking for doc comments at lines that already had
+	// doc comment blocks immediately above them. The judge anchored to a
+	// single line without reading the surrounding hunk. The prompt must
+	// explicitly require checking adjacent context before flagging a
+	// "missing X" gap.
+	for _, keyword := range []string{
+		"Read the whole hunk",
+		"missing doc comment",
+		"already exists in",
+		// A soft window keeps the rule actionable on large hunks
+		// without asking the judge to re-read 500-line diffs.
+		"30 lines",
+		// Example 6 is the concrete demonstration; pin it so future
+		// edits cannot remove the worked example while leaving only
+		// the abstract rule.
+		"Example 6",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing whole-hunk-reading marker %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptCoversCrossFileConsistency(t *testing.T) {
+	// PR #140 also missed a duplicated --model arg pattern across two
+	// methods in the claudecli client (drift risk). The "Additional
+	// checks" section must cover the same-pattern-applied-in-multiple-
+	// places case so future reviews catch divergence between sites.
+	// Severity must follow impact: cosmetic drift is P2, but divergence
+	// that produces incorrect behaviour at one site is P1, not P2.
+	for _, keyword := range []string{
+		"Cross-file consistency",
+		"drift risk",
+		"severity follows impact",
+		"correctness bug, not a style issue",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing cross-file-consistency marker %q", keyword)
 		}
 	}
 }
