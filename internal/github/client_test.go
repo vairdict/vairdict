@@ -1243,6 +1243,38 @@ const secondPageThreadResponse = `{
   }
 }`
 
+func TestListUnresolvedSelfThreadIDs_SkipsThreadsWithReplies(t *testing.T) {
+	// A thread the bot started but a human replied to should NOT be
+	// auto-resolved — that would hide ongoing discussion. Detected via
+	// comments.totalCount > 1 on the GraphQL response.
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo": {Output: []byte("vairdict/vairdict\n")},
+			"gh api graphql": {Output: []byte(`{
+  "data": {
+    "viewer": {"login": "vairdict[bot]"},
+    "repository": {"pullRequest": {"reviewThreads": {
+      "pageInfo": {"hasNextPage": false, "endCursor": null},
+      "nodes": [
+        {"id": "T-replied", "isResolved": false, "comments": {"totalCount": 2, "nodes": [{"author": {"login": "vairdict[bot]"}}]}},
+        {"id": "T-solo",    "isResolved": false, "comments": {"totalCount": 1, "nodes": [{"author": {"login": "vairdict[bot]"}}]}}
+      ]
+    }}}
+  }
+}`)},
+		},
+	}
+	client := New(runner)
+
+	ids, err := client.listUnresolvedSelfThreadIDs(context.Background(), 138)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "T-solo" {
+		t.Errorf("ids = %v, want [T-solo] (T-replied has a human reply and must be preserved)", ids)
+	}
+}
+
 func TestListUnresolvedSelfThreadIDs_FiltersAndPaginates(t *testing.T) {
 	runner := &FakeRunner{
 		Responses: map[string]fakeResponse{

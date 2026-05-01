@@ -379,7 +379,8 @@ func (c *Client) deletePreviousVerdicts(ctx context.Context, prNumber int) {
 // authenticated user's login. The viewer login is used to filter threads
 // down to ones authored by the current actor (the VAIrdict bot in CI;
 // a human running `vairdict review` locally) so we never resolve another
-// reviewer's threads.
+// reviewer's threads. comments.totalCount lets us distinguish a solo
+// bot comment from a thread someone has replied to.
 const reviewThreadsQuery = `query ($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   viewer { login }
   repository(owner: $owner, name: $repo) {
@@ -389,7 +390,7 @@ const reviewThreadsQuery = `query ($owner: String!, $repo: String!, $pr: Int!, $
         nodes {
           id
           isResolved
-          comments(first: 1) { nodes { author { login } } }
+          comments(first: 1) { totalCount nodes { author { login } } }
         }
       }
     }
@@ -418,7 +419,8 @@ type reviewThreadsResponse struct {
 						ID         string `json:"id"`
 						IsResolved bool   `json:"isResolved"`
 						Comments   struct {
-							Nodes []struct {
+							TotalCount int `json:"totalCount"`
+							Nodes      []struct {
 								Author struct {
 									Login string `json:"login"`
 								} `json:"author"`
@@ -491,6 +493,12 @@ func (c *Client) listUnresolvedSelfThreadIDs(ctx context.Context, prNumber int) 
 				continue
 			}
 			if !strings.EqualFold(node.Comments.Nodes[0].Author.Login, viewer) {
+				continue
+			}
+			// Preserve threads someone has replied to. totalCount > 1
+			// means the bot's original comment has at least one reply
+			// — auto-resolving would hide ongoing discussion.
+			if node.Comments.TotalCount > 1 {
 				continue
 			}
 			ids = append(ids, node.ID)
