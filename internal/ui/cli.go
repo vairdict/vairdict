@@ -126,6 +126,20 @@ func (r *cliRenderer) StepUpdate(phase state.Phase, step string) {
 	r.activeStep = step
 }
 
+// PhaseDelta streams partial planner output to the user as it arrives.
+// Writes go through the same buffered writer as other CLI output and
+// are flushed immediately so the stream feels live. The caller in
+// run.go is responsible for stopping the spinner before the first
+// delta — otherwise spinner redraws will overwrite streamed text on
+// the same line.
+func (r *cliRenderer) PhaseDelta(_ state.Phase, text string) {
+	if text == "" {
+		return
+	}
+	_, _ = r.w.WriteString(text)
+	r.flush()
+}
+
 func (r *cliRenderer) PhaseLoop(phase state.Phase, loop, max int, score float64, pass bool) {
 	defer r.flush()
 	r.scores[phase] = score

@@ -1176,6 +1176,20 @@ func runPlanPhase(ctx context.Context, cfg *config.Config, planner, judgeClient 
 
 	spin := ui.NewSpinner(os.Stdout, "", ui.PaletteForCLI(r), ui.IsASCII(r))
 	phase.OnProgress = phaseProgressHandler(spin, r, state.PhasePlan)
+	// Stream planner output to the renderer when it supports it (CLI
+	// only — json/ci would have structured output mangled by raw
+	// deltas). The first delta stops the spinner so its line redraws
+	// don't overwrite streamed text; the next StepUpdate restarts it.
+	if dp, ok := r.(ui.DeltaPrinter); ok {
+		spinnerStopped := false
+		phase.OnDelta = func(text string) {
+			if !spinnerStopped {
+				spin.Stop()
+				spinnerStopped = true
+			}
+			dp.PhaseDelta(state.PhasePlan, text)
+		}
+	}
 
 	result, err := phase.Run(ctx, task)
 	spin.Stop()
