@@ -28,8 +28,8 @@ func sseHandler(t *testing.T, events []sseEvent) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for _, ev := range events {
-			fmt.Fprintf(w, "event: %s\n", ev.event)
-			fmt.Fprintf(w, "data: %s\n\n", ev.data)
+			_, _ = fmt.Fprintf(w, "event: %s\n", ev.event)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", ev.data)
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -48,7 +48,7 @@ func recordedSSE(textChunks []string) []sseEvent {
 	events := []sseEvent{
 		{
 			event: "message_start",
-			data: `{"type":"message_start","message":{"id":"msg_test","usage":{"input_tokens":42,"output_tokens":0,"cache_creation_input_tokens":1500,"cache_read_input_tokens":0}}}`,
+			data:  `{"type":"message_start","message":{"id":"msg_test","usage":{"input_tokens":42,"output_tokens":0,"cache_creation_input_tokens":1500,"cache_read_input_tokens":0}}}`,
 		},
 		{
 			event: "content_block_start",
@@ -219,7 +219,7 @@ func TestCompleteWithSystemStream_HonorsCachePayload(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		for _, ev := range recordedSSE([]string{`{"answer":"ok","score":1}`}) {
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.event, ev.data)
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.event, ev.data)
 		}
 	}))
 	defer srv.Close()

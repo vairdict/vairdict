@@ -66,10 +66,10 @@ func (c *Client) CompleteWithSystemStream(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		// fall through to SSE consumer
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden:
 		body, _ := io.ReadAll(resp.Body)
 		return &AuthError{Message: string(body)}
 	default:
@@ -106,9 +106,9 @@ type streamingRequest struct {
 // final output_tokens from message_delta).
 func consumeSSE(body io.Reader, onDelta func(text string)) (string, usage, error) {
 	var (
-		acc      strings.Builder
+		acc        strings.Builder
 		finalUsage usage
-		sawStop  bool
+		sawStop    bool
 	)
 
 	// The Anthropic SSE format wraps each event in two lines:

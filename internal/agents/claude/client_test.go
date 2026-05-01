@@ -956,7 +956,7 @@ func TestUsage_CacheTokensDecoded(t *testing.T) {
 			StopReason: "end_turn",
 			Usage: usage{
 				InputTokens:              4,
-				OutputTokens:              7,
+				OutputTokens:             7,
 				CacheCreationInputTokens: 1500,
 				CacheReadInputTokens:     2300,
 			},
@@ -986,10 +986,10 @@ func TestUsage_CacheTokensDecoded(t *testing.T) {
 	// shape regression is caught even if logging is changed later.
 	var u usage
 	body, _ := json.Marshal(map[string]int{
-		"input_tokens":                 4,
-		"output_tokens":                7,
-		"cache_creation_input_tokens":  1500,
-		"cache_read_input_tokens":      2300,
+		"input_tokens":                4,
+		"output_tokens":               7,
+		"cache_creation_input_tokens": 1500,
+		"cache_read_input_tokens":     2300,
 	})
 	if err := json.Unmarshal(body, &u); err != nil {
 		t.Fatalf("decoding usage: %v", err)

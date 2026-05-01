@@ -229,6 +229,11 @@ func initTestRepo(t *testing.T) string {
 	run("init", "-b", "main")
 	run("config", "user.email", "test@test.com")
 	run("config", "user.name", "test")
+	// See workspace_test.go — disable signing on the test fixture so
+	// inherited global signing config doesn't reject the synthetic
+	// commits this test makes in a temp repo.
+	run("config", "commit.gpgsign", "false")
+	run("config", "tag.gpgsign", "false")
 
 	// Create initial commit.
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\n"), 0o644); err != nil {
@@ -283,6 +288,8 @@ func TestIntegration_CleanMerge(t *testing.T) {
 	}
 	run(clone, "config", "user.email", "test@test.com")
 	run(clone, "config", "user.name", "test")
+	run(clone, "config", "commit.gpgsign", "false")
+	run(clone, "config", "tag.gpgsign", "false")
 
 	// Create a task branch with a non-conflicting change.
 	run(clone, "checkout", "-b", "vairdict/task-1")
@@ -334,6 +341,8 @@ func TestIntegration_RebaseSuccess(t *testing.T) {
 	}
 	run(clone, "config", "user.email", "test@test.com")
 	run(clone, "config", "user.name", "test")
+	run(clone, "config", "commit.gpgsign", "false")
+	run(clone, "config", "tag.gpgsign", "false")
 
 	// Create task branch with change to new file.
 	run(clone, "checkout", "-b", "vairdict/task-1")
@@ -395,6 +404,8 @@ func TestIntegration_ConflictEscalation(t *testing.T) {
 	}
 	run(clone, "config", "user.email", "test@test.com")
 	run(clone, "config", "user.name", "test")
+	run(clone, "config", "commit.gpgsign", "false")
+	run(clone, "config", "tag.gpgsign", "false")
 
 	// Create task branch that modifies README.md.
 	run(clone, "checkout", "-b", "vairdict/task-1")
@@ -488,6 +499,8 @@ func TestIntegration_ConcurrentTaskOverlap(t *testing.T) {
 		}
 		runIn(dir, "config", "user.email", "test@test.com")
 		runIn(dir, "config", "user.name", "test")
+		runIn(dir, "config", "commit.gpgsign", "false")
+		runIn(dir, "config", "tag.gpgsign", "false")
 		runIn(dir, "checkout", "-b", "vairdict/"+name)
 		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
