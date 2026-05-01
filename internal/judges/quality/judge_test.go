@@ -97,6 +97,24 @@ func testConfigWithE2E() config.Config {
 	return cfg
 }
 
+func TestQualityJudge_VerdictStampedWithModel(t *testing.T) {
+	// AC: verdict output records which model produced the verdict so PR
+	// comments / logs can show which judge model graded the change.
+	fake := &claude.FakeClient{
+		ModelName: "claude-opus-4-7",
+		Response:  state.Verdict{Gaps: []state.Gap{}},
+	}
+	judge := New(fake, nil, testConfig())
+
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "diff --git a/x.go b/x.go\n+func H() {}")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Model != "claude-opus-4-7" {
+		t.Errorf("verdict.Model = %q, want claude-opus-4-7", verdict.Model)
+	}
+}
+
 func TestJudge_Pass_NoGapsScoresFull(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{

@@ -82,6 +82,118 @@ func TestBackendForRole(t *testing.T) {
 	}
 }
 
+// TestModelForRole: the planner shares agents.model unchanged so swapping
+// the judge model never accidentally rewrites the producer; each judge
+// applies the {plan,code,quality}_judge_model → judge_model → model
+// fallback chain so a single agents.judge_model swaps every judge slot.
+func TestModelForRole(t *testing.T) {
+	// Legacy config: only Model is set. Every role resolves to it.
+	flat := &config.Config{Agents: config.AgentsConfig{
+		Model: "claude-sonnet-4-20250514",
+	}}
+	cases := []struct {
+		role completerRole
+		want string
+	}{
+		{rolePlanner, "claude-sonnet-4-20250514"},
+		{rolePlanJudge, "claude-sonnet-4-20250514"},
+		{roleCodeJudge, "claude-sonnet-4-20250514"},
+		{roleQualityJudge, "claude-sonnet-4-20250514"},
+	}
+	for _, tc := range cases {
+		if got := modelForRole(flat, tc.role); got != tc.want {
+			t.Errorf("flat modelForRole(%s) = %q, want %q", tc.role, got, tc.want)
+		}
+	}
+
+	// judge_model set: judges swap, planner stays on Model. This is the
+	// canonical use case from the issue — judge with a stricter model
+	// while the cheap producer keeps the original.
+	swap := &config.Config{Agents: config.AgentsConfig{
+		Model:      "claude-haiku-4-5",
+		JudgeModel: "claude-opus-4-7",
+	}}
+	if got := modelForRole(swap, rolePlanner); got != "claude-haiku-4-5" {
+		t.Errorf("swap planner = %q, want claude-haiku-4-5 (Model preserved)", got)
+	}
+	if got := modelForRole(swap, rolePlanJudge); got != "claude-opus-4-7" {
+		t.Errorf("swap plan judge = %q, want claude-opus-4-7 (judge_model)", got)
+	}
+	if got := modelForRole(swap, roleQualityJudge); got != "claude-opus-4-7" {
+		t.Errorf("swap quality judge = %q, want claude-opus-4-7 (judge_model)", got)
+	}
+
+	// Per-phase override wins over the global judge_model.
+	mixed := &config.Config{Agents: config.AgentsConfig{
+		Model:             "claude-haiku-4-5",
+		JudgeModel:        "claude-sonnet-4-6",
+		QualityJudgeModel: "claude-opus-4-7",
+	}}
+	if got := modelForRole(mixed, rolePlanJudge); got != "claude-sonnet-4-6" {
+		t.Errorf("mixed plan judge = %q, want claude-sonnet-4-6 (judge_model)", got)
+	}
+	if got := modelForRole(mixed, roleQualityJudge); got != "claude-opus-4-7" {
+		t.Errorf("mixed quality judge = %q, want claude-opus-4-7 (per-phase)", got)
+	}
+}
+
+// TestResolveCompleter_JudgeModelOverride: when judge_model is set, the
+// API client returned for the judge slots is pinned to that model while
+// the planner stays on agents.model. Hits the AC: WithModel reaches the
+// API call, completer calls do not get the judge model.
+func TestResolveCompleter_JudgeModelOverride(t *testing.T) {
+	// API key must be present for claude-api to construct.
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-judgemodel")
+
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner:    "claude-api",
+		Judge:      "claude-api",
+		Model:      "claude-haiku-4-5",
+		JudgeModel: "claude-opus-4-7",
+	}}
+
+	planner, _, err := resolveCompleter(cfg, rolePlanner)
+	if err != nil {
+		t.Fatalf("resolveCompleter(planner): %v", err)
+	}
+	if got := planner.Model(); got != "claude-haiku-4-5" {
+		t.Errorf("planner client model = %q, want claude-haiku-4-5 (Model untouched)", got)
+	}
+
+	for _, role := range []completerRole{rolePlanJudge, roleQualityJudge, roleCodeJudge} {
+		c, _, err := resolveCompleter(cfg, role)
+		if err != nil {
+			t.Fatalf("resolveCompleter(%s): %v", role, err)
+		}
+		if got := c.Model(); got != "claude-opus-4-7" {
+			t.Errorf("%s client model = %q, want claude-opus-4-7 (judge_model)", role, got)
+		}
+	}
+}
+
+// TestResolveCompleter_NoJudgeModelInheritsModel: with judge_model unset,
+// every judge falls back to agents.model so existing configs keep
+// working unchanged. AC: configs that only set agents.model keep
+// working — purely additive.
+func TestResolveCompleter_NoJudgeModelInheritsModel(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-fallback")
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude-api",
+		Judge:   "claude-api",
+		Model:   "claude-sonnet-4-20250514",
+	}}
+
+	for _, role := range []completerRole{rolePlanner, rolePlanJudge, roleQualityJudge} {
+		c, _, err := resolveCompleter(cfg, role)
+		if err != nil {
+			t.Fatalf("resolveCompleter(%s): %v", role, err)
+		}
+		if got := c.Model(); got != "claude-sonnet-4-20250514" {
+			t.Errorf("%s client model = %q, want claude-sonnet (Model fallback)", role, got)
+		}
+	}
+}
+
 // TestValidateBackends_FlatOnlyLegacy: a config that only sets the flat
 // fields must validate identically to pre-issue-128 behavior. With CLI
 // available and Judge=claude (smart), no error.

@@ -218,6 +218,53 @@ func TestCompleteWithSystem_ArgsIncludeSystemAndExtras(t *testing.T) {
 	}
 }
 
+func TestCompleteWithSystem_WithModelAddsFlag(t *testing.T) {
+	// AC: WithModel must reach the actual subprocess invocation. Pinning
+	// the judge model in config has to flow into the claude --model flag
+	// or it doesn't actually do anything.
+	var captured []string
+	envelope := `{"type":"result","is_error":false,"result":"{}"}`
+	c := New(
+		WithModel("claude-opus-4-7"),
+		WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			captured = append([]string{name}, args...)
+			return stdoutCmd(ctx, envelope)
+		}),
+	)
+
+	var got map[string]any
+	if err := c.CompleteWithSystem(context.Background(), "", "p", &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Model() != "claude-opus-4-7" {
+		t.Errorf("client Model() = %q, want claude-opus-4-7", c.Model())
+	}
+	joined := strings.Join(captured, " ")
+	if !strings.Contains(joined, "--model claude-opus-4-7") {
+		t.Errorf("captured args missing --model claude-opus-4-7: %v", captured)
+	}
+}
+
+func TestCompleteWithSystem_NoModelSkipsFlag(t *testing.T) {
+	// Without WithModel the CLI's default applies — no --model flag.
+	var captured []string
+	envelope := `{"type":"result","is_error":false,"result":"{}"}`
+	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		captured = append([]string{name}, args...)
+		return stdoutCmd(ctx, envelope)
+	}))
+
+	var got map[string]any
+	if err := c.CompleteWithSystem(context.Background(), "", "p", &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, a := range captured {
+		if a == "--model" {
+			t.Errorf("client without WithModel must not add --model flag: %v", captured)
+		}
+	}
+}
+
 func TestCompleteWithSystem_NoSystemPromptSkipsFlag(t *testing.T) {
 	var captured []string
 	envelope := `{"type":"result","is_error":false,"result":"{}"}`

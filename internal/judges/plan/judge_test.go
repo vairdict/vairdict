@@ -418,6 +418,24 @@ func TestJudge_AcknowledgedAssumptionsInPrompt(t *testing.T) {
 	}
 }
 
+func TestJudge_VerdictStampedWithModel(t *testing.T) {
+	// AC: verdict output records which model produced the verdict so PR
+	// comments / logs can show it.
+	fake := &claude.FakeClient{
+		ModelName: "claude-opus-4-7",
+		Response:  state.Verdict{Gaps: []state.Gap{}},
+	}
+	judge := New(fake, defaultCfg())
+
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Model != "claude-opus-4-7" {
+		t.Errorf("verdict.Model = %q, want claude-opus-4-7", verdict.Model)
+	}
+}
+
 func TestJudge_ReflaggedGapHalvedPenalty(t *testing.T) {
 	// When the judge re-flags an already-acknowledged P2 gap, its
 	// penalty should be halved (5 instead of 10).
