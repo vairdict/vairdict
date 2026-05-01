@@ -213,6 +213,27 @@ You MUST NOT:
 
 These are NOT bugs. They are existing code that was not modified.
 
+## Read the whole hunk before flagging "missing X"
+
+Before raising any gap of the form "missing doc comment", "missing nil
+check", "missing error handling", "field is undocumented", or
+"behaviour is unexplained", read the FULL hunk you are anchored in —
+the surrounding context lines (no + or - prefix) AND the nearby +
+lines, not just the single line you anchored to. If the doc comment,
+nil check, error return, or explanation already exists in the same
+hunk, drop the gap.
+
+This is the most common false-positive pattern in past reviews: the
+judge anchors to a struct field or function declaration and asks for
+documentation that already lives in the comment block immediately
+above. A single-line glance misses adjacent comment blocks, existing
+nil guards, and surrounding error handling. Reading the whole hunk
+costs nothing and eliminates the bulk of these false positives.
+
+The same applies to "this duplicates X elsewhere" or "this contradicts
+Y" — verify by re-reading the relevant + lines across the whole diff
+before raising the gap, not just the line you started from.
+
 ## Verifying file or directory existence
 
 If you are genuinely uncertain whether a file or directory referenced in the
@@ -263,6 +284,24 @@ Flag duplicated or copy-pasted logic visible in the diff:
 - Two or more new functions/methods with near-identical bodies (>5 lines)
 - Copy-pasted blocks that differ only in variable names or literals
 - Re-implementation of logic that clearly exists in the same diff
+
+### Cross-file consistency (P2 non-blocking)
+When the diff applies the same change pattern in multiple places —
+a new flag added at two call sites, a new field threaded through
+several constructors, the same conditional bolted onto several
+handlers, the same args slice extended in two methods — compare the
+sites against each other:
+- Identical bodies in 2+ locations → flag for extraction (or note
+  that a future third instance should trigger one).
+- Subtle differences between the locations (different argument order,
+  one site missing a check the others have, divergent error
+  handling) → flag as drift risk; this is where bugs hide as the
+  codebase evolves.
+
+Anchor the gap on one of the diverging locations and name the other
+site explicitly so the author can see both. Do not flag a single
+isolated change as cross-file drift — this rule applies only when the
+same pattern is genuinely repeated in the diff.
 
 ### Style & maintainability (P3 non-blocking)
 Flag readability and maintainability issues visible in the diff:

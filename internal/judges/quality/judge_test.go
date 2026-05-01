@@ -573,6 +573,39 @@ func TestJudge_SystemPromptForbidsSilenceOnSubstantiveDiff(t *testing.T) {
 	}
 }
 
+func TestJudge_SystemPromptRequiresReadingTheWholeHunk(t *testing.T) {
+	// PR #140 was a 491-line / 15-file diff where the judge posted three
+	// inline P2/P3 gaps asking for doc comments at lines that already had
+	// doc comment blocks immediately above them. The judge anchored to a
+	// single line without reading the surrounding hunk. The prompt must
+	// explicitly require checking adjacent context before flagging a
+	// "missing X" gap.
+	for _, keyword := range []string{
+		"Read the whole hunk",
+		"missing doc comment",
+		"already exists in the same",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing whole-hunk-reading marker %q", keyword)
+		}
+	}
+}
+
+func TestJudge_SystemPromptCoversCrossFileConsistency(t *testing.T) {
+	// PR #140 also missed a duplicated --model arg pattern across two
+	// methods in the claudecli client (drift risk). The "Additional
+	// checks" section must cover the same-pattern-applied-in-multiple-
+	// places case so future reviews catch divergence between sites.
+	for _, keyword := range []string{
+		"Cross-file consistency",
+		"drift risk",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing cross-file-consistency marker %q", keyword)
+		}
+	}
+}
+
 func TestJudge_SystemPromptEstablishesFreshReviewerMindset(t *testing.T) {
 	// When judge and coder are backed by the same model family, the judge
 	// can carry an implicit self-defense bias. The prompt must instruct
