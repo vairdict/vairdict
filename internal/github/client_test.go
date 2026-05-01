@@ -1211,3 +1211,338 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+// --- Issue: dedupe bot review threads across pushes ---
+
+// twoPageThreadResponse returns two pages of unresolved + viewer-authored
+// threads + a couple noise threads (resolved, other-author) so the test
+// asserts both filtering and pagination.
+const firstPageThreadResponse = `{
+  "data": {
+    "viewer": {"login": "vairdict[bot]"},
+    "repository": {"pullRequest": {"reviewThreads": {
+      "pageInfo": {"hasNextPage": true, "endCursor": "CURSOR1"},
+      "nodes": [
+        {"id": "T1", "isResolved": false, "comments": {"nodes": [{"author": {"login": "vairdict[bot]"}}]}},
+        {"id": "T2-resolved", "isResolved": true, "comments": {"nodes": [{"author": {"login": "vairdict[bot]"}}]}},
+        {"id": "T3-otheruser", "isResolved": false, "comments": {"nodes": [{"author": {"login": "someone-else"}}]}}
+      ]
+    }}}
+  }
+}`
+
+const secondPageThreadResponse = `{
+  "data": {
+    "viewer": {"login": "vairdict[bot]"},
+    "repository": {"pullRequest": {"reviewThreads": {
+      "pageInfo": {"hasNextPage": false, "endCursor": null},
+      "nodes": [
+        {"id": "T4", "isResolved": false, "comments": {"nodes": [{"author": {"login": "vairdict[bot]"}}]}}
+      ]
+    }}}
+  }
+}`
+
+func TestListUnresolvedSelfThreadIDs_FiltersAndPaginates(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo": {Output: []byte("vairdict/vairdict\n")},
+		},
+		Sequence: map[string][]fakeResponse{
+			"gh api graphql": {
+				{Output: []byte(firstPageThreadResponse)},
+				{Output: []byte(secondPageThreadResponse)},
+			},
+		},
+	}
+	client := New(runner)
+
+	ids, err := client.listUnresolvedSelfThreadIDs(context.Background(), 138)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"T1", "T4"}
+	if len(ids) != len(want) {
+		t.Fatalf("ids = %v, want %v", ids, want)
+	}
+	for i, id := range want {
+		if ids[i] != id {
+			t.Errorf("ids[%d] = %q, want %q", i, ids[i], id)
+		}
+	}
+	// Sanity: the second graphql call should pass the cursor from page 1.
+	graphqlCalls := 0
+	sawCursor := false
+	for _, c := range runner.Calls {
+		if c.Name == "gh" && len(c.Args) >= 2 && c.Args[0] == "api" && c.Args[1] == "graphql" {
+			graphqlCalls++
+			for _, a := range c.Args {
+				if a == "cursor=CURSOR1" {
+					sawCursor = true
+				}
+			}
+		}
+	}
+	if graphqlCalls != 2 {
+		t.Errorf("expected 2 graphql calls (paginated), got %d", graphqlCalls)
+	}
+	if !sawCursor {
+		t.Errorf("expected page 2 to pass cursor=CURSOR1, args were: %+v", runner.Calls)
+	}
+}
+
+func TestListUnresolvedSelfThreadIDs_Empty(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo": {Output: []byte("vairdict/vairdict\n")},
+			"gh api graphql": {Output: []byte(`{
+  "data": {
+    "viewer": {"login": "vairdict[bot]"},
+    "repository": {"pullRequest": {"reviewThreads": {
+      "pageInfo": {"hasNextPage": false, "endCursor": null},
+      "nodes": []
+    }}}
+  }
+}`)},
+		},
+	}
+	client := New(runner)
+
+	ids, err := client.listUnresolvedSelfThreadIDs(context.Background(), 138)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("expected empty slice, got %v", ids)
+	}
+}
+
+func TestListUnresolvedSelfThreadIDs_RepoLookupError(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo": {Err: errors.New("not in a git repo")},
+		},
+	}
+	client := New(runner)
+
+	_, err := client.listUnresolvedSelfThreadIDs(context.Background(), 138)
+	if err == nil {
+		t.Fatal("expected error when gh repo view fails")
+	}
+}
+
+func TestListUnresolvedSelfThreadIDs_GraphqlError(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo":        {Output: []byte("vairdict/vairdict\n")},
+			"gh api graphql": {Err: errors.New("graphql 500")},
+		},
+	}
+	client := New(runner)
+
+	_, err := client.listUnresolvedSelfThreadIDs(context.Background(), 138)
+	if err == nil {
+		t.Fatal("expected error when graphql query fails")
+	}
+}
+
+func TestResolveReviewThread_SendsMutation(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh api graphql": {Output: []byte(`{"data":{"resolveReviewThread":{"thread":{"id":"T1"}}}}`)},
+		},
+	}
+	client := New(runner)
+
+	err := client.resolveReviewThread(context.Background(), "T1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Must have called gh api graphql with the thread id parameter.
+	found := false
+	for _, c := range runner.Calls {
+		if c.Name != "gh" || len(c.Args) < 2 || c.Args[0] != "api" || c.Args[1] != "graphql" {
+			continue
+		}
+		for _, a := range c.Args {
+			if a == "id=T1" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected mutation arg id=T1, calls: %+v", runner.Calls)
+	}
+}
+
+func TestResolveReviewThread_PropagatesError(t *testing.T) {
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh api graphql": {Err: errors.New("forbidden")},
+		},
+	}
+	client := New(runner)
+
+	err := client.resolveReviewThread(context.Background(), "T1")
+	if err == nil {
+		t.Fatal("expected error from gh api graphql failure")
+	}
+}
+
+func TestResolveSelfReviewThreads_ResolvesEachListedID(t *testing.T) {
+	// Single graphql list response with two viewer-authored threads,
+	// followed by two graphql mutation responses. Sequence drives the
+	// list-then-resolve order on the same key.
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo": {Output: []byte("vairdict/vairdict\n")},
+		},
+		Sequence: map[string][]fakeResponse{
+			"gh api graphql": {
+				{Output: []byte(`{
+  "data": {
+    "viewer": {"login": "vairdict[bot]"},
+    "repository": {"pullRequest": {"reviewThreads": {
+      "pageInfo": {"hasNextPage": false, "endCursor": null},
+      "nodes": [
+        {"id": "T1", "isResolved": false, "comments": {"nodes": [{"author": {"login": "vairdict[bot]"}}]}},
+        {"id": "T2", "isResolved": false, "comments": {"nodes": [{"author": {"login": "vairdict[bot]"}}]}}
+      ]
+    }}}
+  }
+}`)},
+				{Output: []byte(`{"data":{"resolveReviewThread":{"thread":{"id":"T1"}}}}`)},
+				{Output: []byte(`{"data":{"resolveReviewThread":{"thread":{"id":"T2"}}}}`)},
+			},
+		},
+	}
+	client := New(runner)
+
+	client.resolveSelfReviewThreads(context.Background(), 138)
+
+	// Should have called: 1 list + 2 resolve = 3 graphql calls.
+	graphqlCalls := 0
+	resolveIDs := []string{}
+	for _, c := range runner.Calls {
+		if c.Name == "gh" && len(c.Args) >= 2 && c.Args[0] == "api" && c.Args[1] == "graphql" {
+			graphqlCalls++
+			for _, a := range c.Args {
+				if strings.HasPrefix(a, "id=") {
+					resolveIDs = append(resolveIDs, strings.TrimPrefix(a, "id="))
+				}
+			}
+		}
+	}
+	if graphqlCalls != 3 {
+		t.Errorf("expected 1 list + 2 resolve = 3 graphql calls, got %d", graphqlCalls)
+	}
+	if len(resolveIDs) != 2 || resolveIDs[0] != "T1" || resolveIDs[1] != "T2" {
+		t.Errorf("expected resolve(T1) then resolve(T2), got %v", resolveIDs)
+	}
+}
+
+func TestResolveSelfReviewThreads_ListErrorIsSwallowed(t *testing.T) {
+	// Best-effort: a list error must NOT block subsequent posting flow.
+	// We assert by simply checking the call returns without panicking
+	// and no resolve mutation runs.
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"gh repo": {Err: errors.New("not in a git repo")},
+		},
+	}
+	client := New(runner)
+
+	// Should not panic, should not return.
+	client.resolveSelfReviewThreads(context.Background(), 138)
+
+	for _, c := range runner.Calls {
+		if c.Name == "gh" && len(c.Args) >= 2 && c.Args[0] == "api" && c.Args[1] == "graphql" {
+			t.Errorf("unexpected graphql call after list error: %+v", c)
+		}
+	}
+}
+
+func TestPostVerdictWithDiff_ResolvesPriorThreadsBeforePosting(t *testing.T) {
+	// End-to-end check: the post path resolves stale viewer-authored
+	// threads BEFORE posting a new review so users only see the latest
+	// review's findings.
+	diff := `diff --git a/foo.go b/foo.go
+--- a/foo.go
++++ b/foo.go
+@@ -1,3 +1,4 @@
+ a
+ b
++c
+ d
+`
+	runner := &FakeRunner{
+		Responses: map[string]fakeResponse{
+			"git rev-parse": {Output: []byte(".git")},
+			"git remote":    {Output: []byte("https://github.com/vairdict/vairdict")},
+			"gh auth":       {Output: []byte("ok")},
+			"gh pr review":  {Output: []byte("ok")},
+			"gh pr comment": {Output: []byte("ok")},
+			"gh repo":       {Output: []byte("vairdict/vairdict\n")},
+		},
+		Sequence: map[string][]fakeResponse{
+			// First graphql call = list. Returns one stale unresolved thread.
+			// Second graphql call = the resolveReviewThread mutation for T-stale.
+			"gh api graphql": {
+				{Output: []byte(`{
+  "data": {
+    "viewer": {"login": "vairdict[bot]"},
+    "repository": {"pullRequest": {"reviewThreads": {
+      "pageInfo": {"hasNextPage": false, "endCursor": null},
+      "nodes": [
+        {"id": "T-stale", "isResolved": false, "comments": {"nodes": [{"author": {"login": "vairdict[bot]"}}]}}
+      ]
+    }}}
+  }
+}`)},
+				{Output: []byte(`{"data":{"resolveReviewThread":{"thread":{"id":"T-stale"}}}}`)},
+			},
+		},
+	}
+	client := New(runner)
+
+	verdict := &state.Verdict{
+		Score: 80,
+		Pass:  true,
+		Gaps: []state.Gap{
+			{Severity: state.SeverityP2, Description: "tiny nit", Blocking: false, File: "foo.go", Line: 3},
+		},
+	}
+
+	if err := client.PostVerdictWithDiff(context.Background(), 7, verdict, state.PhaseQuality, 1, diff); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Find the index of the resolveReviewThread call (id=T-stale) and the
+	// review-post call (gh api .../reviews). Resolve must happen before post.
+	resolveIdx, postIdx := -1, -1
+	for i, c := range runner.Calls {
+		if c.Name == "gh" && len(c.Args) >= 2 && c.Args[0] == "api" && c.Args[1] == "graphql" {
+			for _, a := range c.Args {
+				if a == "id=T-stale" {
+					resolveIdx = i
+				}
+			}
+		}
+		if c.Name == "gh" && len(c.Args) >= 2 && c.Args[0] == "api" {
+			for _, a := range c.Args {
+				if strings.Contains(a, "/reviews") {
+					postIdx = i
+				}
+			}
+		}
+	}
+	if resolveIdx < 0 {
+		t.Fatalf("expected a resolveReviewThread mutation; calls: %+v", runner.Calls)
+	}
+	if postIdx < 0 {
+		t.Fatalf("expected a review POST call; calls: %+v", runner.Calls)
+	}
+	if resolveIdx >= postIdx {
+		t.Errorf("resolveReviewThread (idx %d) must run BEFORE review POST (idx %d)", resolveIdx, postIdx)
+	}
+}
