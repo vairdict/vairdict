@@ -219,9 +219,12 @@ Before raising any gap of the form "missing doc comment", "missing nil
 check", "missing error handling", "field is undocumented", or
 "behaviour is unexplained", read the FULL hunk you are anchored in —
 the surrounding context lines (no + or - prefix) AND the nearby +
-lines, not just the single line you anchored to. If the doc comment,
-nil check, error return, or explanation already exists in the same
-hunk, drop the gap.
+lines, not just the single line you anchored to. In practice this
+means scanning roughly 30 lines on either side of your anchor in the
+same hunk: comment blocks above declarations, the rest of the
+function body, sibling fields in the same struct. If the doc
+comment, nil check, error return, or explanation already exists in
+the same hunk, drop the gap.
 
 This is the most common false-positive pattern in past reviews: the
 judge anchors to a struct field or function declaration and asks for
@@ -285,18 +288,23 @@ Flag duplicated or copy-pasted logic visible in the diff:
 - Copy-pasted blocks that differ only in variable names or literals
 - Re-implementation of logic that clearly exists in the same diff
 
-### Cross-file consistency (P2 non-blocking)
+### Cross-file consistency (severity follows impact)
 When the diff applies the same change pattern in multiple places —
 a new flag added at two call sites, a new field threaded through
 several constructors, the same conditional bolted onto several
 handlers, the same args slice extended in two methods — compare the
-sites against each other:
-- Identical bodies in 2+ locations → flag for extraction (or note
-  that a future third instance should trigger one).
-- Subtle differences between the locations (different argument order,
-  one site missing a check the others have, divergent error
-  handling) → flag as drift risk; this is where bugs hide as the
-  codebase evolves.
+sites against each other and pick severity by what the divergence
+actually causes:
+- Identical bodies in 2+ locations with no behavioural divergence →
+  P2: flag for extraction, or note that a future third instance
+  should trigger one.
+- Cosmetic differences only (argument order, error wording) → P2:
+  drift risk worth tightening before bugs hide in it.
+- Divergence that produces incorrect behaviour at one of the sites
+  (one site missing a guard the others have, one path silently
+  skipping the new flag, one branch returning the wrong type) →
+  P1: this is a correctness bug, not a style issue, and must be
+  graded as such.
 
 Anchor the gap on one of the diverging locations and name the other
 site explicitly so the author can see both. Do not flag a single
@@ -510,7 +518,41 @@ confirm the behaviour. The severity-ordered scan finds no real bug,
 no security gap, no non-obvious trade-off, and no concrete follow-up.
 Do NOT invent design nits to "balance" the verdict against the size
 of the diff — staying honest about a clean change is more valuable
-than fabricating texture.`
+than fabricating texture.
+
+### Example 6 — whole-hunk reading prevents a false-positive doc gap
+
+Intent: "Add a reserved CodeJudgeModel config field for future LLM-backed code judges."
+Facts: tests pass, lint clean, build ok.
+Diff (abridged):
+  "internal/config/config.go
+    @@ ...
+    +   // CodeJudgeModel is reserved for future LLM-backed code judges.
+    +   // The current code judge runs deterministic shell checks, so
+    +   // this field is parsed but unused today.
+    +   CodeJudgeModel string ` + "`yaml:\"code_judge_model\"`" + `"
+
+INCORRECT submit_verdict (do NOT produce this):
+{
+  "gaps": [
+    {"severity": "P3", "description": "CodeJudgeModel is undocumented; consider explaining its purpose and why it is currently unused.", "file": "internal/config/config.go", "line": 60}
+  ]
+}
+
+Why this is wrong: the three lines immediately above the field are a
+doc comment that already explains exactly what the gap asks for. The
+judge anchored to line 60 (the field declaration) and asked for a
+comment without reading the lines above. The whole-hunk rule
+eliminates this — read the surrounding context first, see the
+comment, drop the gap.
+
+CORRECT submit_verdict for this diff:
+{
+  "summary": "## Reviewed\n- CodeJudgeModel field reserved for future judges with explicit doc block",
+  "gaps": [],
+  "questions": [],
+  "return_to": ""
+}`
 
 // systemPrompt is the quality judge system prompt with the non-negotiable
 // engineering standards appended. Baseline rules reach the judge so it

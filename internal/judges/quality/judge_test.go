@@ -583,7 +583,14 @@ func TestJudge_SystemPromptRequiresReadingTheWholeHunk(t *testing.T) {
 	for _, keyword := range []string{
 		"Read the whole hunk",
 		"missing doc comment",
-		"already exists in the same",
+		"already exists in",
+		// A soft window keeps the rule actionable on large hunks
+		// without asking the judge to re-read 500-line diffs.
+		"30 lines",
+		// Example 6 is the concrete demonstration; pin it so future
+		// edits cannot remove the worked example while leaving only
+		// the abstract rule.
+		"Example 6",
 	} {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing whole-hunk-reading marker %q", keyword)
@@ -596,9 +603,13 @@ func TestJudge_SystemPromptCoversCrossFileConsistency(t *testing.T) {
 	// methods in the claudecli client (drift risk). The "Additional
 	// checks" section must cover the same-pattern-applied-in-multiple-
 	// places case so future reviews catch divergence between sites.
+	// Severity must follow impact: cosmetic drift is P2, but divergence
+	// that produces incorrect behaviour at one site is P1, not P2.
 	for _, keyword := range []string{
 		"Cross-file consistency",
 		"drift risk",
+		"severity follows impact",
+		"correctness bug, not a style issue",
 	} {
 		if !strings.Contains(systemPrompt, keyword) {
 			t.Errorf("system prompt missing cross-file-consistency marker %q", keyword)
