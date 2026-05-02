@@ -1063,3 +1063,95 @@ func TestJudge_UsesCompleteWithTools(t *testing.T) {
 		t.Errorf("expected final tool %q, got %q", verdictschema.ToolName, fake.Calls[0].ToolName)
 	}
 }
+
+// TestJudge_SystemPromptHasBeforeFlaggingRubric pins the new
+// rubric: before emitting a Medium / Low / Standards gap, the judge
+// must search the surrounding file for an existing handler / guard /
+// convention that already addresses the concern. If found, drop the
+// gap. This is a generalization of the whole-hunk-reading rule
+// (already covered) extended explicitly to the lower severities and
+// to Standards findings — exactly the tiers most likely to be false
+// positives, since by definition they don't change correctness.
+func TestJudge_SystemPromptHasBeforeFlaggingRubric(t *testing.T) {
+	for _, keyword := range []string{
+		"Before flagging",
+		"Medium",
+		"Low",
+		"Standards",
+		"existing handler",
+		"do not flag",
+	} {
+		if !strings.Contains(systemPrompt, keyword) {
+			t.Errorf("system prompt missing before-flagging-rubric marker %q", keyword)
+		}
+	}
+}
+
+// TestJudge_SystemPromptHasCountAnchorScan goes red if any phrasing
+// that anchors the gap count to a specific number creeps back into
+// the prompt. PR #141 removed "typically 2-3 P3/P2 design observations";
+// PR #145 added Medium/Low/Standards to the dispatch table where
+// padding nits are most expensive. This guard pins the absence of
+// the regression.
+func TestJudge_SystemPromptHasNoCountAnchor(t *testing.T) {
+	for _, banned := range []string{
+		"typically 2",
+		"typically 3",
+		"at least 2",
+		"at least 3",
+		"2-3 P",
+		"2-3 gaps",
+		"2 to 3",
+		"up to 3 gaps",
+	} {
+		if strings.Contains(systemPrompt, banned) {
+			t.Errorf("system prompt re-introduced count-anchor phrase %q — see PR #141", banned)
+		}
+	}
+}
+
+// TestRenderCrossPushFraming produces the cross-push framing the
+// quality judge prepends to the user prompt when prior verdict gaps
+// exist. The framing tells the judge:
+//
+//   - the prior review's gap list (with severities)
+//   - to verify each prior gap is still applicable in the current diff
+//     and drop it if fixed
+//   - to scan only the diff since the prior review for new findings
+//   - NOT to introduce findings that existed before the prior review
+//     (if the previous round missed them, they're not flagged now)
+//
+// Empty prior-gap list returns the empty string so the framing
+// disappears on the first review of a PR.
+func TestRenderCrossPushFraming_EmptyOnFirstReview(t *testing.T) {
+	if got := RenderCrossPushFraming(nil); got != "" {
+		t.Errorf("RenderCrossPushFraming(nil) = %q, want empty", got)
+	}
+	if got := RenderCrossPushFraming([]state.Gap{}); got != "" {
+		t.Errorf("RenderCrossPushFraming(empty) = %q, want empty", got)
+	}
+}
+
+func TestRenderCrossPushFraming_IncludesPriorGapsAndInstructions(t *testing.T) {
+	prior := []state.Gap{
+		{Severity: state.SeverityCritical, Description: "missing auth on /admin"},
+		{Severity: state.SeverityHigh, Description: "tests fail"},
+	}
+	got := RenderCrossPushFraming(prior)
+
+	for _, want := range []string{
+		"prior review",
+		"missing auth on /admin",
+		"tests fail",
+		"Critical",
+		"High",
+		"Verify each",
+		"drop it",
+		"new findings",
+		"Do not introduce",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RenderCrossPushFraming missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+}

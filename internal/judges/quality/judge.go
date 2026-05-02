@@ -215,6 +215,29 @@ You MUST NOT:
 
 These are NOT bugs. They are existing code that was not modified.
 
+## Before flagging Medium / Low / Standards: check for an existing fix
+
+Before emitting a Medium-, Low-, or Standards-severity gap, search the
+surrounding file(s) for an existing handler, guard, helper, or
+convention that already addresses the concern. If you find one,
+do not flag — the issue is not a real gap, it is a documentation
+miss in your read. Examples:
+
+- About to flag "no error handling" on a returned err — scan the
+  function: is there a defer that wraps or a wrapper at the call
+  site that already handles it? If yes, do not flag.
+- About to flag "missing input validation" — check whether the
+  caller validates, or whether a typed wrapper has already narrowed
+  the input.
+- About to flag a Standards naming nit — check whether the file
+  already establishes a convention for that identifier kind.
+
+Critical and High findings are exempt from this rubric: a real
+correctness or security bug stands on its own and you must flag it
+even if a partial mitigation exists elsewhere. The rubric exists to
+suppress the lower-severity false positives where "I noticed X" turns
+out to be "X is already handled, I just didn't read far enough."
+
 ## Read the whole hunk before flagging "missing X"
 
 Before raising any gap of the form "missing doc comment", "missing nil
@@ -560,6 +583,47 @@ CORRECT submit_verdict for this diff:
 // engineering standards appended. Baseline rules reach the judge so it
 // flags violations regardless of team config.
 var systemPrompt = systemPromptCore + "\n\n" + standards.Block
+
+// RenderCrossPushFraming produces the cross-push framing block the
+// quality judge prepends to its user prompt when prior verdict gaps
+// exist. The framing closes the "judge invents a finding on push N
+// that was already there on push N-1" failure mode that produces the
+// nagging-comment behaviour the user asked us to fix.
+//
+// The rules baked into the framing:
+//
+//   - the prior review's gaps are listed verbatim with severities;
+//   - each prior gap must be checked for current applicability and
+//     dropped from the new verdict if the latest push fixed it;
+//   - new findings are only valid for code introduced or changed in
+//     the diff since the prior review;
+//   - findings that pre-date the prior review must NOT be introduced
+//     now — if the previous round missed them, they were either not
+//     real or not the judge's responsibility to flag at this point.
+//
+// Returns "" for nil/empty input so the framing disappears on the
+// first review of a PR (no prior gaps -> no cross-push pressure).
+func RenderCrossPushFraming(priorGaps []state.Gap) string {
+	if len(priorGaps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Cross-push awareness — prior review gaps\n\n")
+	b.WriteString("This PR has been reviewed before. The prior review emitted the following gaps:\n\n")
+	for _, g := range priorGaps {
+		fmt.Fprintf(&b, "- [%s] %s\n", g.Severity.Display(), g.Description)
+	}
+	b.WriteString("\nWhen producing this review:\n")
+	b.WriteString("\n1. Verify each prior gap above for current applicability in the diff. ")
+	b.WriteString("If the latest push has fixed it, drop it; do not re-flag a resolved concern. ")
+	b.WriteString("If it is still present, keep it with the same severity.\n")
+	b.WriteString("\n2. Scan only the diff since the prior review for new findings. ")
+	b.WriteString("Anything outside the most recent push is not a new finding.\n")
+	b.WriteString("\n3. Do not introduce findings that pre-dated the prior review. ")
+	b.WriteString("If the previous round missed them, they were either not real or not in scope; ")
+	b.WriteString("emitting them now would be a nagging-comment failure mode, not a useful review.\n")
+	return b.String()
+}
 
 // Judge evaluates whether the given diff fulfills the original intent and plan.
 // It runs AI-based intent verification (against the diff content, not a
