@@ -90,9 +90,13 @@ type reviewGH interface {
 
 // reviewJudge is the narrow judge surface; *quality.QualityJudge satisfies
 // it. Plan is always empty for review mode (per #48 acceptance criteria);
-// the third argument is the unified diff fetched from the PR.
+// the third argument is the unified diff fetched from the PR. The fourth
+// argument is the previous review's gap list, used to prepend the cross-
+// push framing block; `vairdict review` is one-shot so it always passes
+// nil — cross-push memory across CLI invocations would need a separate
+// state store and is out of scope for the subcommand.
 type reviewJudge interface {
-	Judge(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error)
+	Judge(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap) (*state.Verdict, error)
 }
 
 // runReview is the production entry point: it loads the config, builds
@@ -161,8 +165,9 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	}
 
 	// Review mode has no plan — pass empty. The diff is what the judge
-	// actually evaluates.
-	verdict, err := deps.judge.Judge(ctx, intent, "", diff)
+	// actually evaluates. priorGaps is nil because `vairdict review` is
+	// a one-shot CLI invocation with no persisted prior verdict.
+	verdict, err := deps.judge.Judge(ctx, intent, "", diff, nil)
 	if err != nil {
 		return fmt.Errorf("running quality judge: %w", err)
 	}

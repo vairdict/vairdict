@@ -10,14 +10,18 @@ import (
 	"github.com/vairdict/vairdict/internal/state"
 )
 
-// fakeJudge returns configurable verdicts in order.
+// fakeJudge returns configurable verdicts in order. priorGapsByCall
+// captures the priorGaps passed on each call so tests can assert that
+// loop N+1 receives loop N's gaps as cross-push context.
 type fakeJudge struct {
-	verdicts []*state.Verdict
-	err      error
-	calls    int
+	verdicts        []*state.Verdict
+	err             error
+	calls           int
+	priorGapsByCall [][]state.Gap
 }
 
-func (f *fakeJudge) Judge(_ context.Context, _, _, _ string) (*state.Verdict, error) {
+func (f *fakeJudge) Judge(_ context.Context, _, _, _ string, priorGaps []state.Gap) (*state.Verdict, error) {
+	f.priorGapsByCall = append(f.priorGapsByCall, priorGaps)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -346,5 +350,46 @@ func TestBuildQualityFeedback(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("feedback missing %q\ngot:\n%s", want, out)
 		}
+	}
+}
+
+// TestQualityPhase_PriorGapsThreadAcrossLoops pins the orchestrator
+// wiring of cross-push framing within a single phase invocation: the
+// first judge call receives nil priorGaps (no prior round); each
+// subsequent loop receives the immediately preceding loop's gaps so
+// the judge has the cross-push framing material it needs to avoid
+// re-flagging concerns it already raised.
+func TestQualityPhase_PriorGapsThreadAcrossLoops(t *testing.T) {
+	gapsLoop1 := []state.Gap{
+		{Severity: state.SeverityCritical, Description: "missing auth", Blocking: true},
+	}
+	gapsLoop2 := []state.Gap{
+		{Severity: state.SeverityHigh, Description: "still missing auth", Blocking: true},
+	}
+	judge := &fakeJudge{verdicts: []*state.Verdict{
+		{Score: 50, Pass: false, Gaps: gapsLoop1},
+		{Score: 60, Pass: false, Gaps: gapsLoop2},
+		{Score: 100, Pass: true},
+	}}
+	phase := New(judge, defaultCfg(), "diff")
+	task := state.NewTask("t-prior", "intent")
+	task.State = state.StateQuality
+	task.LoopCount = map[state.Phase]int{}
+
+	if _, err := phase.Run(context.Background(), task, "plan"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(judge.priorGapsByCall) != 3 {
+		t.Fatalf("expected 3 judge calls, got %d", len(judge.priorGapsByCall))
+	}
+	if judge.priorGapsByCall[0] != nil {
+		t.Errorf("first call must receive nil priorGaps (no prior round), got %+v", judge.priorGapsByCall[0])
+	}
+	if len(judge.priorGapsByCall[1]) != 1 || judge.priorGapsByCall[1][0].Description != "missing auth" {
+		t.Errorf("second call must receive loop 1's gaps, got %+v", judge.priorGapsByCall[1])
+	}
+	if len(judge.priorGapsByCall[2]) != 1 || judge.priorGapsByCall[2][0].Description != "still missing auth" {
+		t.Errorf("third call must receive loop 2's gaps, got %+v", judge.priorGapsByCall[2])
 	}
 }

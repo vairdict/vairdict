@@ -39,8 +39,12 @@ type PhaseResult struct {
 // Judge is the interface for the quality judge. The real implementation lives
 // in internal/judges/quality. The third argument is the unified diff of the
 // code under review — the judge no longer reads the working directory itself.
+// The fourth argument is the gap list from the previous review round (the
+// previous in-phase loop, or empty on the first round); the judge prepends
+// the cross-push framing block when this is non-empty so it doesn't re-flag
+// concerns already raised.
 type Judge interface {
-	Judge(ctx context.Context, intent, plan, diff string) (*state.Verdict, error)
+	Judge(ctx context.Context, intent, plan, diff string, priorGaps []state.Gap) (*state.Verdict, error)
 }
 
 // QualityPhase orchestrates the quality phase: judge loop on already-coded work.
@@ -83,6 +87,10 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 
 	var lastFeedback string
 	var lastScore float64
+	// priorGaps carries the previous loop's gaps into the next judge
+	// call so the cross-push framing block lands on every retry. nil
+	// on the first iteration (no prior round), populated thereafter.
+	var priorGaps []state.Gap
 
 	for loop := 0; loop < p.cfg.MaxLoops; loop++ {
 		slog.Info("quality phase loop",
@@ -96,10 +104,14 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 		}
 
 		p.notify(loop+1, p.cfg.MaxLoops, "reviewing", 0, false, nil)
-		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff)
+		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff, priorGaps)
 		if err != nil {
 			return nil, fmt.Errorf("running quality judge: %w", err)
 		}
+		// Carry this round's gaps forward so the next loop's judge call
+		// sees them via the cross-push framing — closes the "judge keeps
+		// inventing new findings on the same diff" failure mode.
+		priorGaps = verdict.Gaps
 
 		p.notify(loop+1, p.cfg.MaxLoops, "done", verdict.Score, verdict.Pass, verdict.Gaps)
 
