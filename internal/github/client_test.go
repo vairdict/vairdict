@@ -1576,8 +1576,12 @@ func TestPostVerdictWithDiff_ResolvesPriorThreadsBeforePosting(t *testing.T) {
 	verdict := &state.Verdict{
 		Score: 80,
 		Pass:  true,
+		// Critical so it's inline-eligible under the new dispatch and
+		// the review POST path is exercised. (Pre-dispatch this test
+		// used a Medium gap, but only Critical/High/Standards reach the
+		// inline surface now — see TestBuildInlineReview_Dispatch...)
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "tiny nit", Blocking: false, File: "foo.go", Line: 3},
+			{Severity: state.SeverityCritical, Description: "blocking issue", Blocking: true, File: "foo.go", Line: 3},
 		},
 	}
 
@@ -1612,5 +1616,105 @@ func TestPostVerdictWithDiff_ResolvesPriorThreadsBeforePosting(t *testing.T) {
 	}
 	if resolveIdx >= postIdx {
 		t.Errorf("resolveReviewThread (idx %d) must run BEFORE review POST (idx %d)", resolveIdx, postIdx)
+	}
+}
+
+// TestBuildInlineReview_DispatchByInlineEligibility encodes the new
+// dispatch rule: only Critical and High gaps surface as inline review
+// comments. Medium and Low go into the unanchored review body so they
+// stop cluttering the PR diff with non-blocking nits the author can't
+// apply with one click — the user-facing complaint that "every PR
+// gets 2-3 inline comments of varying noise."
+//
+// Fixture: one diff position; one gap of each tier all anchored at
+// that line. The Critical and High gaps must end up as Comments;
+// Medium and Low must end up in the unanchored body — even though
+// they have a valid file/line that would have made them inline-
+// eligible under the old "any gap with file:line goes inline" rule.
+func TestBuildInlineReview_DispatchByInlineEligibility(t *testing.T) {
+	diff := "diff --git a/x.go b/x.go\n" +
+		"--- a/x.go\n" +
+		"+++ b/x.go\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" package x\n" +
+		"+var added = 1\n" +
+		" var existing = 2\n"
+	verdict := &state.Verdict{
+		Gaps: []state.Gap{
+			{Severity: state.SeverityCritical, Description: "crit", Blocking: true, File: "x.go", Line: 2},
+			{Severity: state.SeverityHigh, Description: "high", Blocking: true, File: "x.go", Line: 2},
+			{Severity: state.SeverityMedium, Description: "med", Blocking: false, File: "x.go", Line: 2},
+			{Severity: state.SeverityLow, Description: "low", Blocking: false, File: "x.go", Line: 2},
+		},
+	}
+
+	got := BuildInlineReview(verdict, diff)
+	if got == nil || got.Payload == nil {
+		t.Fatalf("expected payload, got %+v", got)
+	}
+	if len(got.Payload.Comments) != 2 {
+		t.Errorf("expected 2 inline comments (Critical+High), got %d: %+v",
+			len(got.Payload.Comments), got.Payload.Comments)
+	}
+	bodies := []string{}
+	for _, c := range got.Payload.Comments {
+		bodies = append(bodies, c.Body)
+	}
+	joined := strings.Join(bodies, "\n")
+	if !contains(joined, "crit") || !contains(joined, "high") {
+		t.Errorf("inline bodies should include Critical+High, got: %s", joined)
+	}
+	if contains(joined, "[Medium]") || contains(joined, "[Low]") {
+		t.Errorf("inline bodies must NOT include Medium/Low, got: %s", joined)
+	}
+	// Medium and Low surface in the review body so the concern is not lost.
+	if !contains(got.Payload.Body, "med") || !contains(got.Payload.Body, "low") {
+		t.Errorf("Medium/Low must surface in review body, got: %s", got.Payload.Body)
+	}
+
+	// inlineIndices reflects only the Critical and High gaps, so the
+	// summary-comment renderer keeps Medium/Low in its criteria table.
+	if got.InlineGapIndices[2] || got.InlineGapIndices[3] {
+		t.Errorf("Medium (idx 2) and Low (idx 3) must not be marked inline: %+v",
+			got.InlineGapIndices)
+	}
+	if !got.InlineGapIndices[0] || !got.InlineGapIndices[1] {
+		t.Errorf("Critical (idx 0) and High (idx 1) must be marked inline: %+v",
+			got.InlineGapIndices)
+	}
+}
+
+// TestBuildInlineReview_StandardsAlwaysInline pins that any gap whose
+// description carries the Standards marker (added by the post-
+// processor for FilterFindings output) is inline regardless of the
+// severity ladder — Standards finding are mechanical/easy-fix and
+// the user explicitly asked for them to surface inline.
+//
+// This test goes red until BuildInlineReview learns the marker and
+// also flips inline eligibility on it. Standards findings travel as
+// state.Gap with Severity left empty (or set to a sentinel) and a
+// description prefixed with the standards marker.
+func TestBuildInlineReview_StandardsAlwaysInline(t *testing.T) {
+	diff := "diff --git a/x.go b/x.go\n" +
+		"--- a/x.go\n" +
+		"+++ b/x.go\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" package x\n" +
+		"+var addedNoCamelCase = 1\n" +
+		" var existing = 2\n"
+	verdict := &state.Verdict{
+		Gaps: []state.Gap{
+			{
+				Severity:    state.Severity(""),
+				Description: "STANDARDS:naming use camelCase",
+				Blocking:    false,
+				File:        "x.go", Line: 2,
+				Suggestion: "var addedNoCamelCase = 1",
+			},
+		},
+	}
+	got := BuildInlineReview(verdict, diff)
+	if got == nil || got.Payload == nil || len(got.Payload.Comments) != 1 {
+		t.Fatalf("expected 1 inline Standards comment, got %+v", got)
 	}
 }

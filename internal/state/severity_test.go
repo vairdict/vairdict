@@ -109,6 +109,40 @@ func TestSeverityIsBlocking(t *testing.T) {
 	}
 }
 
+// TestSeverityInlineEligible pins which severities may surface as
+// inline comments on the PR diff. Critical and High block, so they
+// must be visible at the line they touch — both eligible. Medium
+// and Low don't block, so they're notes-only — keeping them out of
+// the inline surface stops Medium/Low findings from cluttering the
+// review with non-blocking nits the author can't apply with one
+// click. Standards findings are inline-eligible regardless of the
+// severity ladder; that decision lives in the standards package and
+// is not modeled on Severity.
+func TestSeverityInlineEligible(t *testing.T) {
+	cases := []struct {
+		s    Severity
+		want bool
+	}{
+		{SeverityCritical, true},
+		{SeverityHigh, true},
+		{SeverityMedium, false},
+		{SeverityLow, false},
+		// legacy
+		{"P0", true},
+		{"P1", true},
+		{"P2", false},
+		{"P3", false},
+		// unknown stays out of inline so the renderer never silently
+		// surfaces something the dispatch table doesn't know about
+		{"bogus", false},
+	}
+	for _, c := range cases {
+		if got := c.s.InlineEligible(); got != c.want {
+			t.Errorf("Severity(%q).InlineEligible() = %v, want %v", c.s, got, c.want)
+		}
+	}
+}
+
 // TestSeverityDisplay covers the user-facing rendering of a severity.
 // Stored values are lowercase ("critical"); rendered output uses Title
 // Case ("Critical") so PR comment tables and inline comments read as

@@ -141,6 +141,23 @@ func (s Severity) IsBlocking() bool {
 	return false
 }
 
+// InlineEligible reports whether a gap of this severity is eligible
+// to surface as an inline review comment on the PR diff. Critical and
+// High block and must be visible at the line they touch, so they're
+// inline. Medium and Low don't block and would only clutter the
+// inline surface with non-blocking nits — they go to the summary
+// "Notes" section instead. Unknown severities default to false so the
+// renderer never silently surfaces something the dispatch table
+// doesn't know about. Standards findings have their own inline
+// rule — always eligible — and are not modeled on Severity.
+func (s Severity) InlineEligible() bool {
+	switch NormalizeSeverity(s) {
+	case SeverityCritical, SeverityHigh:
+		return true
+	}
+	return false
+}
+
 // Display returns the user-facing string for a severity (Title Case,
 // English word). Used by the PR comment renderer and the CLI verdict
 // printer so a stored "critical" surfaces as "Critical" in output.
