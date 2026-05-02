@@ -35,8 +35,8 @@ const inputSchema = `{
         "properties": {
           "severity": {
             "type": "string",
-            "enum": ["P0", "P1", "P2", "P3"],
-            "description": "P0/P1 are blocking; P2/P3 are advisory."
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "critical/high are blocking; medium/low are advisory. Legacy P0/P1/P2/P3 strings are still accepted by the post-processor (NormalizeSeverity) for backward compatibility, but new judge calls should emit the canonical lowercase wording."
           },
           "description": {"type": "string"},
           "file": {"type": "string", "description": "Optional file path when the gap maps to a specific diff location."},
@@ -96,13 +96,13 @@ func ComputeScore(gaps []state.Gap) float64 {
 	penalty := 0.0
 	for _, g := range gaps {
 		switch g.Severity {
-		case state.SeverityP0:
+		case state.SeverityCritical:
 			penalty += weightP0
-		case state.SeverityP1:
+		case state.SeverityHigh:
 			penalty += weightP1
-		case state.SeverityP2:
+		case state.SeverityMedium:
 			penalty += weightP2
-		case state.SeverityP3:
+		case state.SeverityLow:
 			penalty += weightP3
 		}
 	}
@@ -119,16 +119,25 @@ func ComputeScore(gaps []state.Gap) float64 {
 
 // ApplyBlocking sets the Blocking flag on each gap based on severity, using
 // the caller-supplied set of severities that count as blocking. Passing a nil
-// set means the default (P0 and P1) applies.
+// set means the default (Critical and High — formerly P0/P1) applies.
+//
+// Both the map keys and each gap's stored severity are run through
+// state.NormalizeSeverity, so vairdict.yaml configs that still spell the
+// blocking set as ["P0","P1"] continue to gate the new "critical"/"high"
+// gaps without any user-visible change.
 func ApplyBlocking(gaps []state.Gap, blockOn map[string]bool) {
 	if blockOn == nil {
 		blockOn = map[string]bool{
-			string(state.SeverityP0): true,
-			string(state.SeverityP1): true,
+			string(state.SeverityCritical): true,
+			string(state.SeverityHigh):     true,
 		}
 	}
+	normalized := make(map[state.Severity]bool, len(blockOn))
+	for k, v := range blockOn {
+		normalized[state.NormalizeSeverity(state.Severity(k))] = v
+	}
 	for i := range gaps {
-		gaps[i].Blocking = blockOn[string(gaps[i].Severity)]
+		gaps[i].Blocking = normalized[state.NormalizeSeverity(gaps[i].Severity)]
 	}
 }
 
@@ -176,13 +185,13 @@ func ComputeScoreWithAcknowledged(gaps []state.Gap, acknowledged []state.Assumpt
 	for _, g := range gaps {
 		w := 0.0
 		switch g.Severity {
-		case state.SeverityP0:
+		case state.SeverityCritical:
 			w = weightP0
-		case state.SeverityP1:
+		case state.SeverityHigh:
 			w = weightP1
-		case state.SeverityP2:
+		case state.SeverityMedium:
 			w = weightP2
-		case state.SeverityP3:
+		case state.SeverityLow:
 			w = weightP3
 		}
 		if IsReflagged(g, acknowledged) {

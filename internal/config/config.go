@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vairdict/vairdict/internal/standards"
 )
 
 type Config struct {
@@ -19,6 +21,31 @@ type Config struct {
 	Conventions  ConventionsConfig `yaml:"conventions"`
 	Parallel     ParallelConfig    `yaml:"parallel"`
 	AutoVairdict bool              `yaml:"auto_vairdict"`
+
+	// Standards holds the team's per-rule Standards setting parsed
+	// from the `standards:` block. Values are raw strings ("off" / "on"
+	// / "block"); call StandardsConfig to get a typed standards.Config
+	// merged on top of the package-level defaults so unset rules carry
+	// their default state (on) without every config having to enumerate
+	// the full rule list.
+	Standards map[string]string `yaml:"standards,omitempty"`
+}
+
+// StandardsConfig returns the team's Standards config — defaults
+// (every known rule on) merged with the per-rule overrides parsed
+// from vairdict.yaml. Invalid state strings (anything other than
+// off / on / block) surface as an error so a typo fails the run at
+// load time rather than silently disabling a rule.
+func (c *Config) StandardsConfig() (standards.Config, error) {
+	out := standards.Default()
+	for name, raw := range c.Standards {
+		state, err := standards.ParseRuleState(raw)
+		if err != nil {
+			return standards.Config{}, fmt.Errorf("standards.%s: %w", name, err)
+		}
+		out.Rules[name] = state
+	}
+	return out, nil
 }
 
 type ParallelConfig struct {
@@ -525,6 +552,9 @@ func validate(cfg *Config) error {
 	if cfg.Parallel.MaxTasks < 1 {
 		return fmt.Errorf("validating config: parallel.max_tasks must be >= 1")
 	}
+	if _, err := cfg.StandardsConfig(); err != nil {
+		return fmt.Errorf("validating config: %w", err)
+	}
 	return nil
 }
 
@@ -535,6 +565,7 @@ func warnUnknownFields(data []byte) {
 		"project": true, "agents": true, "environment": true,
 		"commands": true, "phases": true, "escalation": true,
 		"conventions": true, "parallel": true, "auto_vairdict": true,
+		"standards": true,
 	}
 
 	var raw map[string]any

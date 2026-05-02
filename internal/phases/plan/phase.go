@@ -215,17 +215,17 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 func (p *PlanPhase) processGaps(task *state.Task, gaps []state.Gap) {
 	for _, gap := range gaps {
 		switch gap.Severity {
-		case state.SeverityP2:
+		case state.SeverityMedium:
 			slog.Info("logging P2 gap as assumption",
 				"task_id", task.ID,
 				"description", gap.Description,
 			)
 			task.Assumptions = append(task.Assumptions, state.Assumption{
 				Description: gap.Description,
-				Severity:    state.SeverityP2,
+				Severity:    state.SeverityMedium,
 				Phase:       state.PhasePlan,
 			})
-		case state.SeverityP3:
+		case state.SeverityLow:
 			slog.Info("deferring P3 gap to future issue",
 				"task_id", task.ID,
 				"description", gap.Description,
@@ -285,7 +285,7 @@ func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assu
 	if len(assumptions) > 0 {
 		b.WriteString("\n## Assumptions from Previous Loops\n")
 		for _, a := range assumptions {
-			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity, a.Description)
+			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity.Display(), a.Description)
 		}
 	}
 
@@ -305,7 +305,7 @@ func buildFeedbackSummary(verdict *state.Verdict) string {
 			if gap.Blocking {
 				blocking = " [BLOCKING]"
 			}
-			fmt.Fprintf(&b, "- [%s]%s %s\n", gap.Severity, blocking, gap.Description)
+			fmt.Fprintf(&b, "- [%s]%s %s\n", gap.Severity.Display(), blocking, gap.Description)
 		}
 	}
 

@@ -83,14 +83,124 @@ var phaseForState = map[TaskState]Phase{
 }
 
 // Severity represents the severity level of a gap or assumption.
+//
+// Canonical values are lowercase words: "critical" / "high" / "medium" /
+// "low". Legacy "P0".."P3" payloads (older DB rows, older judge prompts)
+// flow through NormalizeSeverity at the seams (DB read, schema unmarshal)
+// so internal code only ever compares against the canonical constants.
+//
+// The deprecated SeverityP0..P3 constants below remain as aliases pointing
+// at the canonical strings so existing call sites keep compiling during
+// the migration; new code should reference SeverityCritical/High/Medium/Low.
 type Severity string
 
 const (
-	SeverityP0 Severity = "P0"
-	SeverityP1 Severity = "P1"
-	SeverityP2 Severity = "P2"
-	SeverityP3 Severity = "P3"
+	SeverityCritical Severity = "critical"
+	SeverityHigh     Severity = "high"
+	SeverityMedium   Severity = "medium"
+	SeverityLow      Severity = "low"
+
+	// Deprecated: use SeverityCritical. Alias kept so existing call sites
+	// compile; resolves to the same canonical string.
+	SeverityP0 = SeverityCritical
+	// Deprecated: use SeverityHigh.
+	SeverityP1 = SeverityHigh
+	// Deprecated: use SeverityMedium.
+	SeverityP2 = SeverityMedium
+	// Deprecated: use SeverityLow.
+	SeverityP3 = SeverityLow
 )
+
+// NormalizeSeverity maps any accepted spelling — legacy "P0".."P3", any
+// case variant of the canonical names — to the canonical lowercase form.
+// Unknown values pass through unchanged so callers can detect and flag
+// them rather than silently coercing to a real severity.
+func NormalizeSeverity(s Severity) Severity {
+	switch strings.ToLower(string(s)) {
+	case "p0", "critical":
+		return SeverityCritical
+	case "p1", "high":
+		return SeverityHigh
+	case "p2", "medium":
+		return SeverityMedium
+	case "p3", "low":
+		return SeverityLow
+	}
+	return s
+}
+
+// IsBlocking reports whether a severity blocks the verdict gate. Critical
+// and High block; Medium and Low do not. Standards findings have their
+// own blocking semantics (config-driven) and are not modelled as a
+// Severity — see the standards package.
+func (s Severity) IsBlocking() bool {
+	switch NormalizeSeverity(s) {
+	case SeverityCritical, SeverityHigh:
+		return true
+	}
+	return false
+}
+
+// InlineEligible reports whether a gap of this severity is eligible
+// to surface as an inline review comment on the PR diff. Critical and
+// High block and must be visible at the line they touch, so they're
+// inline. Medium and Low don't block and would only clutter the
+// inline surface with non-blocking nits — they go to the summary
+// "Notes" section instead. Unknown severities default to false so the
+// renderer never silently surfaces something the dispatch table
+// doesn't know about. Standards findings have their own inline
+// rule — always eligible — and are not modeled on Severity.
+func (s Severity) InlineEligible() bool {
+	switch NormalizeSeverity(s) {
+	case SeverityCritical, SeverityHigh:
+		return true
+	}
+	return false
+}
+
+// Display returns the user-facing string for a severity (Title Case,
+// English word). Used by the PR comment renderer and the CLI verdict
+// printer so a stored "critical" surfaces as "Critical" in output.
+// Unknown values pass through unchanged so the renderer can faithfully
+// surface whatever the judge produced rather than silently substituting
+// a real severity word.
+func (s Severity) Display() string {
+	switch NormalizeSeverity(s) {
+	case SeverityCritical:
+		return "Critical"
+	case SeverityHigh:
+		return "High"
+	case SeverityMedium:
+		return "Medium"
+	case SeverityLow:
+		return "Low"
+	}
+	return string(s)
+}
+
+// UnknownSeverityRank is the sort rank used for severities outside
+// the canonical Critical/High/Medium/Low ladder. Sorts last so any
+// surprise value the judge produces ends up at the bottom of the
+// notes section rather than mixed in with real findings.
+const UnknownSeverityRank = 99
+
+// Rank returns the display-order rank of a severity: 0 (Critical) is
+// shown first, 3 (Low) last. Unknown severities sort to the end
+// (UnknownSeverityRank).
+// Used by the verdict renderer to order the notes section.
+func (s Severity) Rank() int {
+	switch NormalizeSeverity(s) {
+	case SeverityCritical:
+		return 0
+	case SeverityHigh:
+		return 1
+	case SeverityMedium:
+		return 2
+	case SeverityLow:
+		return 3
+	}
+	return UnknownSeverityRank
+}
 
 // Assumption records a decision made under uncertainty during a phase.
 type Assumption struct {

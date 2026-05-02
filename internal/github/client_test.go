@@ -172,7 +172,7 @@ func TestPostVerdict_Pass_ApprovesAndComments(t *testing.T) {
 		Score: 95,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP3, Description: "minor style", Blocking: false},
+			{Severity: state.SeverityLow, Description: "minor style", Blocking: false},
 		},
 	}
 
@@ -275,8 +275,8 @@ func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
 		Score: 40,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "build fails", Blocking: true},
-			{Severity: state.SeverityP1, Description: "tests fail", Blocking: true},
+			{Severity: state.SeverityCritical, Description: "build fails", Blocking: true},
+			{Severity: state.SeverityHigh, Description: "tests fail", Blocking: true},
 		},
 	}
 
@@ -393,7 +393,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		Score: 95,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP3, Description: "minor style nit", Blocking: false},
+			{Severity: state.SeverityLow, Description: "minor style nit", Blocking: false},
 		},
 	}
 
@@ -410,7 +410,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		{"score", "**Score:** 95%"},
 		{"phase", "**Phase:** quality"},
 		{"loop", "**Loop:** 1"},
-		{"gap severity", "| P3 |"},
+		{"gap severity", "| Low |"},
 		{"gap description", "minor style nit"},
 		{"footer", "@vairdict-judge"},
 	}
@@ -432,9 +432,9 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		Score: 40,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "build broken", Blocking: true},
-			{Severity: state.SeverityP1, Description: "tests fail", Blocking: true},
-			{Severity: state.SeverityP3, Description: "docs missing", Blocking: false},
+			{Severity: state.SeverityCritical, Description: "build broken", Blocking: true},
+			{Severity: state.SeverityHigh, Description: "tests fail", Blocking: true},
+			{Severity: state.SeverityLow, Description: "docs missing", Blocking: false},
 		},
 		Questions: []state.Question{
 			{Text: "Is the API stable?", Priority: "high"},
@@ -454,8 +454,8 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		{"score", "**Score:** 40%"},
 		{"loop", "**Loop:** 2"},
 		{"blocking section", "### Blocking Gaps"},
-		{"P0 gap", "**[P0]** build broken"},
-		{"P1 gap", "**[P1]** tests fail"},
+		{"critical gap", "**[Critical]** build broken"},
+		{"high gap", "**[High]** tests fail"},
 		{"question", "Is the API stable?"},
 		{"criteria table", "| Severity | Status | Description |"},
 	}
@@ -623,7 +623,7 @@ func TestFormatPRBody(t *testing.T) {
 	task := &state.Task{
 		Intent: "add feature X",
 		Assumptions: []state.Assumption{
-			{Severity: state.SeverityP2, Description: "assumed Y"},
+			{Severity: state.SeverityMedium, Description: "assumed Y"},
 		},
 		Attempts: []state.Attempt{
 			{
@@ -783,9 +783,9 @@ func TestPostVerdictWithDiff_InlineComments(t *testing.T) {
 		Score: 40,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "bug on added line", Blocking: true, File: "internal/foo/bar.go", Line: 12},
-			{Severity: state.SeverityP2, Description: "style issue elsewhere", Blocking: false}, // no file/line
-			{Severity: state.SeverityP3, Description: "line not in diff", Blocking: false, File: "internal/foo/bar.go", Line: 1},
+			{Severity: state.SeverityHigh, Description: "bug on added line", Blocking: true, File: "internal/foo/bar.go", Line: 12},
+			{Severity: state.SeverityMedium, Description: "style issue elsewhere", Blocking: false}, // no file/line
+			{Severity: state.SeverityLow, Description: "line not in diff", Blocking: false, File: "internal/foo/bar.go", Line: 1},
 		},
 	}
 
@@ -827,7 +827,7 @@ func TestPostVerdictWithDiff_UnanchoredGapsSurfaceInComment(t *testing.T) {
 		Score: 80,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "missing docs", Blocking: false},
+			{Severity: state.SeverityMedium, Description: "missing docs", Blocking: false},
 		},
 	}
 
@@ -859,7 +859,7 @@ func TestPostVerdictWithDiff_EmptyDiffSkipsInline(t *testing.T) {
 		Score: 90,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP3, Description: "nit", Blocking: false, File: "x.go", Line: 5},
+			{Severity: state.SeverityLow, Description: "nit", Blocking: false, File: "x.go", Line: 5},
 		},
 	}
 
@@ -887,10 +887,10 @@ func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
 `
 	verdict := &state.Verdict{
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "in diff", Blocking: true, File: "foo.go", Line: 11},
-			{Severity: state.SeverityP2, Description: "no file info"},
-			{Severity: state.SeverityP3, Description: "line outside diff", File: "foo.go", Line: 999},
-			{Severity: state.SeverityP0, Description: "wrong file", File: "bar.go", Line: 11},
+			{Severity: state.SeverityHigh, Description: "in diff", Blocking: true, File: "foo.go", Line: 11},
+			{Severity: state.SeverityMedium, Description: "no file info"},
+			{Severity: state.SeverityLow, Description: "line outside diff", File: "foo.go", Line: 999},
+			{Severity: state.SeverityCritical, Description: "wrong file", File: "bar.go", Line: 11},
 		},
 	}
 
@@ -945,8 +945,8 @@ func TestBuildInlineReview_UnanchoredGapsStillSurface(t *testing.T) {
 `
 	verdict := &state.Verdict{
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "no location"},
-			{Severity: state.SeverityP3, Description: "out of diff", File: "x.go", Line: 99},
+			{Severity: state.SeverityMedium, Description: "no location"},
+			{Severity: state.SeverityLow, Description: "out of diff", File: "x.go", Line: 99},
 		},
 	}
 
@@ -1000,8 +1000,8 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 		Score: 60,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "bad on added line", Blocking: true, File: "p.go", Line: 2},
-			{Severity: state.SeverityP2, Description: "architectural concern"},
+			{Severity: state.SeverityHigh, Description: "bad on added line", Blocking: true, File: "p.go", Line: 2},
+			{Severity: state.SeverityMedium, Description: "architectural concern"},
 		},
 	}
 
@@ -1013,7 +1013,7 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 	// When inlineGapIndices is passed, the inline gap should be excluded
 	// from the criteria table but the non-inline gap should remain.
 	summary := FormatVerdictComment(verdict, state.PhaseQuality, 1, result.InlineGapIndices)
-	if contains(summary, "| P1 |") {
+	if contains(summary, "| High |") {
 		t.Error("inline gap should NOT appear in criteria table when inlineGapIndices is set")
 	}
 	if !contains(summary, "architectural concern") {
@@ -1025,10 +1025,10 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 }
 
 func TestFormatInlineComment_Blocking(t *testing.T) {
-	g := state.Gap{Severity: state.SeverityP1, Description: "security issue", Blocking: true}
+	g := state.Gap{Severity: state.SeverityHigh, Description: "security issue", Blocking: true}
 	body := formatInlineComment(g)
-	if !contains(body, "[P1]") {
-		t.Errorf("expected [P1] in body, got %q", body)
+	if !contains(body, "[High]") {
+		t.Errorf("expected [High] in body, got %q", body)
 	}
 	if !contains(body, "security issue") {
 		t.Errorf("expected description in body, got %q", body)
@@ -1036,16 +1036,16 @@ func TestFormatInlineComment_Blocking(t *testing.T) {
 }
 
 func TestFormatInlineComment_NonBlocking(t *testing.T) {
-	g := state.Gap{Severity: state.SeverityP3, Description: "style nit", Blocking: false}
+	g := state.Gap{Severity: state.SeverityLow, Description: "style nit", Blocking: false}
 	body := formatInlineComment(g)
-	if !contains(body, "[P3]") {
-		t.Errorf("expected [P3] in body, got %q", body)
+	if !contains(body, "[Low]") {
+		t.Errorf("expected [Low] in body, got %q", body)
 	}
 }
 
 func TestFormatInlineComment_WithSuggestion(t *testing.T) {
 	g := state.Gap{
-		Severity:    state.SeverityP1,
+		Severity:    state.SeverityHigh,
 		Description: "hardcoded key",
 		Blocking:    true,
 		Suggestion:  "\tapiKey := os.Getenv(\"API_KEY\")",
@@ -1057,7 +1057,7 @@ func TestFormatInlineComment_WithSuggestion(t *testing.T) {
 	if !contains(body, "os.Getenv") {
 		t.Errorf("expected suggestion content, got %q", body)
 	}
-	if !contains(body, "[P1]") {
+	if !contains(body, "[High]") {
 		t.Errorf("expected severity prefix, got %q", body)
 	}
 	if !contains(body, "hardcoded key") {
@@ -1067,7 +1067,7 @@ func TestFormatInlineComment_WithSuggestion(t *testing.T) {
 
 func TestFormatInlineComment_NoSuggestion(t *testing.T) {
 	g := state.Gap{
-		Severity:    state.SeverityP2,
+		Severity:    state.SeverityMedium,
 		Description: "design concern",
 		Blocking:    false,
 		Suggestion:  "",
@@ -1092,7 +1092,7 @@ func TestBuildInlineReview_SuggestionPreserved(t *testing.T) {
 		Pass:  false,
 		Gaps: []state.Gap{
 			{
-				Severity:    state.SeverityP1,
+				Severity:    state.SeverityHigh,
 				Description: "hardcoded secret",
 				Blocking:    true,
 				File:        "foo.go",
@@ -1123,8 +1123,8 @@ func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
 		Score: 70,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "magic number", Blocking: false, File: "foo.go", Line: 42},
-			{Severity: state.SeverityP3, Description: "style nit", Blocking: false},
+			{Severity: state.SeverityMedium, Description: "magic number", Blocking: false, File: "foo.go", Line: 42},
+			{Severity: state.SeverityLow, Description: "style nit", Blocking: false},
 		},
 	}
 
@@ -1576,8 +1576,12 @@ func TestPostVerdictWithDiff_ResolvesPriorThreadsBeforePosting(t *testing.T) {
 	verdict := &state.Verdict{
 		Score: 80,
 		Pass:  true,
+		// Critical so it's inline-eligible under the new dispatch and
+		// the review POST path is exercised. (Pre-dispatch this test
+		// used a Medium gap, but only Critical/High/Standards reach the
+		// inline surface now — see TestBuildInlineReview_Dispatch...)
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "tiny nit", Blocking: false, File: "foo.go", Line: 3},
+			{Severity: state.SeverityCritical, Description: "blocking issue", Blocking: true, File: "foo.go", Line: 3},
 		},
 	}
 
@@ -1612,5 +1616,105 @@ func TestPostVerdictWithDiff_ResolvesPriorThreadsBeforePosting(t *testing.T) {
 	}
 	if resolveIdx >= postIdx {
 		t.Errorf("resolveReviewThread (idx %d) must run BEFORE review POST (idx %d)", resolveIdx, postIdx)
+	}
+}
+
+// TestBuildInlineReview_DispatchByInlineEligibility encodes the new
+// dispatch rule: only Critical and High gaps surface as inline review
+// comments. Medium and Low go into the unanchored review body so they
+// stop cluttering the PR diff with non-blocking nits the author can't
+// apply with one click — the user-facing complaint that "every PR
+// gets 2-3 inline comments of varying noise."
+//
+// Fixture: one diff position; one gap of each tier all anchored at
+// that line. The Critical and High gaps must end up as Comments;
+// Medium and Low must end up in the unanchored body — even though
+// they have a valid file/line that would have made them inline-
+// eligible under the old "any gap with file:line goes inline" rule.
+func TestBuildInlineReview_DispatchByInlineEligibility(t *testing.T) {
+	diff := "diff --git a/x.go b/x.go\n" +
+		"--- a/x.go\n" +
+		"+++ b/x.go\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" package x\n" +
+		"+var added = 1\n" +
+		" var existing = 2\n"
+	verdict := &state.Verdict{
+		Gaps: []state.Gap{
+			{Severity: state.SeverityCritical, Description: "crit", Blocking: true, File: "x.go", Line: 2},
+			{Severity: state.SeverityHigh, Description: "high", Blocking: true, File: "x.go", Line: 2},
+			{Severity: state.SeverityMedium, Description: "med", Blocking: false, File: "x.go", Line: 2},
+			{Severity: state.SeverityLow, Description: "low", Blocking: false, File: "x.go", Line: 2},
+		},
+	}
+
+	got := BuildInlineReview(verdict, diff)
+	if got == nil || got.Payload == nil {
+		t.Fatalf("expected payload, got %+v", got)
+	}
+	if len(got.Payload.Comments) != 2 {
+		t.Errorf("expected 2 inline comments (Critical+High), got %d: %+v",
+			len(got.Payload.Comments), got.Payload.Comments)
+	}
+	bodies := []string{}
+	for _, c := range got.Payload.Comments {
+		bodies = append(bodies, c.Body)
+	}
+	joined := strings.Join(bodies, "\n")
+	if !contains(joined, "crit") || !contains(joined, "high") {
+		t.Errorf("inline bodies should include Critical+High, got: %s", joined)
+	}
+	if contains(joined, "[Medium]") || contains(joined, "[Low]") {
+		t.Errorf("inline bodies must NOT include Medium/Low, got: %s", joined)
+	}
+	// Medium and Low surface in the review body so the concern is not lost.
+	if !contains(got.Payload.Body, "med") || !contains(got.Payload.Body, "low") {
+		t.Errorf("Medium/Low must surface in review body, got: %s", got.Payload.Body)
+	}
+
+	// inlineIndices reflects only the Critical and High gaps, so the
+	// summary-comment renderer keeps Medium/Low in its criteria table.
+	if got.InlineGapIndices[2] || got.InlineGapIndices[3] {
+		t.Errorf("Medium (idx 2) and Low (idx 3) must not be marked inline: %+v",
+			got.InlineGapIndices)
+	}
+	if !got.InlineGapIndices[0] || !got.InlineGapIndices[1] {
+		t.Errorf("Critical (idx 0) and High (idx 1) must be marked inline: %+v",
+			got.InlineGapIndices)
+	}
+}
+
+// TestBuildInlineReview_StandardsAlwaysInline pins that any gap whose
+// description carries the Standards marker (added by the post-
+// processor for FilterFindings output) is inline regardless of the
+// severity ladder — Standards finding are mechanical/easy-fix and
+// the user explicitly asked for them to surface inline.
+//
+// This test goes red until BuildInlineReview learns the marker and
+// also flips inline eligibility on it. Standards findings travel as
+// state.Gap with Severity left empty (or set to a sentinel) and a
+// description prefixed with the standards marker.
+func TestBuildInlineReview_StandardsAlwaysInline(t *testing.T) {
+	diff := "diff --git a/x.go b/x.go\n" +
+		"--- a/x.go\n" +
+		"+++ b/x.go\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" package x\n" +
+		"+var addedNoCamelCase = 1\n" +
+		" var existing = 2\n"
+	verdict := &state.Verdict{
+		Gaps: []state.Gap{
+			{
+				Severity:    state.Severity(""),
+				Description: "STANDARDS:naming use camelCase",
+				Blocking:    false,
+				File:        "x.go", Line: 2,
+				Suggestion: "var addedNoCamelCase = 1",
+			},
+		},
+	}
+	got := BuildInlineReview(verdict, diff)
+	if got == nil || got.Payload == nil || len(got.Payload.Comments) != 1 {
+		t.Fatalf("expected 1 inline Standards comment, got %+v", got)
 	}
 }

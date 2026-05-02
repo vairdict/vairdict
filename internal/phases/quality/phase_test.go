@@ -91,7 +91,7 @@ func TestRun_PassOnRetry_NonBlockingGaps(t *testing.T) {
 			Score: 60,
 			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "minor polish", Blocking: false},
+				{Severity: state.SeverityMedium, Description: "minor polish", Blocking: false},
 			},
 		},
 		{Score: 90, Pass: true},
@@ -127,7 +127,7 @@ func TestRun_ReturnToCode_OnP0Gap(t *testing.T) {
 			Score: 30,
 			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "intent mismatch", Blocking: true},
+				{Severity: state.SeverityCritical, Description: "intent mismatch", Blocking: true},
 			},
 			ReturnTo: state.ReturnToCode,
 		},
@@ -165,7 +165,7 @@ func TestRun_ReturnToPlan_ForwardsToOrchestrator(t *testing.T) {
 			Score: 40,
 			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "plan too narrow", Blocking: true},
+				{Severity: state.SeverityCritical, Description: "plan too narrow", Blocking: true},
 			},
 			ReturnTo: state.ReturnToPlan,
 		},
@@ -195,7 +195,7 @@ func TestRun_ReturnToEscalate_SignalsEscalate(t *testing.T) {
 			Score: 20,
 			Pass:  false,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "intent is ambiguous", Blocking: true},
+				{Severity: state.SeverityCritical, Description: "intent is ambiguous", Blocking: true},
 			},
 			ReturnTo: state.ReturnToEscalate,
 		},
@@ -223,7 +223,7 @@ func TestRun_Escalation_NonBlockingLoopOut(t *testing.T) {
 		Score: 60,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "polish", Blocking: false},
+			{Severity: state.SeverityMedium, Description: "polish", Blocking: false},
 		},
 	}
 	judge := &fakeJudge{verdicts: []*state.Verdict{failing, failing, failing}}
@@ -280,8 +280,8 @@ func TestRun_WrongState(t *testing.T) {
 
 func TestRun_AttemptsStored(t *testing.T) {
 	judge := &fakeJudge{verdicts: []*state.Verdict{
-		{Score: 60, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityP2, Blocking: false, Description: "x"}}},
-		{Score: 65, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityP2, Blocking: false, Description: "y"}}},
+		{Score: 60, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityMedium, Blocking: false, Description: "x"}}},
+		{Score: 65, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityMedium, Blocking: false, Description: "y"}}},
 		{Score: 95, Pass: true},
 	}}
 
@@ -334,8 +334,8 @@ func TestBuildQualityFeedback(t *testing.T) {
 	v := &state.Verdict{
 		Score: 72.5,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "thing missing", Blocking: true},
-			{Severity: state.SeverityP3, Description: "nice to have", Blocking: false},
+			{Severity: state.SeverityHigh, Description: "thing missing", Blocking: true},
+			{Severity: state.SeverityLow, Description: "nice to have", Blocking: false},
 		},
 		Questions: []state.Question{
 			{Text: "is X required?", Priority: "high"},

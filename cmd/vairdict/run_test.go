@@ -106,7 +106,7 @@ func TestLastGapsForPhase_Empty(t *testing.T) {
 func TestLastGapsForPhase_ReturnsGaps(t *testing.T) {
 	task := state.NewTask("t-1", "intent")
 	gaps := []state.Gap{
-		{Severity: state.SeverityP1, Description: "broken thing", Blocking: true},
+		{Severity: state.SeverityHigh, Description: "broken thing", Blocking: true},
 	}
 	task.Attempts = []state.Attempt{
 		{Phase: state.PhaseQuality, Loop: 1, Verdict: &state.Verdict{Score: 40, Gaps: gaps}},
@@ -146,7 +146,7 @@ func TestDispatchEscalation_StdoutChannel(t *testing.T) {
 			Loops:     3,
 			LastScore: 42,
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "missing feature", Blocking: true},
+				{Severity: state.SeverityHigh, Description: "missing feature", Blocking: true},
 			},
 		},
 		config.EscalationConfig{NotifyVia: "stdout", AfterLoops: 3},
@@ -371,7 +371,7 @@ func TestEmitPhaseDone_OutcomeMapping(t *testing.T) {
 			Score:   92,
 			Pass:    true,
 			Summary: "## Decided\n- thing",
-			Gaps:    []state.Gap{{Severity: state.SeverityP2, Description: "note"}},
+			Gaps:    []state.Gap{{Severity: state.SeverityMedium, Description: "note"}},
 		}},
 	}
 
@@ -462,16 +462,16 @@ func TestBuildQualityHardConstraints_OnlyBlockingGaps(t *testing.T) {
 	// the builder must filter them out.
 	v := &state.Verdict{
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "critical gap", Blocking: true},
-			{Severity: state.SeverityP1, Description: "another gap", Blocking: true, File: "foo.go", Line: 42},
-			{Severity: state.SeverityP3, Description: "just a nit", Blocking: false},
+			{Severity: state.SeverityCritical, Description: "critical gap", Blocking: true},
+			{Severity: state.SeverityHigh, Description: "another gap", Blocking: true, File: "foo.go", Line: 42},
+			{Severity: state.SeverityLow, Description: "just a nit", Blocking: false},
 		},
 	}
 	got := buildQualityHardConstraints(v)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 blocking constraints, got %d: %v", len(got), got)
 	}
-	if !strings.Contains(got[0], "P0") || !strings.Contains(got[0], "critical gap") {
+	if !strings.Contains(got[0], "Critical") || !strings.Contains(got[0], "critical gap") {
 		t.Errorf("first constraint should carry severity + description, got %q", got[0])
 	}
 	// File/line anchor should be preserved so the planner can reference
@@ -823,7 +823,7 @@ func TestRunOrchestration_PlanEscalates(t *testing.T) {
 	t.Parallel()
 	b := newOrchBundle()
 	b.plan.result = &planphase.PhaseResult{Escalate: true, Loops: 3, LastScore: 40}
-	b.plan.gaps = []state.Gap{{Severity: state.SeverityP1, Description: "missing req", Blocking: true}}
+	b.plan.gaps = []state.Gap{{Severity: state.SeverityHigh, Description: "missing req", Blocking: true}}
 	task := state.NewTask("t-1", "intent")
 	r := &fakeRenderer{}
 
@@ -912,7 +912,7 @@ func TestRunOrchestration_QualityReturnToCode_RetriesAndPasses(t *testing.T) {
 		{Pass: true, Loops: 1, LastScore: 95, Diff: "diff-2"},
 	}
 	b.quality.gapsByCall = [][]state.Gap{
-		{{Severity: state.SeverityP0, Description: "code broken", Blocking: true}},
+		{{Severity: state.SeverityCritical, Description: "code broken", Blocking: true}},
 		nil,
 	}
 	b.code.results = []*codephase.PhaseResult{
@@ -962,7 +962,7 @@ func TestRunOrchestration_QualityReturnToPlan_Replans(t *testing.T) {
 		{Pass: true, Loops: 1, LastScore: 95, Diff: "diff-2"},
 	}
 	b.quality.gapsByCall = [][]state.Gap{
-		{{Severity: state.SeverityP0, Description: "plan too narrow", Blocking: true}},
+		{{Severity: state.SeverityCritical, Description: "plan too narrow", Blocking: true}},
 		nil,
 	}
 	task := state.NewTask("t-rewind-plan", "intent")
@@ -1003,7 +1003,7 @@ func TestRunOrchestration_QualityReturnToEscalate(t *testing.T) {
 		Escalate: true,
 		Loops:    1, LastScore: 10,
 	}
-	b.quality.gaps = []state.Gap{{Severity: state.SeverityP0, Description: "intent ambiguous", Blocking: true}}
+	b.quality.gaps = []state.Gap{{Severity: state.SeverityCritical, Description: "intent ambiguous", Blocking: true}}
 	task := state.NewTask("t-1", "intent")
 	r := &fakeRenderer{}
 
@@ -1032,7 +1032,7 @@ func TestRunOrchestration_CycleBudgetExhausted(t *testing.T) {
 		ReturnTo: state.ReturnToCode,
 		Loops:    1, LastScore: 40,
 	}
-	b.quality.gaps = []state.Gap{{Severity: state.SeverityP0, Description: "still broken", Blocking: true}}
+	b.quality.gaps = []state.Gap{{Severity: state.SeverityCritical, Description: "still broken", Blocking: true}}
 	task := state.NewTask("t-budget", "intent")
 	r := &fakeRenderer{}
 
@@ -1066,7 +1066,7 @@ func TestRunOrchestration_QualityReturnToCode_AppendsRewindContext(t *testing.T)
 		{Pass: true, Loops: 1, LastScore: 95, Diff: "diff-2"},
 	}
 	b.quality.gapsByCall = [][]state.Gap{
-		{{Severity: state.SeverityP0, Description: "race in retry loop", Blocking: true}},
+		{{Severity: state.SeverityCritical, Description: "race in retry loop", Blocking: true}},
 		nil,
 	}
 	task := state.NewTask("t-rc", "intent")
@@ -1118,8 +1118,8 @@ func TestRunOrchestration_MultipleRewindsAccumulateContext(t *testing.T) {
 		{Pass: true, Loops: 1, LastScore: 95, Diff: "d3"},
 	}
 	b.quality.gapsByCall = [][]state.Gap{
-		{{Severity: state.SeverityP0, Description: "first failure", Blocking: true}},
-		{{Severity: state.SeverityP0, Description: "second failure", Blocking: true}},
+		{{Severity: state.SeverityCritical, Description: "first failure", Blocking: true}},
+		{{Severity: state.SeverityCritical, Description: "second failure", Blocking: true}},
 		nil,
 	}
 	task := state.NewTask("t-acc", "intent")
@@ -1161,7 +1161,7 @@ func TestRunOrchestration_QualityReturnToPlan_AppendsRewindContext(t *testing.T)
 		{Pass: true, Loops: 1, LastScore: 95, Diff: "d2"},
 	}
 	b.quality.gapsByCall = [][]state.Gap{
-		{{Severity: state.SeverityP0, Description: "plan too narrow", Blocking: true}},
+		{{Severity: state.SeverityCritical, Description: "plan too narrow", Blocking: true}},
 		nil,
 	}
 	task := state.NewTask("t-rp", "intent")
@@ -1370,7 +1370,7 @@ func TestRunOrchestration_ConflictDetection_Conflicts_Escalate(t *testing.T) {
 		t.Fatalf("expected 2 conflict gaps, got %d", len(b.escalationResult.Gaps))
 	}
 	for _, g := range b.escalationResult.Gaps {
-		if g.Severity != state.SeverityP0 {
+		if g.Severity != state.SeverityCritical {
 			t.Errorf("conflict gap should be P0, got %s", g.Severity)
 		}
 		if !g.Blocking {

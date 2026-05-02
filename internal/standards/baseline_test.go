@@ -40,8 +40,8 @@ func TestBlock_DeclaresNonNegotiable(t *testing.T) {
 
 func TestForceBaselineBlocking_PromotesP0AndP1(t *testing.T) {
 	gaps := []state.Gap{
-		{Severity: state.SeverityP0, Description: "BASELINE: no-secrets: API key committed", Blocking: false},
-		{Severity: state.SeverityP1, Description: "BASELINE: handle-errors: _ = fn()", Blocking: false},
+		{Severity: state.SeverityCritical, Description: "BASELINE: no-secrets: API key committed", Blocking: false},
+		{Severity: state.SeverityHigh, Description: "BASELINE: handle-errors: _ = fn()", Blocking: false},
 	}
 
 	n := ForceBaselineBlocking(gaps)
@@ -57,8 +57,8 @@ func TestForceBaselineBlocking_PromotesP0AndP1(t *testing.T) {
 
 func TestForceBaselineBlocking_LeavesP2AndP3Alone(t *testing.T) {
 	gaps := []state.Gap{
-		{Severity: state.SeverityP2, Description: "BASELINE: self-doc-names: tmp is unclear", Blocking: false},
-		{Severity: state.SeverityP3, Description: "BASELINE: no-duplication: tiny repetition", Blocking: false},
+		{Severity: state.SeverityMedium, Description: "BASELINE: self-doc-names: tmp is unclear", Blocking: false},
+		{Severity: state.SeverityLow, Description: "BASELINE: no-duplication: tiny repetition", Blocking: false},
 	}
 
 	n := ForceBaselineBlocking(gaps)
@@ -75,7 +75,7 @@ func TestForceBaselineBlocking_LeavesP2AndP3Alone(t *testing.T) {
 func TestForceBaselineBlocking_IgnoresNonBaselineGaps(t *testing.T) {
 	// Unmarked P1 gaps are governed by team config, not baseline.
 	gaps := []state.Gap{
-		{Severity: state.SeverityP1, Description: "missing request validation", Blocking: false},
+		{Severity: state.SeverityHigh, Description: "missing request validation", Blocking: false},
 	}
 
 	n := ForceBaselineBlocking(gaps)
@@ -91,7 +91,7 @@ func TestForceBaselineBlocking_AlreadyBlockingNotDoubleCounted(t *testing.T) {
 	// A config that already blocks P1 leaves the baseline gap already
 	// flagged. Force does not need to promote — it should report 0.
 	gaps := []state.Gap{
-		{Severity: state.SeverityP1, Description: "BASELINE: no-dead-code: unreachable branch", Blocking: true},
+		{Severity: state.SeverityHigh, Description: "BASELINE: no-dead-code: unreachable branch", Blocking: true},
 	}
 
 	if n := ForceBaselineBlocking(gaps); n != 0 {
@@ -109,7 +109,7 @@ func TestForceBaselineBlocking_OverridesPermissiveConfig(t *testing.T) {
 	// regardless of config.
 	gaps := []state.Gap{
 		// Team config already dropped Blocking=false for the P1 secret.
-		{Severity: state.SeverityP1, Description: "BASELINE: no-secrets: literal token in config.go", Blocking: false},
+		{Severity: state.SeverityHigh, Description: "BASELINE: no-secrets: literal token in config.go", Blocking: false},
 	}
 
 	if n := ForceBaselineBlocking(gaps); n != 1 {

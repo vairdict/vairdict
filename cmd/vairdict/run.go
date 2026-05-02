@@ -983,7 +983,7 @@ func runOrchestrationWithResume(ctx context.Context, deps runDeps, task *state.T
 			conflictGaps := make([]state.Gap, 0, len(conflictResult.ConflictFiles))
 			for _, f := range conflictResult.ConflictFiles {
 				conflictGaps = append(conflictGaps, state.Gap{
-					Severity:    state.SeverityP0,
+					Severity:    state.SeverityCritical,
 					Description: fmt.Sprintf("merge conflict in %s", f),
 					Blocking:    true,
 					File:        f,
@@ -1062,10 +1062,10 @@ func buildRewindContext(cycle int, target state.Phase, v *state.Verdict, priorAp
 		// Fall back to a gap description when the judge didn't write a
 		// summary. Prefix with severity so a P3 gap can't masquerade as
 		// the blocking diagnosis when it ends up being the only one.
-		rc.RootCause = fmt.Sprintf("[%s] %s", g.Severity, g.Description)
+		rc.RootCause = fmt.Sprintf("[%s] %s", g.Severity.Display(), g.Description)
 	}
 	for _, g := range v.Gaps {
-		line := fmt.Sprintf("[%s] %s", g.Severity, g.Description)
+		line := fmt.Sprintf("[%s] %s", g.Severity.Display(), g.Description)
 		if g.File != "" {
 			if g.Line > 0 {
 				line = fmt.Sprintf("%s (%s:%d)", line, g.File, g.Line)
@@ -1109,7 +1109,7 @@ func buildQualityHardConstraints(v *state.Verdict) []string {
 		if !g.Blocking {
 			continue
 		}
-		c := fmt.Sprintf("[quality judge, %s] %s", g.Severity, g.Description)
+		c := fmt.Sprintf("[quality judge, %s] %s", g.Severity.Display(), g.Description)
 		if g.File != "" {
 			if g.Line > 0 {
 				c = fmt.Sprintf("%s (ref: %s:%d)", c, g.File, g.Line)

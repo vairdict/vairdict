@@ -153,17 +153,17 @@ Before submitting a verdict on a substantive diff, perform a
 severity-ordered scan of the added code:
 
 1. Correctness bugs visible in added code (wrong logic, broken
-   invariants, tautological asserts, dead branches) → P0/P1
-2. Security or authorisation gaps in new code paths → P0/P1
+   invariants, tautological asserts, dead branches) → critical/high
+2. Security or authorisation gaps in new code paths → critical/high
 3. Non-obvious trade-offs or assumptions the author should name
-   explicitly so future maintainers see them → P2
-4. Concrete follow-ups worth filing so the work isn't lost → P3
+   explicitly so future maintainers see them → medium
+4. Concrete follow-ups worth filing so the work isn't lost → low
 
 The number of gaps is whatever this scan actually surfaces. Severity,
 not count, drives the verdict:
 - Zero gaps is the correct verdict on a mechanical, well-tested
   change where the scan finds nothing real.
-- One P0 plus nothing else is correct when there is one real bug
+- One critical plus nothing else is correct when there is one real bug
   and no other concerns.
 - Many gaps is correct when there are many real concerns.
 
@@ -215,6 +215,29 @@ You MUST NOT:
 
 These are NOT bugs. They are existing code that was not modified.
 
+## Before flagging Medium / Low / Standards: check for an existing fix
+
+Before emitting a Medium-, Low-, or Standards-severity gap, search the
+surrounding file(s) for an existing handler, guard, helper, or
+convention that already addresses the concern. If you find one,
+do not flag — the issue is not a real gap, it is a documentation
+miss in your read. Examples:
+
+- About to flag "no error handling" on a returned err — scan the
+  function: is there a defer that wraps or a wrapper at the call
+  site that already handles it? If yes, do not flag.
+- About to flag "missing input validation" — check whether the
+  caller validates, or whether a typed wrapper has already narrowed
+  the input.
+- About to flag a Standards naming nit — check whether the file
+  already establishes a convention for that identifier kind.
+
+Critical and High findings are exempt from this rubric: a real
+correctness or security bug stands on its own and you must flag it
+even if a partial mitigation exists elsewhere. The rubric exists to
+suppress the lower-severity false positives where "I noticed X" turns
+out to be "X is already handled, I just didn't read far enough."
+
 ## Read the whole hunk before flagging "missing X"
 
 Before raising any gap of the form "missing doc comment", "missing nil
@@ -250,26 +273,26 @@ Do NOT call check_path for:
 
 ## Severity levels for gaps
 
-- P0: intent mismatch — the code does not solve the stated problem or is fundamentally wrong
-- P1: significant gap — major feature or requirement is missing or broken.
+- critical: intent mismatch — the code does not solve the stated problem or is fundamentally wrong
+- high:     significant gap — major feature or requirement is missing or broken.
   This includes any correctness bug in production code OR test code, such as:
   tautological assertions (e.g. errors.Is(err, err)), unreachable branches,
   tests that can never fail, wrong variable compared, dead code that masks
   missing coverage.
-  NEVER use P1 for a symbol that is referenced but not defined in the diff —
+  NEVER use high for a symbol that is referenced but not defined in the diff —
   that symbol exists in the codebase already.
-- P2: minor issue — style, naming, docs, minor edge cases that do not affect correctness
-- P3: nice to have — deferred to future work
+- medium:   minor issue — style, naming, docs, minor edge cases that do not affect correctness
+- low:      nice to have — deferred to future work
 
 Do NOT set "blocking" on gaps and do NOT estimate a score — the orchestrator
 computes both deterministically from severities.
-A correctness bug is ALWAYS at least P1, never P2 — even if it is in test code.
+A correctness bug is ALWAYS at least high, never medium — even if it is in test code.
 
 ## Additional checks
 
 In addition to intent/plan alignment, scan the diff for the following.
 
-### Security (P1 blocking)
+### Security (high — blocking)
 Flag any of these patterns visible in the diff:
 - Hardcoded secrets, API keys, tokens, or passwords (look for string literals
   assigned to variables named key, secret, token, password, etc.)
@@ -284,7 +307,7 @@ Flag any of these patterns visible in the diff:
 
 Only flag what is actually visible in the diff.
 
-### Code reuse (P2 non-blocking)
+### Code reuse (medium — non-blocking)
 Flag duplicated or copy-pasted logic visible in the diff:
 - Two or more new functions/methods with near-identical bodies (>5 lines)
 - Copy-pasted blocks that differ only in variable names or literals
@@ -298,14 +321,14 @@ handlers, the same args slice extended in two methods — compare the
 sites against each other and pick severity by what the divergence
 actually causes:
 - Identical bodies in 2+ locations with no behavioural divergence →
-  P2: flag for extraction, or note that a future third instance
+  medium: flag for extraction, or note that a future third instance
   should trigger one.
-- Cosmetic differences only (argument order, error wording) → P2:
+- Cosmetic differences only (argument order, error wording) → medium:
   drift risk worth tightening before bugs hide in it.
 - Divergence that produces incorrect behaviour at one of the sites
   (one site missing a guard the others have, one path silently
   skipping the new flag, one branch returning the wrong type) →
-  P1: this is a correctness bug, not a style issue, and must be
+  high: this is a correctness bug, not a style issue, and must be
   graded as such.
 
 Anchor the gap on one of the diverging locations and name the other
@@ -313,7 +336,7 @@ site explicitly so the author can see both. Do not flag a single
 isolated change as cross-file drift — this rule applies only when the
 same pattern is genuinely repeated in the diff.
 
-### Style & maintainability (P3 non-blocking)
+### Style & maintainability (low — non-blocking)
 Flag readability and maintainability issues visible in the diff:
 - Functions longer than ~80 lines (suggest splitting)
 - Magic numbers or string literals that should be named constants
@@ -357,9 +380,9 @@ symptom:
 On a PASSING verdict, omit "return_to" or set it to "". Never set
 "return_to" to a value that is not one of {code, plan, escalate, ""}.
 
-If a failing verdict has only non-blocking (P2/P3) gaps, it may get
+If a failing verdict has only non-blocking (medium/low) gaps, it may get
 another in-phase retry; in that case omit "return_to" or set it to "".
-If ANY gap is P0 or P1 blocking, "return_to" must be one of code/plan/
+If ANY gap is critical or high (blocking), "return_to" must be one of code/plan/
 escalate.
 
 ## Output rules
@@ -404,9 +427,9 @@ submit_verdict input:
 {
   "summary": "## Reviewed\n- Tenant threading through the 4 handlers\n- Migration adds tenant_id with default ''\n## Notes\n- Design-level follow-ups noted below for post-merge consideration",
   "gaps": [
-    {"severity": "P3", "description": "Migration defaults tenant_id to empty string; once real tenants arrive, the backfill strategy will need to be decided before the column becomes authoritative.", "file": "migrations/0042.sql", "line": 7},
-    {"severity": "P2", "description": "queryHelpers.go now has 6 near-identical 'WHERE tenant_id = ?' clauses — extract a tenantScope() helper once a second table needs the same pattern.", "file": "internal/db/queryHelpers.go", "line": 18},
-    {"severity": "P3", "description": "Tenant is threaded through function signatures rather than context.Context; fine for now, but as the set of tenant-scoped calls grows, context propagation will reduce parameter churn."}
+    {"severity": "low", "description": "Migration defaults tenant_id to empty string; once real tenants arrive, the backfill strategy will need to be decided before the column becomes authoritative.", "file": "migrations/0042.sql", "line": 7},
+    {"severity": "medium", "description": "queryHelpers.go now has 6 near-identical 'WHERE tenant_id = ?' clauses — extract a tenantScope() helper once a second table needs the same pattern.", "file": "internal/db/queryHelpers.go", "line": 18},
+    {"severity": "low", "description": "Tenant is threaded through function signatures rather than context.Context; fine for now, but as the set of tenant-scoped calls grows, context propagation will reduce parameter churn."}
   ],
   "questions": [],
   "return_to": ""
@@ -430,8 +453,8 @@ submit_verdict input:
 {
   "summary": "## Reviewed\n- admin route wiring and literal credential\n## Notes\n- Hardcoded key must move to env or config",
   "gaps": [
-    {"severity": "P0", "description": "No authentication middleware on /admin — intent requires basic auth."},
-    {"severity": "P1", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14, "suggestion": "\tapiKey := os.Getenv(\"ADMIN_API_KEY\")"}
+    {"severity": "critical", "description": "No authentication middleware on /admin — intent requires basic auth."},
+    {"severity": "high", "description": "Hardcoded API key in source (apiKey = 'sk-live-...'). Move to environment variable.", "file": "cmd/admin/main.go", "line": 14, "suggestion": "\tapiKey := os.Getenv(\"ADMIN_API_KEY\")"}
   ],
   "questions": [],
   "return_to": "code"
@@ -453,7 +476,7 @@ Diff (abridged):
 INCORRECT submit_verdict (do NOT produce this):
 {
   "gaps": [
-    {"severity": "P1", "description": "runSingleTask is called but not defined or imported — compilation error"}
+    {"severity": "high", "description": "runSingleTask is called but not defined or imported — compilation error"}
   ]
 }
 
@@ -486,7 +509,7 @@ submit_verdict input:
 {
   "summary": "## Reviewed\n- /admin wrap is correct\n## Notes\n- /admin/users and /admin/logs are unprotected sibling routes",
   "gaps": [
-    {"severity": "P0", "description": "Plan only covered /admin, but the intent says 'every admin route' — /admin/users and /admin/logs remain unauthenticated. The plan is too narrow to satisfy the intent."}
+    {"severity": "critical", "description": "Plan only covered /admin, but the intent says 'every admin route' — /admin/users and /admin/logs remain unauthenticated. The plan is too narrow to satisfy the intent."}
   ],
   "questions": [],
   "return_to": "plan"
@@ -537,7 +560,7 @@ Diff (abridged):
 INCORRECT submit_verdict (do NOT produce this):
 {
   "gaps": [
-    {"severity": "P3", "description": "CodeJudgeModel is undocumented; consider explaining its purpose and why it is currently unused.", "file": "internal/config/config.go", "line": 60}
+    {"severity": "low", "description": "CodeJudgeModel is undocumented; consider explaining its purpose and why it is currently unused.", "file": "internal/config/config.go", "line": 60}
   ]
 }
 
@@ -560,6 +583,47 @@ CORRECT submit_verdict for this diff:
 // engineering standards appended. Baseline rules reach the judge so it
 // flags violations regardless of team config.
 var systemPrompt = systemPromptCore + "\n\n" + standards.Block
+
+// RenderCrossPushFraming produces the cross-push framing block the
+// quality judge prepends to its user prompt when prior verdict gaps
+// exist. The framing closes the "judge invents a finding on push N
+// that was already there on push N-1" failure mode that produces the
+// nagging-comment behaviour the user asked us to fix.
+//
+// The rules baked into the framing:
+//
+//   - the prior review's gaps are listed verbatim with severities;
+//   - each prior gap must be checked for current applicability and
+//     dropped from the new verdict if the latest push fixed it;
+//   - new findings are only valid for code introduced or changed in
+//     the diff since the prior review;
+//   - findings that pre-date the prior review must NOT be introduced
+//     now — if the previous round missed them, they were either not
+//     real or not the judge's responsibility to flag at this point.
+//
+// Returns "" for nil/empty input so the framing disappears on the
+// first review of a PR (no prior gaps -> no cross-push pressure).
+func RenderCrossPushFraming(priorGaps []state.Gap) string {
+	if len(priorGaps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Cross-push awareness — prior review gaps\n\n")
+	b.WriteString("This PR has been reviewed before. The prior review emitted the following gaps:\n\n")
+	for _, g := range priorGaps {
+		fmt.Fprintf(&b, "- [%s] %s\n", g.Severity.Display(), g.Description)
+	}
+	b.WriteString("\nWhen producing this review:\n")
+	b.WriteString("\n1. Verify each prior gap above for current applicability in the diff. ")
+	b.WriteString("If the latest push has fixed it, drop it; do not re-flag a resolved concern. ")
+	b.WriteString("If it is still present, keep it with the same severity.\n")
+	b.WriteString("\n2. Scan only the diff since the prior review for new findings. ")
+	b.WriteString("Anything outside the most recent push is not a new finding.\n")
+	b.WriteString("\n3. Do not introduce findings that pre-dated the prior review. ")
+	b.WriteString("If the previous round missed them, they were either not real or not in scope; ")
+	b.WriteString("emitting them now would be a nagging-comment failure mode, not a useful review.\n")
+	return b.String()
+}
 
 // Judge evaluates whether the given diff fulfills the original intent and plan.
 // It runs AI-based intent verification (against the diff content, not a
@@ -657,7 +721,7 @@ func (j *QualityJudge) runE2E(ctx context.Context, workDir string) *state.Gap {
 		outStr := string(output)
 		slog.Info("e2e tests failed", "output", truncate(outStr, 200))
 		return &state.Gap{
-			Severity:    state.SeverityP1,
+			Severity:    state.SeverityHigh,
 			Description: fmt.Sprintf("e2e tests failed: %s", truncate(strings.TrimSpace(outStr), 500)),
 		}
 	}
@@ -672,7 +736,7 @@ func (j *QualityJudge) runE2E(ctx context.Context, workDir string) *state.Gap {
 // we enforce the invariants the outer loop relies on:
 //
 //   - A passing verdict never rewinds; clear ReturnTo.
-//   - A failing verdict with a blocking gap (P0/P1) must rewind. If the
+//   - A failing verdict with a blocking gap (critical/high) must rewind. If the
 //     LLM forgot to set ReturnTo we default to ReturnToCode — that matches
 //     the pre-ReturnTo heuristic (see the removed needsCodeRework) and is
 //     the safer default: code retries are cheaper than replans.

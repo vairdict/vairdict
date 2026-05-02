@@ -664,11 +664,35 @@ type InlineReviewResult struct {
 	InlineGapIndices map[int]bool
 }
 
+// StandardsMarker is the prefix the post-processor places on a gap's
+// description when it represents a Standards finding (mechanical /
+// style — naming, indent, error_logging, etc). The inline dispatch
+// reads it to keep Standards findings on the inline surface even
+// though their Severity is empty (Standards is its own category, not
+// a severity tier).
+const StandardsMarker = "STANDARDS:"
+
+// inlineEligible reports whether a gap should surface as an inline
+// review comment. Critical and High are eligible (they block — must
+// be visible at the line they touch); Medium and Low are not (notes-
+// only). Standards findings are always eligible regardless of the
+// severity ladder — the post-processor stamps their description with
+// StandardsMarker so the dispatch can recognise them without coupling
+// to the standards package.
+func inlineEligible(g state.Gap) bool {
+	if strings.HasPrefix(g.Description, StandardsMarker) {
+		return true
+	}
+	return g.Severity.InlineEligible()
+}
+
 // BuildInlineReview turns a verdict + diff into a review payload whose
-// comments point only at lines present in the diff. Gaps without File/Line
-// or whose line does not appear in the diff are collected into the review
-// body so reviewers still see every concern — previously they were dropped
-// silently and only surfaced in the verdict table.
+// comments point only at lines present in the diff. The inline
+// dispatch table is enforced here: Critical/High and Standards
+// findings become inline comments; Medium/Low (and gaps without a
+// diff anchor, regardless of severity) flow into the review body so
+// the concern is not lost but doesn't clutter the diff with non-
+// blocking nits the author can't apply with one click.
 // Returns a result with a nil Payload only when the verdict has no gaps at all.
 func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewResult {
 	positions := ParseDiffPositions(diff)
@@ -678,6 +702,12 @@ func BuildInlineReview(verdict *state.Verdict, diff string) *InlineReviewResult 
 	inlineIndices := make(map[int]bool)
 	for i, g := range verdict.Gaps {
 		if g.File == "" || g.Line == 0 {
+			unanchored = append(unanchored, g)
+			continue
+		}
+		if !inlineEligible(g) {
+			// Inline-ineligible severities (Medium, Low) carry their
+			// concern into the review body, not onto the diff.
 			unanchored = append(unanchored, g)
 			continue
 		}
@@ -768,7 +798,7 @@ func formatInlineComment(g state.Gap) string {
 	if g.Blocking {
 		icon = "🚫"
 	}
-	body := fmt.Sprintf("%s **[%s]** %s", icon, g.Severity, g.Description)
+	body := fmt.Sprintf("%s **[%s]** %s", icon, g.Severity.Display(), g.Description)
 	if g.Suggestion != "" {
 		body += "\n\n```suggestion\n" + g.Suggestion + "\n```"
 	}
@@ -860,7 +890,7 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 	if len(task.Assumptions) > 0 {
 		b.WriteString("## Assumptions made\n")
 		for _, a := range task.Assumptions {
-			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity, a.Description)
+			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity.Display(), a.Description)
 		}
 		b.WriteString("\n")
 	}
@@ -938,7 +968,7 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 			if g.Blocking {
 				status = "BLOCKING"
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity, status, g.Description)
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity.Display(), status, g.Description)
 		}
 		b.WriteString("\n")
 	} else if verdict.Pass {
@@ -961,7 +991,7 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 		if len(blocking) > 0 {
 			b.WriteString("### Blocking Gaps\n\n")
 			for _, g := range blocking {
-				fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity, g.Description)
+				fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity.Display(), g.Description)
 			}
 			b.WriteString("\n")
 		}

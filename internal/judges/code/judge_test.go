@@ -93,7 +93,7 @@ func TestJudge_BuildFailed(t *testing.T) {
 	if len(verdict.Gaps) != 1 {
 		t.Fatalf("gaps = %d, want 1", len(verdict.Gaps))
 	}
-	if verdict.Gaps[0].Severity != state.SeverityP0 {
+	if verdict.Gaps[0].Severity != state.SeverityCritical {
 		t.Errorf("severity = %v, want P0", verdict.Gaps[0].Severity)
 	}
 	if !verdict.Gaps[0].Blocking {
@@ -125,7 +125,7 @@ func TestJudge_TestFailed(t *testing.T) {
 	if len(verdict.Gaps) != 1 {
 		t.Fatalf("gaps = %d, want 1", len(verdict.Gaps))
 	}
-	if verdict.Gaps[0].Severity != state.SeverityP1 {
+	if verdict.Gaps[0].Severity != state.SeverityHigh {
 		t.Errorf("severity = %v, want P1", verdict.Gaps[0].Severity)
 	}
 }
@@ -151,7 +151,7 @@ func TestJudge_LintFailed(t *testing.T) {
 	if len(verdict.Gaps) != 1 {
 		t.Fatalf("gaps = %d, want 1", len(verdict.Gaps))
 	}
-	if verdict.Gaps[0].Severity != state.SeverityP2 {
+	if verdict.Gaps[0].Severity != state.SeverityMedium {
 		t.Errorf("severity = %v, want P2", verdict.Gaps[0].Severity)
 	}
 	if verdict.Gaps[0].Blocking {
@@ -177,7 +177,7 @@ func TestJudge_FormatFailed(t *testing.T) {
 	if verdict.Pass {
 		t.Error("expected fail")
 	}
-	if verdict.Gaps[0].Severity != state.SeverityP2 {
+	if verdict.Gaps[0].Severity != state.SeverityMedium {
 		t.Errorf("severity = %v, want P2", verdict.Gaps[0].Severity)
 	}
 }

@@ -110,7 +110,7 @@ func TestRun_PassFirstTry(t *testing.T) {
 func TestRun_PassOnRetry(t *testing.T) {
 	coder := &fakeCoder{}
 	judge := &fakeJudge{verdicts: []*state.Verdict{
-		{Score: 50, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityP1, Description: "test failed", Blocking: true}}},
+		{Score: 50, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityHigh, Description: "test failed", Blocking: true}}},
 		{Score: 100, Pass: true},
 	}}
 
@@ -135,7 +135,7 @@ func TestRun_PassOnRetry(t *testing.T) {
 func TestRun_Escalation(t *testing.T) {
 	coder := &fakeCoder{}
 	judge := &fakeJudge{verdicts: []*state.Verdict{
-		{Score: 25, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityP0, Description: "build broken"}}},
+		{Score: 25, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityCritical, Description: "build broken"}}},
 	}}
 
 	task := codingTask()
@@ -227,7 +227,7 @@ func TestRun_AttemptsStored(t *testing.T) {
 
 func TestBuildCoderPrompt(t *testing.T) {
 	prompt := buildCoderPrompt("intent", "plan", "fix tests", []state.Assumption{
-		{Severity: state.SeverityP2, Description: "assumed X"},
+		{Severity: state.SeverityMedium, Description: "assumed X"},
 	}, nil, nil)
 
 	if !containsStr(prompt, "intent") {

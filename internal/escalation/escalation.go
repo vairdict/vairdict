@@ -131,7 +131,7 @@ func FormatSummary(task *state.Task, result Result) string {
 	if len(blocking) > 0 {
 		b.WriteString("### Blocking gaps\n")
 		for _, g := range blocking {
-			fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity, g.Description)
+			fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity.Display(), g.Description)
 		}
 	} else {
 		b.WriteString("_No blocking gaps recorded._\n")
