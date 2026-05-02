@@ -215,17 +215,17 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 func (p *PlanPhase) processGaps(task *state.Task, gaps []state.Gap) {
 	for _, gap := range gaps {
 		switch gap.Severity {
-		case state.SeverityP2:
+		case state.SeverityMedium:
 			slog.Info("logging P2 gap as assumption",
 				"task_id", task.ID,
 				"description", gap.Description,
 			)
 			task.Assumptions = append(task.Assumptions, state.Assumption{
 				Description: gap.Description,
-				Severity:    state.SeverityP2,
+				Severity:    state.SeverityMedium,
 				Phase:       state.PhasePlan,
 			})
-		case state.SeverityP3:
+		case state.SeverityLow:
 			slog.Info("deferring P3 gap to future issue",
 				"task_id", task.ID,
 				"description", gap.Description,

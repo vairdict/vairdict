@@ -983,7 +983,7 @@ func runOrchestrationWithResume(ctx context.Context, deps runDeps, task *state.T
 			conflictGaps := make([]state.Gap, 0, len(conflictResult.ConflictFiles))
 			for _, f := range conflictResult.ConflictFiles {
 				conflictGaps = append(conflictGaps, state.Gap{
-					Severity:    state.SeverityP0,
+					Severity:    state.SeverityCritical,
 					Description: fmt.Sprintf("merge conflict in %s", f),
 					Blocking:    true,
 					File:        f,

@@ -116,8 +116,8 @@ func failingVerdict() *state.Verdict {
 		Score: 50,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "no error handling", Blocking: true},
-			{Severity: state.SeverityP1, Description: "missing input validation", Blocking: true},
+			{Severity: state.SeverityCritical, Description: "no error handling", Blocking: true},
+			{Severity: state.SeverityHigh, Description: "missing input validation", Blocking: true},
 		},
 		Questions: []state.Question{
 			{Text: "What database will be used?", Priority: "high"},
@@ -308,9 +308,9 @@ func TestPlanPhase_P2GapsLoggedAsAssumptions(t *testing.T) {
 				Score: 85,
 				Pass:  true,
 				Gaps: []state.Gap{
-					{Severity: state.SeverityP2, Description: "database choice unclear", Blocking: false},
-					{Severity: state.SeverityP2, Description: "caching strategy not defined", Blocking: false},
-					{Severity: state.SeverityP3, Description: "nice to have: monitoring", Blocking: false},
+					{Severity: state.SeverityMedium, Description: "database choice unclear", Blocking: false},
+					{Severity: state.SeverityMedium, Description: "caching strategy not defined", Blocking: false},
+					{Severity: state.SeverityLow, Description: "nice to have: monitoring", Blocking: false},
 				},
 			},
 		},
@@ -336,7 +336,7 @@ func TestPlanPhase_P2GapsLoggedAsAssumptions(t *testing.T) {
 	if task.Assumptions[0].Description != "database choice unclear" {
 		t.Errorf("unexpected assumption: %s", task.Assumptions[0].Description)
 	}
-	if task.Assumptions[0].Severity != state.SeverityP2 {
+	if task.Assumptions[0].Severity != state.SeverityMedium {
 		t.Errorf("expected severity P2, got %s", task.Assumptions[0].Severity)
 	}
 	if task.Assumptions[0].Phase != state.PhasePlan {
@@ -361,8 +361,8 @@ func TestPlanPhase_AttemptsStored(t *testing.T) {
 	}
 	judge := &fakeJudge{
 		verdicts: []*state.Verdict{
-			{Score: 40, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityP0, Description: "gap1", Blocking: true}}},
-			{Score: 60, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityP1, Description: "gap2", Blocking: true}}},
+			{Score: 40, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityCritical, Description: "gap1", Blocking: true}}},
+			{Score: 60, Pass: false, Gaps: []state.Gap{{Severity: state.SeverityHigh, Description: "gap2", Blocking: true}}},
 			{Score: 90, Pass: true, Gaps: []state.Gap{}},
 		},
 	}
@@ -459,8 +459,8 @@ func TestPlanPhase_AssumptionsIncludedInRetryPrompt(t *testing.T) {
 				Score: 60,
 				Pass:  false,
 				Gaps: []state.Gap{
-					{Severity: state.SeverityP2, Description: "unclear caching approach", Blocking: false},
-					{Severity: state.SeverityP0, Description: "missing auth", Blocking: true},
+					{Severity: state.SeverityMedium, Description: "unclear caching approach", Blocking: false},
+					{Severity: state.SeverityCritical, Description: "missing auth", Blocking: true},
 				},
 			},
 			passingVerdict(),
@@ -540,7 +540,7 @@ func TestBuildPlannerPrompt_WithFeedback(t *testing.T) {
 
 func TestBuildPlannerPrompt_WithAssumptions(t *testing.T) {
 	assumptions := []state.Assumption{
-		{Description: "using PostgreSQL", Severity: state.SeverityP2, Phase: state.PhasePlan},
+		{Description: "using PostgreSQL", Severity: state.SeverityMedium, Phase: state.PhasePlan},
 	}
 	prompt := buildPlannerPrompt("build an API", "some feedback", assumptions, nil, nil, nil)
 
@@ -687,8 +687,8 @@ func TestBuildFeedbackSummary(t *testing.T) {
 		Score: 55.5,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "critical issue", Blocking: true},
-			{Severity: state.SeverityP2, Description: "minor thing", Blocking: false},
+			{Severity: state.SeverityCritical, Description: "critical issue", Blocking: true},
+			{Severity: state.SeverityMedium, Description: "minor thing", Blocking: false},
 		},
 		Questions: []state.Question{
 			{Text: "What DB?", Priority: "high"},

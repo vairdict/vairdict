@@ -112,7 +112,7 @@ func TestJSONRendererEmitsValidJSON(t *testing.T) {
 	r := New(Options{Out: &buf, Mode: ModeJSON})
 	r.RunStart("abc", "intent", "/tmp/x.log")
 	r.PhaseLoop(state.PhaseCode, 2, 3, 75.5, false)
-	r.PhaseDone(state.PhaseCode, OutcomeFail, 75.5, 2, "", []state.Gap{{Severity: state.SeverityP1, Description: "oops"}})
+	r.PhaseDone(state.PhaseCode, OutcomeFail, 75.5, 2, "", []state.Gap{{Severity: state.SeverityHigh, Description: "oops"}})
 	r.Error(errors.New("boom"))
 
 	dec := json.NewDecoder(&buf)

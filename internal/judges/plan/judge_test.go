@@ -41,7 +41,7 @@ func TestJudge_BaselineViolationForcedBlocking_UnderPermissiveConfig(t *testing.
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "BASELINE: no-secrets: literal token"},
+				{Severity: state.SeverityHigh, Description: "BASELINE: no-secrets: literal token"},
 			},
 		},
 	}
@@ -72,7 +72,7 @@ func TestJudge_NonBaselineP1StillGovernedByConfig(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "missing validation"},
+				{Severity: state.SeverityHigh, Description: "missing validation"},
 			},
 		},
 	}
@@ -134,8 +134,8 @@ func TestJudge_Fail_BlockingGapsDriveScoreDown(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "no error handling"},
-				{Severity: state.SeverityP1, Description: "missing auth"},
+				{Severity: state.SeverityCritical, Description: "no error handling"},
+				{Severity: state.SeverityHigh, Description: "missing auth"},
 			},
 			Questions: []state.Question{
 				{Text: "What database?", Priority: "high"},
@@ -169,8 +169,8 @@ func TestJudge_BlockingIgnoresLLMOpinion(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "critical gap", Blocking: false},
-				{Severity: state.SeverityP2, Description: "ambiguous gap", Blocking: true},
+				{Severity: state.SeverityCritical, Description: "critical gap", Blocking: false},
+				{Severity: state.SeverityMedium, Description: "ambiguous gap", Blocking: true},
 			},
 		},
 	}
@@ -195,9 +195,9 @@ func TestJudge_AccumulatedP2sDragScoreBelowThreshold(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "a"},
-				{Severity: state.SeverityP2, Description: "b"},
-				{Severity: state.SeverityP2, Description: "c"},
+				{Severity: state.SeverityMedium, Description: "a"},
+				{Severity: state.SeverityMedium, Description: "b"},
+				{Severity: state.SeverityMedium, Description: "c"},
 			},
 		},
 	}
@@ -221,8 +221,8 @@ func TestJudge_PassTrueAtExactThreshold(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "a"},
-				{Severity: state.SeverityP2, Description: "b"},
+				{Severity: state.SeverityMedium, Description: "a"},
+				{Severity: state.SeverityMedium, Description: "b"},
 			},
 		},
 	}
@@ -245,7 +245,7 @@ func TestJudge_P3GapsDeferred(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP3, Description: "nice to have"},
+				{Severity: state.SeverityLow, Description: "nice to have"},
 			},
 		},
 	}
@@ -294,7 +294,7 @@ func TestJudge_CustomSeverityConfig(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "important"},
+				{Severity: state.SeverityHigh, Description: "important"},
 			},
 		},
 	}
@@ -391,8 +391,8 @@ func TestJudge_AcknowledgedAssumptionsInPrompt(t *testing.T) {
 
 	judge := New(fake, defaultCfg())
 	assumptions := []state.Assumption{
-		{Description: "database choice unclear", Severity: state.SeverityP2, Phase: state.PhasePlan},
-		{Description: "caching strategy TBD", Severity: state.SeverityP2, Phase: state.PhasePlan},
+		{Description: "database choice unclear", Severity: state.SeverityMedium, Phase: state.PhasePlan},
+		{Description: "caching strategy TBD", Severity: state.SeverityMedium, Phase: state.PhasePlan},
 	}
 
 	_, err := judge.Judge(context.Background(), "intent", "plan", assumptions)
@@ -442,15 +442,15 @@ func TestJudge_ReflaggedGapHalvedPenalty(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "database choice unclear"},
-				{Severity: state.SeverityP2, Description: "new naming concern"},
+				{Severity: state.SeverityMedium, Description: "database choice unclear"},
+				{Severity: state.SeverityMedium, Description: "new naming concern"},
 			},
 		},
 	}
 
 	judge := New(fake, defaultCfg())
 	acknowledged := []state.Assumption{
-		{Description: "database choice unclear", Severity: state.SeverityP2},
+		{Description: "database choice unclear", Severity: state.SeverityMedium},
 	}
 
 	verdict, err := judge.Judge(context.Background(), "intent", "plan", acknowledged)

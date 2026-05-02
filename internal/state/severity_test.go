@@ -195,7 +195,7 @@ func TestSeverityRank(t *testing.T) {
 		{"P0", 0},
 		{"P3", 3},
 		// unknown severities sort last
-		{"bogus", 99},
+		{"bogus", UnknownSeverityRank},
 	}
 	for _, c := range cases {
 		if got := c.s.Rank(); got != c.rank {

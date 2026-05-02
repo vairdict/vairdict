@@ -97,7 +97,7 @@ func ForceBaselineBlocking(gaps []state.Gap) int {
 		if !isBaselineDescription(gaps[i].Description) {
 			continue
 		}
-		if gaps[i].Severity != state.SeverityP0 && gaps[i].Severity != state.SeverityP1 {
+		if gaps[i].Severity != state.SeverityCritical && gaps[i].Severity != state.SeverityHigh {
 			continue
 		}
 		if !gaps[i].Blocking {

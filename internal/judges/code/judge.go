@@ -95,7 +95,7 @@ func (j *CodeJudge) Judge(ctx context.Context, workDir string) (*state.Verdict, 
 		gaps = append(gaps, state.Gap{
 			Severity:    c.Severity,
 			Description: fmt.Sprintf("%s failed: %s", c.Name, truncate(strings.TrimSpace(c.Output), 500)),
-			Blocking:    c.Severity == state.SeverityP0 || c.Severity == state.SeverityP1,
+			Blocking:    c.Severity == state.SeverityCritical || c.Severity == state.SeverityHigh,
 		})
 	}
 
@@ -118,10 +118,10 @@ func (j *CodeJudge) Judge(ctx context.Context, workDir string) (*state.Verdict, 
 // Severity: build=P0, test=P1, lint/format=P2.
 func (j *CodeJudge) buildChecks() []check {
 	return []check{
-		{Name: "format", Command: j.formatCommand(), Severity: state.SeverityP2},
-		{Name: "lint", Command: j.cfg.Commands.Lint, Severity: state.SeverityP2},
-		{Name: "test", Command: j.cfg.Commands.Test, Severity: state.SeverityP1},
-		{Name: "build", Command: j.cfg.Commands.Build, Severity: state.SeverityP0},
+		{Name: "format", Command: j.formatCommand(), Severity: state.SeverityMedium},
+		{Name: "lint", Command: j.cfg.Commands.Lint, Severity: state.SeverityMedium},
+		{Name: "test", Command: j.cfg.Commands.Test, Severity: state.SeverityHigh},
+		{Name: "build", Command: j.cfg.Commands.Build, Severity: state.SeverityCritical},
 	}
 }
 

@@ -47,9 +47,9 @@ func sampleResult() Result {
 		Loops:     3,
 		LastScore: 42,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "missing auth requirement", Blocking: true},
-			{Severity: state.SeverityP2, Description: "minor doc nit", Blocking: false},
-			{Severity: state.SeverityP1, Description: "no error handling", Blocking: true},
+			{Severity: state.SeverityCritical, Description: "missing auth requirement", Blocking: true},
+			{Severity: state.SeverityMedium, Description: "minor doc nit", Blocking: false},
+			{Severity: state.SeverityHigh, Description: "no error handling", Blocking: true},
 		},
 	}
 }
@@ -339,7 +339,7 @@ func TestFormatSummary_ContainsAllFields(t *testing.T) {
 		Loops:     3,
 		LastScore: 55.7,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "intent mismatch", Blocking: true},
+			{Severity: state.SeverityCritical, Description: "intent mismatch", Blocking: true},
 		},
 	}
 
@@ -370,9 +370,9 @@ func TestFormatSummary_OnlyBlockingGapsListed(t *testing.T) {
 		Phase: state.PhaseCode,
 		Loops: 2,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "blocking-one", Blocking: true},
-			{Severity: state.SeverityP2, Description: "non-blocking-nit", Blocking: false},
-			{Severity: state.SeverityP3, Description: "deferred-thing", Blocking: false},
+			{Severity: state.SeverityCritical, Description: "blocking-one", Blocking: true},
+			{Severity: state.SeverityMedium, Description: "non-blocking-nit", Blocking: false},
+			{Severity: state.SeverityLow, Description: "deferred-thing", Blocking: false},
 		},
 	}
 
@@ -395,7 +395,7 @@ func TestFormatSummary_NoBlockingGapsPlaceholder(t *testing.T) {
 		Phase: state.PhaseCode,
 		Loops: 1,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "minor", Blocking: false},
+			{Severity: state.SeverityMedium, Description: "minor", Blocking: false},
 		},
 	}
 

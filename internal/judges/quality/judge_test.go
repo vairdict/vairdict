@@ -38,7 +38,7 @@ func TestQualityJudge_BaselineMarkerForcesBlocking(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "BASELINE: no-secrets: hardcoded token", Blocking: false},
+				{Severity: state.SeverityHigh, Description: "BASELINE: no-secrets: hardcoded token", Blocking: false},
 			},
 		},
 	}
@@ -153,7 +153,7 @@ func TestJudge_IntentMismatch_P0Blocks(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "code implements CRUD but intent was auth system"},
+				{Severity: state.SeverityCritical, Description: "code implements CRUD but intent was auth system"},
 			},
 		},
 	}
@@ -232,7 +232,7 @@ func TestJudge_E2EFail_AddsBlockingGap(t *testing.T) {
 	if len(verdict.Gaps) != 1 {
 		t.Fatalf("expected 1 gap from e2e, got %d", len(verdict.Gaps))
 	}
-	if verdict.Gaps[0].Severity != state.SeverityP1 {
+	if verdict.Gaps[0].Severity != state.SeverityHigh {
 		t.Errorf("expected P1 severity for e2e failure, got %s", verdict.Gaps[0].Severity)
 	}
 	if !verdict.Gaps[0].Blocking {
@@ -295,10 +295,10 @@ func TestJudge_AccumulatedP2sDragBelowThreshold(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "a"},
-				{Severity: state.SeverityP2, Description: "b"},
-				{Severity: state.SeverityP2, Description: "c"},
-				{Severity: state.SeverityP2, Description: "d"},
+				{Severity: state.SeverityMedium, Description: "a"},
+				{Severity: state.SeverityMedium, Description: "b"},
+				{Severity: state.SeverityMedium, Description: "c"},
+				{Severity: state.SeverityMedium, Description: "d"},
 			},
 		},
 	}
@@ -322,9 +322,9 @@ func TestJudge_PassAtExactThreshold(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "a"},
-				{Severity: state.SeverityP2, Description: "b"},
-				{Severity: state.SeverityP2, Description: "c"},
+				{Severity: state.SeverityMedium, Description: "a"},
+				{Severity: state.SeverityMedium, Description: "b"},
+				{Severity: state.SeverityMedium, Description: "c"},
 			},
 		},
 	}
@@ -359,7 +359,7 @@ func TestJudge_MixedGapsWithE2E(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "missing edge case handling"},
+				{Severity: state.SeverityMedium, Description: "missing edge case handling"},
 			},
 			Questions: []state.Question{
 				{Text: "Should we add retry logic?", Priority: "medium"},
@@ -389,7 +389,7 @@ func TestJudge_MixedGapsWithE2E(t *testing.T) {
 	if len(verdict.Gaps) != 2 {
 		t.Fatalf("expected 2 gaps (1 AI + 1 e2e), got %d", len(verdict.Gaps))
 	}
-	if verdict.Gaps[1].Severity != state.SeverityP1 {
+	if verdict.Gaps[1].Severity != state.SeverityHigh {
 		t.Errorf("expected second gap P1 (e2e), got %s", verdict.Gaps[1].Severity)
 	}
 	if len(verdict.Questions) != 1 {
@@ -402,9 +402,9 @@ func TestJudge_ScoreFloorAtZero(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "wrong feature"},
-				{Severity: state.SeverityP0, Description: "missing core"},
-				{Severity: state.SeverityP0, Description: "broken api"},
+				{Severity: state.SeverityCritical, Description: "wrong feature"},
+				{Severity: state.SeverityCritical, Description: "missing core"},
+				{Severity: state.SeverityCritical, Description: "broken api"},
 			},
 		},
 	}
@@ -549,8 +549,8 @@ func TestJudge_SystemPromptContainsStyleChecks(t *testing.T) {
 }
 
 func TestJudge_SecurityChecksAreBlocking(t *testing.T) {
-	if !strings.Contains(systemPrompt, "P1 blocking") {
-		t.Error("system prompt should mark security checks as P1 blocking")
+	if !strings.Contains(systemPrompt, "high — blocking") {
+		t.Error("system prompt should mark security checks as high — blocking")
 	}
 }
 
@@ -652,11 +652,11 @@ func TestJudge_SystemPromptEstablishesFreshReviewerMindset(t *testing.T) {
 }
 
 func TestJudge_CodeReuseAndStyleAreNonBlocking(t *testing.T) {
-	if !strings.Contains(systemPrompt, "P2 non-blocking") {
-		t.Error("system prompt should mark code-reuse checks as P2 non-blocking")
+	if !strings.Contains(systemPrompt, "medium — non-blocking") {
+		t.Error("system prompt should mark code-reuse checks as medium — non-blocking")
 	}
-	if !strings.Contains(systemPrompt, "P3 non-blocking") {
-		t.Error("system prompt should mark style checks as P3 non-blocking")
+	if !strings.Contains(systemPrompt, "low — non-blocking") {
+		t.Error("system prompt should mark style checks as low — non-blocking")
 	}
 }
 
@@ -684,7 +684,7 @@ func TestJudge_GapWithFileAndLine(t *testing.T) {
 		Response: state.Verdict{
 			Gaps: []state.Gap{
 				{
-					Severity:    state.SeverityP2,
+					Severity:    state.SeverityMedium,
 					Description: "magic number",
 					File:        "internal/foo/bar.go",
 					Line:        42,
@@ -779,7 +779,7 @@ func TestJudge_BlockingGapFailsEvenWithHighScore(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "tautological assertion"},
+				{Severity: state.SeverityHigh, Description: "tautological assertion"},
 			},
 		},
 	}
@@ -803,8 +803,8 @@ func TestJudge_NonBlockingGapsAllowPass(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "magic number"},
-				{Severity: state.SeverityP3, Description: "long function"},
+				{Severity: state.SeverityMedium, Description: "magic number"},
+				{Severity: state.SeverityLow, Description: "long function"},
 			},
 		},
 	}
@@ -933,7 +933,7 @@ func TestJudge_ReturnTo_Propagated(t *testing.T) {
 			fake := &claude.FakeClient{
 				Response: state.Verdict{
 					Gaps: []state.Gap{
-						{Severity: state.SeverityP0, Description: "failing"},
+						{Severity: state.SeverityCritical, Description: "failing"},
 					},
 					ReturnTo: tc.in,
 				},
@@ -960,7 +960,7 @@ func TestJudge_ReturnTo_DefaultsToCodeOnBlockingFailure(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP1, Description: "bug"},
+				{Severity: state.SeverityHigh, Description: "bug"},
 			},
 			// ReturnTo deliberately empty.
 		},
@@ -985,10 +985,10 @@ func TestJudge_ReturnTo_EmptyForNonBlockingFailure(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP2, Description: "a"},
-				{Severity: state.SeverityP2, Description: "b"},
-				{Severity: state.SeverityP2, Description: "c"},
-				{Severity: state.SeverityP2, Description: "d"},
+				{Severity: state.SeverityMedium, Description: "a"},
+				{Severity: state.SeverityMedium, Description: "b"},
+				{Severity: state.SeverityMedium, Description: "c"},
+				{Severity: state.SeverityMedium, Description: "d"},
 			},
 		},
 	}
@@ -1013,7 +1013,7 @@ func TestJudge_ReturnTo_UnknownValueCollapsesToCode(t *testing.T) {
 	fake := &claude.FakeClient{
 		Response: state.Verdict{
 			Gaps: []state.Gap{
-				{Severity: state.SeverityP0, Description: "bug"},
+				{Severity: state.SeverityCritical, Description: "bug"},
 			},
 			ReturnTo: state.ReturnTo("rewrite"),
 		},

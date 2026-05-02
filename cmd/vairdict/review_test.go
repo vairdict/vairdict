@@ -79,7 +79,7 @@ func passingVerdict() *state.Verdict {
 
 func failingVerdict() *state.Verdict {
 	return &state.Verdict{Score: 30, Pass: false, Gaps: []state.Gap{
-		{Severity: state.SeverityP0, Description: "broken", Blocking: true},
+		{Severity: state.SeverityCritical, Description: "broken", Blocking: true},
 	}}
 }
 

@@ -47,7 +47,7 @@ the stated intent.
 You care about correctness, clarity, and future maintenance pain. You are
 considered and deliberate — every observation earns its place. A thoughtful
 review surfaces design decisions, risks, and follow-ups — not just bugs.
-On a non-trivial plan, surfacing P3/P2 design observations is expected when
+On a non-trivial plan, surfacing medium/low design observations is expected when
 genuine concerns exist. However, if prior concerns have been acknowledged
 (see Acknowledged Assumptions section in the user prompt when present),
 fewer new observations is the correct outcome — do not re-discover concerns
@@ -64,10 +64,10 @@ single source of truth for the response shape — do not emit free-form JSON,
 markdown fences, or prose outside the tool call.
 
 Severity levels for gaps:
-- P0: next steps cannot proceed without resolving this — critical blocker
-- P1: required, must be addressed this loop — important but not a total blocker
-- P2: ambiguous, agent will document assumption and proceed — not blocking
-- P3: nice to have, deferred to future issue — not blocking
+- critical: next steps cannot proceed without resolving this — blocker
+- high:     required, must be addressed this loop — important but not a total blocker
+- medium:   ambiguous, agent will document assumption and proceed — not blocking
+- low:      nice to have, deferred to future issue — not blocking
 
 Do NOT set "blocking" on gaps and do NOT estimate a score — the orchestrator
 computes both deterministically from severities.
@@ -93,7 +93,7 @@ as a finding, use a gap.
 
 ## Examples
 
-On a substantive plan, design observations (P3/P2) are expected when genuine
+On a substantive plan, design observations (medium/low) are expected when genuine
 concerns exist — what a senior reviewer would raise in a real plan review.
 When Acknowledged Assumptions are present, those concerns have already been
 accepted; flag only NEW issues. Never pad with nits to hit a target.
@@ -109,9 +109,9 @@ submit_verdict input:
 {
   "summary": "## Decided\n- Tenant threaded via middleware on the 4 handlers\n- DB gets tenant_id column via migration\n## Risks\n- Backfill strategy deferred to post-rollout\n## Files to touch\n- internal/middleware/tenant.go — new\n- internal/db/queryHelpers.go — scope 6 queries by tenant",
   "gaps": [
-    {"severity": "P2", "description": "Plan does not decide whether tenant_id is required or nullable on the new column — affects backfill and rollout order."},
-    {"severity": "P3", "description": "6 near-identical WHERE clauses in queryHelpers will drift; extract a tenantScope() helper once a second table needs the same pattern."},
-    {"severity": "P3", "description": "Plan threads Tenant through function signatures rather than context.Context; fine now, worth revisiting as the scoped-call surface grows."}
+    {"severity": "medium", "description": "Plan does not decide whether tenant_id is required or nullable on the new column — affects backfill and rollout order."},
+    {"severity": "low", "description": "6 near-identical WHERE clauses in queryHelpers will drift; extract a tenantScope() helper once a second table needs the same pattern."},
+    {"severity": "low", "description": "Plan threads Tenant through function signatures rather than context.Context; fine now, worth revisiting as the scoped-call surface grows."}
   ],
   "questions": []
 }
@@ -125,8 +125,8 @@ submit_verdict input:
 {
   "summary": "## Risks\n- Plan does not satisfy the persistence requirement",
   "gaps": [
-    {"severity": "P0", "description": "In-memory storage is lost on restart — intent explicitly requires persistence across restarts."},
-    {"severity": "P1", "description": "No mention of a storage backend, schema, or migration strategy."}
+    {"severity": "critical", "description": "In-memory storage is lost on restart — intent explicitly requires persistence across restarts."},
+    {"severity": "high", "description": "No mention of a storage backend, schema, or migration strategy."}
   ],
   "questions": []
 }`
@@ -148,7 +148,7 @@ func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, ackno
 		prompt += "These concerns were already raised in a previous loop, acknowledged by the planner, and accepted by the orchestrator. "
 		prompt += "Do NOT re-flag these as gaps unless the plan has actively regressed on them.\n"
 		for _, a := range acknowledged {
-			prompt += fmt.Sprintf("- [%s] %s\n", a.Severity, a.Description)
+			prompt += fmt.Sprintf("- [%s] %s\n", a.Severity.Display(), a.Description)
 		}
 	}
 

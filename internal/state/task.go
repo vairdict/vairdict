@@ -178,8 +178,15 @@ func (s Severity) Display() string {
 	return string(s)
 }
 
+// UnknownSeverityRank is the sort rank used for severities outside
+// the canonical Critical/High/Medium/Low ladder. Sorts last so any
+// surprise value the judge produces ends up at the bottom of the
+// notes section rather than mixed in with real findings.
+const UnknownSeverityRank = 99
+
 // Rank returns the display-order rank of a severity: 0 (Critical) is
-// shown first, 3 (Low) last. Unknown severities sort to the end (99).
+// shown first, 3 (Low) last. Unknown severities sort to the end
+// (UnknownSeverityRank).
 // Used by the verdict renderer to order the notes section.
 func (s Severity) Rank() int {
 	switch NormalizeSeverity(s) {
@@ -192,7 +199,7 @@ func (s Severity) Rank() int {
 	case SeverityLow:
 		return 3
 	}
-	return 99
+	return UnknownSeverityRank
 }
 
 // Assumption records a decision made under uncertainty during a phase.

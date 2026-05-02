@@ -35,8 +35,8 @@ const inputSchema = `{
         "properties": {
           "severity": {
             "type": "string",
-            "enum": ["P0", "P1", "P2", "P3"],
-            "description": "P0/P1 are blocking; P2/P3 are advisory."
+            "enum": ["critical", "high", "medium", "low"],
+            "description": "critical/high are blocking; medium/low are advisory. Legacy P0/P1/P2/P3 strings are still accepted by the post-processor (NormalizeSeverity) for backward compatibility, but new judge calls should emit the canonical lowercase wording."
           },
           "description": {"type": "string"},
           "file": {"type": "string", "description": "Optional file path when the gap maps to a specific diff location."},
@@ -96,13 +96,13 @@ func ComputeScore(gaps []state.Gap) float64 {
 	penalty := 0.0
 	for _, g := range gaps {
 		switch g.Severity {
-		case state.SeverityP0:
+		case state.SeverityCritical:
 			penalty += weightP0
-		case state.SeverityP1:
+		case state.SeverityHigh:
 			penalty += weightP1
-		case state.SeverityP2:
+		case state.SeverityMedium:
 			penalty += weightP2
-		case state.SeverityP3:
+		case state.SeverityLow:
 			penalty += weightP3
 		}
 	}
@@ -185,13 +185,13 @@ func ComputeScoreWithAcknowledged(gaps []state.Gap, acknowledged []state.Assumpt
 	for _, g := range gaps {
 		w := 0.0
 		switch g.Severity {
-		case state.SeverityP0:
+		case state.SeverityCritical:
 			w = weightP0
-		case state.SeverityP1:
+		case state.SeverityHigh:
 			w = weightP1
-		case state.SeverityP2:
+		case state.SeverityMedium:
 			w = weightP2
-		case state.SeverityP3:
+		case state.SeverityLow:
 			w = weightP3
 		}
 		if IsReflagged(g, acknowledged) {

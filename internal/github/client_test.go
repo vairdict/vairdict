@@ -172,7 +172,7 @@ func TestPostVerdict_Pass_ApprovesAndComments(t *testing.T) {
 		Score: 95,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP3, Description: "minor style", Blocking: false},
+			{Severity: state.SeverityLow, Description: "minor style", Blocking: false},
 		},
 	}
 
@@ -275,8 +275,8 @@ func TestPostVerdict_Fail_CommentsOnly(t *testing.T) {
 		Score: 40,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "build fails", Blocking: true},
-			{Severity: state.SeverityP1, Description: "tests fail", Blocking: true},
+			{Severity: state.SeverityCritical, Description: "build fails", Blocking: true},
+			{Severity: state.SeverityHigh, Description: "tests fail", Blocking: true},
 		},
 	}
 
@@ -393,7 +393,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		Score: 95,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP3, Description: "minor style nit", Blocking: false},
+			{Severity: state.SeverityLow, Description: "minor style nit", Blocking: false},
 		},
 	}
 
@@ -432,9 +432,9 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		Score: 40,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP0, Description: "build broken", Blocking: true},
-			{Severity: state.SeverityP1, Description: "tests fail", Blocking: true},
-			{Severity: state.SeverityP3, Description: "docs missing", Blocking: false},
+			{Severity: state.SeverityCritical, Description: "build broken", Blocking: true},
+			{Severity: state.SeverityHigh, Description: "tests fail", Blocking: true},
+			{Severity: state.SeverityLow, Description: "docs missing", Blocking: false},
 		},
 		Questions: []state.Question{
 			{Text: "Is the API stable?", Priority: "high"},
@@ -623,7 +623,7 @@ func TestFormatPRBody(t *testing.T) {
 	task := &state.Task{
 		Intent: "add feature X",
 		Assumptions: []state.Assumption{
-			{Severity: state.SeverityP2, Description: "assumed Y"},
+			{Severity: state.SeverityMedium, Description: "assumed Y"},
 		},
 		Attempts: []state.Attempt{
 			{
@@ -783,9 +783,9 @@ func TestPostVerdictWithDiff_InlineComments(t *testing.T) {
 		Score: 40,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "bug on added line", Blocking: true, File: "internal/foo/bar.go", Line: 12},
-			{Severity: state.SeverityP2, Description: "style issue elsewhere", Blocking: false}, // no file/line
-			{Severity: state.SeverityP3, Description: "line not in diff", Blocking: false, File: "internal/foo/bar.go", Line: 1},
+			{Severity: state.SeverityHigh, Description: "bug on added line", Blocking: true, File: "internal/foo/bar.go", Line: 12},
+			{Severity: state.SeverityMedium, Description: "style issue elsewhere", Blocking: false}, // no file/line
+			{Severity: state.SeverityLow, Description: "line not in diff", Blocking: false, File: "internal/foo/bar.go", Line: 1},
 		},
 	}
 
@@ -827,7 +827,7 @@ func TestPostVerdictWithDiff_UnanchoredGapsSurfaceInComment(t *testing.T) {
 		Score: 80,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "missing docs", Blocking: false},
+			{Severity: state.SeverityMedium, Description: "missing docs", Blocking: false},
 		},
 	}
 
@@ -859,7 +859,7 @@ func TestPostVerdictWithDiff_EmptyDiffSkipsInline(t *testing.T) {
 		Score: 90,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP3, Description: "nit", Blocking: false, File: "x.go", Line: 5},
+			{Severity: state.SeverityLow, Description: "nit", Blocking: false, File: "x.go", Line: 5},
 		},
 	}
 
@@ -887,10 +887,10 @@ func TestBuildInlineReview_FiltersByResolvability(t *testing.T) {
 `
 	verdict := &state.Verdict{
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "in diff", Blocking: true, File: "foo.go", Line: 11},
-			{Severity: state.SeverityP2, Description: "no file info"},
-			{Severity: state.SeverityP3, Description: "line outside diff", File: "foo.go", Line: 999},
-			{Severity: state.SeverityP0, Description: "wrong file", File: "bar.go", Line: 11},
+			{Severity: state.SeverityHigh, Description: "in diff", Blocking: true, File: "foo.go", Line: 11},
+			{Severity: state.SeverityMedium, Description: "no file info"},
+			{Severity: state.SeverityLow, Description: "line outside diff", File: "foo.go", Line: 999},
+			{Severity: state.SeverityCritical, Description: "wrong file", File: "bar.go", Line: 11},
 		},
 	}
 
@@ -945,8 +945,8 @@ func TestBuildInlineReview_UnanchoredGapsStillSurface(t *testing.T) {
 `
 	verdict := &state.Verdict{
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "no location"},
-			{Severity: state.SeverityP3, Description: "out of diff", File: "x.go", Line: 99},
+			{Severity: state.SeverityMedium, Description: "no location"},
+			{Severity: state.SeverityLow, Description: "out of diff", File: "x.go", Line: 99},
 		},
 	}
 
@@ -1000,8 +1000,8 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 		Score: 60,
 		Pass:  false,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP1, Description: "bad on added line", Blocking: true, File: "p.go", Line: 2},
-			{Severity: state.SeverityP2, Description: "architectural concern"},
+			{Severity: state.SeverityHigh, Description: "bad on added line", Blocking: true, File: "p.go", Line: 2},
+			{Severity: state.SeverityMedium, Description: "architectural concern"},
 		},
 	}
 
@@ -1025,7 +1025,7 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 }
 
 func TestFormatInlineComment_Blocking(t *testing.T) {
-	g := state.Gap{Severity: state.SeverityP1, Description: "security issue", Blocking: true}
+	g := state.Gap{Severity: state.SeverityHigh, Description: "security issue", Blocking: true}
 	body := formatInlineComment(g)
 	if !contains(body, "[High]") {
 		t.Errorf("expected [High] in body, got %q", body)
@@ -1036,7 +1036,7 @@ func TestFormatInlineComment_Blocking(t *testing.T) {
 }
 
 func TestFormatInlineComment_NonBlocking(t *testing.T) {
-	g := state.Gap{Severity: state.SeverityP3, Description: "style nit", Blocking: false}
+	g := state.Gap{Severity: state.SeverityLow, Description: "style nit", Blocking: false}
 	body := formatInlineComment(g)
 	if !contains(body, "[Low]") {
 		t.Errorf("expected [Low] in body, got %q", body)
@@ -1045,7 +1045,7 @@ func TestFormatInlineComment_NonBlocking(t *testing.T) {
 
 func TestFormatInlineComment_WithSuggestion(t *testing.T) {
 	g := state.Gap{
-		Severity:    state.SeverityP1,
+		Severity:    state.SeverityHigh,
 		Description: "hardcoded key",
 		Blocking:    true,
 		Suggestion:  "\tapiKey := os.Getenv(\"API_KEY\")",
@@ -1067,7 +1067,7 @@ func TestFormatInlineComment_WithSuggestion(t *testing.T) {
 
 func TestFormatInlineComment_NoSuggestion(t *testing.T) {
 	g := state.Gap{
-		Severity:    state.SeverityP2,
+		Severity:    state.SeverityMedium,
 		Description: "design concern",
 		Blocking:    false,
 		Suggestion:  "",
@@ -1092,7 +1092,7 @@ func TestBuildInlineReview_SuggestionPreserved(t *testing.T) {
 		Pass:  false,
 		Gaps: []state.Gap{
 			{
-				Severity:    state.SeverityP1,
+				Severity:    state.SeverityHigh,
 				Description: "hardcoded secret",
 				Blocking:    true,
 				File:        "foo.go",
@@ -1123,8 +1123,8 @@ func TestFormatVerdictComment_GapWithFileLocation(t *testing.T) {
 		Score: 70,
 		Pass:  true,
 		Gaps: []state.Gap{
-			{Severity: state.SeverityP2, Description: "magic number", Blocking: false, File: "foo.go", Line: 42},
-			{Severity: state.SeverityP3, Description: "style nit", Blocking: false},
+			{Severity: state.SeverityMedium, Description: "magic number", Blocking: false, File: "foo.go", Line: 42},
+			{Severity: state.SeverityLow, Description: "style nit", Blocking: false},
 		},
 	}
 

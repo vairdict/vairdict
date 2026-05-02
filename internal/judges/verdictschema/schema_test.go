@@ -14,19 +14,19 @@ func TestComputeScore(t *testing.T) {
 		want float64
 	}{
 		{"empty", nil, 100},
-		{"one_p3", []state.Gap{{Severity: state.SeverityP3}}, 95},
-		{"one_p2", []state.Gap{{Severity: state.SeverityP2}}, 90},
-		{"one_p1", []state.Gap{{Severity: state.SeverityP1}}, 80},
-		{"one_p0", []state.Gap{{Severity: state.SeverityP0}}, 60},
+		{"one_p3", []state.Gap{{Severity: state.SeverityLow}}, 95},
+		{"one_p2", []state.Gap{{Severity: state.SeverityMedium}}, 90},
+		{"one_p1", []state.Gap{{Severity: state.SeverityHigh}}, 80},
+		{"one_p0", []state.Gap{{Severity: state.SeverityCritical}}, 60},
 		{"mixed", []state.Gap{
-			{Severity: state.SeverityP1},
-			{Severity: state.SeverityP2},
-			{Severity: state.SeverityP3},
+			{Severity: state.SeverityHigh},
+			{Severity: state.SeverityMedium},
+			{Severity: state.SeverityLow},
 		}, 65},
 		{"floors_at_zero", []state.Gap{
-			{Severity: state.SeverityP0},
-			{Severity: state.SeverityP0},
-			{Severity: state.SeverityP0},
+			{Severity: state.SeverityCritical},
+			{Severity: state.SeverityCritical},
+			{Severity: state.SeverityCritical},
 		}, 0},
 		{"unknown_severity_ignored", []state.Gap{{Severity: "PX"}}, 100},
 	}
@@ -42,10 +42,10 @@ func TestComputeScore(t *testing.T) {
 
 func TestApplyBlocking_DefaultSet(t *testing.T) {
 	gaps := []state.Gap{
-		{Severity: state.SeverityP0},
-		{Severity: state.SeverityP1},
-		{Severity: state.SeverityP2},
-		{Severity: state.SeverityP3},
+		{Severity: state.SeverityCritical},
+		{Severity: state.SeverityHigh},
+		{Severity: state.SeverityMedium},
+		{Severity: state.SeverityLow},
 	}
 
 	ApplyBlocking(gaps, nil)
@@ -61,8 +61,8 @@ func TestApplyBlocking_DefaultSet(t *testing.T) {
 
 func TestApplyBlocking_CustomSet(t *testing.T) {
 	gaps := []state.Gap{
-		{Severity: state.SeverityP0, Blocking: false},
-		{Severity: state.SeverityP1, Blocking: true}, // LLM opinion — must be overridden
+		{Severity: state.SeverityCritical, Blocking: false},
+		{Severity: state.SeverityHigh, Blocking: true}, // LLM opinion — must be overridden
 	}
 
 	// Only P0 blocks in this config.
@@ -80,8 +80,8 @@ func TestApplyBlocking_EmptySetBlocksNothing(t *testing.T) {
 	// Explicit empty map must mean "nothing is blocking" — not "fall back
 	// to default".
 	gaps := []state.Gap{
-		{Severity: state.SeverityP0},
-		{Severity: state.SeverityP1},
+		{Severity: state.SeverityCritical},
+		{Severity: state.SeverityHigh},
 	}
 	ApplyBlocking(gaps, map[string]bool{})
 
@@ -106,8 +106,8 @@ func TestHasBlockingGap(t *testing.T) {
 
 func TestIsReflagged(t *testing.T) {
 	ack := []state.Assumption{
-		{Description: "database choice unclear", Severity: state.SeverityP2},
-		{Description: "caching strategy not defined", Severity: state.SeverityP2},
+		{Description: "database choice unclear", Severity: state.SeverityMedium},
+		{Description: "caching strategy not defined", Severity: state.SeverityMedium},
 	}
 
 	tests := []struct {
@@ -139,11 +139,11 @@ func TestIsReflagged(t *testing.T) {
 
 func TestComputeScoreWithAcknowledged_HalvesPenalty(t *testing.T) {
 	ack := []state.Assumption{
-		{Description: "database choice unclear", Severity: state.SeverityP2},
+		{Description: "database choice unclear", Severity: state.SeverityMedium},
 	}
 	gaps := []state.Gap{
-		{Severity: state.SeverityP2, Description: "database choice unclear"},  // re-flagged: 10/2 = 5
-		{Severity: state.SeverityP2, Description: "new concern about naming"}, // fresh: 10
+		{Severity: state.SeverityMedium, Description: "database choice unclear"},  // re-flagged: 10/2 = 5
+		{Severity: state.SeverityMedium, Description: "new concern about naming"}, // fresh: 10
 	}
 
 	got := ComputeScoreWithAcknowledged(gaps, ack)
@@ -155,8 +155,8 @@ func TestComputeScoreWithAcknowledged_HalvesPenalty(t *testing.T) {
 
 func TestComputeScoreWithAcknowledged_NoAcknowledged(t *testing.T) {
 	gaps := []state.Gap{
-		{Severity: state.SeverityP2, Description: "a"},
-		{Severity: state.SeverityP2, Description: "b"},
+		{Severity: state.SeverityMedium, Description: "a"},
+		{Severity: state.SeverityMedium, Description: "b"},
 	}
 
 	withAck := ComputeScoreWithAcknowledged(gaps, nil)
