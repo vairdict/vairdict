@@ -44,7 +44,7 @@ func TestQualityJudge_BaselineMarkerForcesBlocking(t *testing.T) {
 	}
 	judge := New(fake, nil, testConfig())
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestQualityJudge_VerdictStampedWithModel(t *testing.T) {
 	}
 	judge := New(fake, nil, testConfig())
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "diff --git a/x.go b/x.go\n+func H() {}")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "diff --git a/x.go b/x.go\n+func H() {}", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestJudge_Pass_NoGapsScoresFull(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes", "diff --git a/x.go b/x.go\n+func H() {}")
+	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes", "diff --git a/x.go b/x.go\n+func H() {}", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestJudge_IntentMismatch_P0Blocks(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "build auth system", "1. Implement auth", "diff --git a/x.go b/x.go\n+func crud() {}")
+	verdict, err := judge.Judge(context.Background(), "build auth system", "1. Implement auth", "diff --git a/x.go b/x.go\n+func crud() {}", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestJudge_E2EPass(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestJudge_E2EFail_AddsBlockingGap(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestJudge_E2ENotRequired(t *testing.T) {
 	// E2ERequired is false by default.
 
 	judge := New(fake, nil, cfg)
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestJudge_E2ERequiredNoCommand(t *testing.T) {
 	// Commands.E2E is empty.
 
 	judge := New(fake, nil, cfg)
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestJudge_AccumulatedP2sDragBelowThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestJudge_PassAtExactThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestJudge_ClientError(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err == nil {
 		t.Fatal("expected error when client fails")
 	}
@@ -374,7 +374,7 @@ func TestJudge_MixedGapsWithE2E(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestJudge_ScoreFloorAtZero(t *testing.T) {
 	}
 
 	judge := New(fake, runner, testConfigWithE2E())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestJudge_PromptContainsDiff(t *testing.T) {
 
 	judge := New(fake, nil, testConfig())
 	const diff = "diff --git a/foo.go b/foo.go\n+++ b/foo.go\n+func Foo() {}"
-	_, err := judge.Judge(context.Background(), "intent", "plan", diff)
+	_, err := judge.Judge(context.Background(), "intent", "plan", diff, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestJudge_EmptyDiffPlaceholder(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	_, err := judge.Judge(context.Background(), "intent", "plan", "")
+	_, err := judge.Judge(context.Background(), "intent", "plan", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestJudge_SummaryRoundTrip(t *testing.T) {
 	cfg := config.Config{}
 	cfg.Phases.Quality.E2ERequired = false
 	judge := New(fake, &FakeRunner{}, cfg)
-	verdict, err := judge.Judge(context.Background(), "build it", "the plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "build it", "the plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -694,7 +694,7 @@ func TestJudge_GapWithFileAndLine(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestJudge_CodeFactsInjectedIntoPrompt(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig()).WithCodeFacts("Score: 100%\nAll checks passed (lint, test, build)")
-	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -785,7 +785,7 @@ func TestJudge_BlockingGapFailsEvenWithHighScore(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -810,7 +810,7 @@ func TestJudge_NonBlockingGapsAllowPass(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -907,7 +907,7 @@ func TestJudge_ReturnTo_ClearedOnPass(t *testing.T) {
 		},
 	}
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -939,7 +939,7 @@ func TestJudge_ReturnTo_Propagated(t *testing.T) {
 				},
 			}
 			judge := New(fake, nil, testConfig())
-			verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+			verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -966,7 +966,7 @@ func TestJudge_ReturnTo_DefaultsToCodeOnBlockingFailure(t *testing.T) {
 		},
 	}
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -993,7 +993,7 @@ func TestJudge_ReturnTo_EmptyForNonBlockingFailure(t *testing.T) {
 		},
 	}
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1019,7 +1019,7 @@ func TestJudge_ReturnTo_UnknownValueCollapsesToCode(t *testing.T) {
 		},
 	}
 	judge := New(fake, nil, testConfig())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1051,7 +1051,7 @@ func TestJudge_UsesCompleteWithTools(t *testing.T) {
 	}
 
 	judge := New(fake, nil, testConfig())
-	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff")
+	_, err := judge.Judge(context.Background(), "intent", "plan", "fake-diff", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1153,5 +1153,56 @@ func TestRenderCrossPushFraming_IncludesPriorGapsAndInstructions(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("RenderCrossPushFraming missing %q\n--- got ---\n%s", want, got)
 		}
+	}
+}
+
+// TestJudge_PrependsCrossPushFramingWhenPriorGapsPresent encodes the
+// orchestrator wiring: when the caller passes a non-empty priorGaps
+// slice, the judge prepends the cross-push framing block to the user
+// prompt so the model sees both the framing AND the diff in the same
+// turn. Without this, the helper added in commit 5 would never reach
+// the model — the prompt would still look identical to a first-review
+// prompt and the nagging-comment failure mode would persist.
+func TestJudge_PrependsCrossPushFramingWhenPriorGapsPresent(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{Gaps: []state.Gap{}}}
+	judge := New(fake, nil, testConfig())
+
+	prior := []state.Gap{
+		{Severity: state.SeverityCritical, Description: "auth missing on /admin"},
+	}
+	if _, err := judge.Judge(context.Background(), "intent", "plan", "diff", prior); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
+	}
+	prompt := fake.Calls[0].Prompt
+	if !strings.Contains(prompt, "Cross-push awareness") {
+		t.Errorf("prompt missing cross-push framing header\n--- prompt ---\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "auth missing on /admin") {
+		t.Errorf("prompt missing the prior gap description\n--- prompt ---\n%s", prompt)
+	}
+	// The original sections still come through after the framing.
+	if !strings.Contains(prompt, "## Original Intent") {
+		t.Error("prompt missing original intent section after framing")
+	}
+}
+
+// TestJudge_OmitsCrossPushFramingOnFirstReview — first review of a PR
+// (no prior gaps) must NOT include the framing, otherwise an empty
+// "you reviewed this before" block would mislead the model.
+func TestJudge_OmitsCrossPushFramingOnFirstReview(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{Gaps: []state.Gap{}}}
+	judge := New(fake, nil, testConfig())
+
+	if _, err := judge.Judge(context.Background(), "intent", "plan", "diff", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(fake.Calls))
+	}
+	if strings.Contains(fake.Calls[0].Prompt, "Cross-push awareness") {
+		t.Error("first-review prompt should not contain cross-push framing")
 	}
 }

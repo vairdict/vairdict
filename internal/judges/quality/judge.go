@@ -633,9 +633,17 @@ func RenderCrossPushFraming(priorGaps []state.Gap) string {
 // (the quality phase orchestrator and `vairdict review`) compute it via
 // git before invoking the judge. An empty diff is allowed but will
 // produce a low score because the LLM has nothing concrete to evaluate.
-func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error) {
+//
+// `priorGaps` is the gap list from the previous review round (the
+// previous phase loop, or the previous push on the same PR). When
+// non-empty, the judge prepends the cross-push framing block to the
+// user prompt so the model verifies each prior gap is still applicable
+// instead of inventing fresh findings for code that pre-dated the
+// prior review. nil/empty disables the framing — used for first-round
+// reviews and one-shot calls (e.g. `vairdict review`).
+func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap) (*state.Verdict, error) {
 	// Step 1: AI intent verification.
-	verdict, err := j.evaluateIntent(ctx, intent, plan, diff)
+	verdict, err := j.evaluateIntent(ctx, intent, plan, diff, priorGaps)
 	if err != nil {
 		return nil, fmt.Errorf("evaluating intent: %w", err)
 	}
@@ -676,7 +684,7 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 }
 
 // evaluateIntent uses the Claude API to assess whether the diff matches the intent.
-func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan string, diff string) (*state.Verdict, error) {
+func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap) (*state.Verdict, error) {
 	diffSection := diff
 	if strings.TrimSpace(diffSection) == "" {
 		diffSection = "(no diff provided — judge cannot evaluate code changes)"
@@ -689,9 +697,15 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 		facts = fmt.Sprintf("\n\n## Facts (from code judge)\n%s", strings.TrimSpace(j.codeFacts))
 	}
 
+	// Cross-push framing comes BEFORE the intent/plan/diff so the model
+	// reads the "verify prior gaps, do not invent old findings"
+	// instructions while it's still building its mental model of the
+	// review, not after it has already started forming opinions. Empty
+	// for first-round reviews (priorGaps==nil).
+	framing := RenderCrossPushFraming(priorGaps)
 	prompt := fmt.Sprintf(
-		"## Original Intent\n%s\n\n## Approved Plan\n%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
-		intent, plan, facts, diffSection,
+		"%s## Original Intent\n%s\n\n## Approved Plan\n%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
+		framing, intent, plan, facts, diffSection,
 	)
 
 	var verdict state.Verdict

@@ -66,7 +66,7 @@ type fakeReviewJudge struct {
 	diff    string
 }
 
-func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, diff string) (*state.Verdict, error) {
+func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, diff string, _ []state.Gap) (*state.Verdict, error) {
 	f.intent = intent
 	f.plan = plan
 	f.diff = diff
