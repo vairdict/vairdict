@@ -529,3 +529,91 @@ func TestMerge_DoesNotMutateBase(t *testing.T) {
 		t.Errorf("base was mutated: project.name = %q, want %q", base.Project.Name, "original")
 	}
 }
+
+// TestParseConfig_StandardsBlock pins the standards: yaml block contract.
+// The block parses as a map of rule name -> state ("off"/"on"/"block"),
+// rules absent from the file fall through to the default ("on"), and an
+// invalid state value surfaces at config-load time rather than silently
+// disabling a rule.
+func TestParseConfig_StandardsBlock(t *testing.T) {
+	data := []byte(`
+project:
+  name: t
+phases:
+  plan:
+    max_loops: 3
+  code:
+    max_loops: 3
+  quality:
+    max_loops: 3
+escalation:
+  after_loops: 3
+parallel:
+  max_tasks: 3
+standards:
+  naming: "on"
+  indent: "off"
+  error_logging: "block"
+`)
+	cfg, err := ParseConfig(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Standards["naming"] != "on" {
+		t.Errorf("naming = %q, want on", cfg.Standards["naming"])
+	}
+	if cfg.Standards["indent"] != "off" {
+		t.Errorf("indent = %q, want off", cfg.Standards["indent"])
+	}
+	if cfg.Standards["error_logging"] != "block" {
+		t.Errorf("error_logging = %q, want block", cfg.Standards["error_logging"])
+	}
+
+	// StandardsConfig() returns a merged Config: defaults for unset
+	// rules, parsed states for set rules, with state types from the
+	// standards package.
+	scfg, err := cfg.StandardsConfig()
+	if err != nil {
+		t.Fatalf("StandardsConfig: %v", err)
+	}
+	if state, _ := scfg.Rule("naming"); string(state) != "on" {
+		t.Errorf("scfg.naming = %q, want on", state)
+	}
+	if state, _ := scfg.Rule("indent"); string(state) != "off" {
+		t.Errorf("scfg.indent = %q, want off", state)
+	}
+	if state, _ := scfg.Rule("error_logging"); string(state) != "block" {
+		t.Errorf("scfg.error_logging = %q, want block", state)
+	}
+	// Rules not mentioned in vairdict.yaml fall through to the default.
+	if state, _ := scfg.Rule("class_naming"); string(state) != "on" {
+		t.Errorf("class_naming default = %q, want on (the implicit default)", state)
+	}
+}
+
+// TestParseConfig_StandardsInvalidState — a typo or a wrong value in
+// the standards: block must fail loudly at parse time. Silent fallback
+// would be exactly the kind of "thought I disabled it but it kept
+// firing" footgun this category is meant to avoid.
+func TestParseConfig_StandardsInvalidState(t *testing.T) {
+	data := []byte(`
+project:
+  name: t
+phases:
+  plan:
+    max_loops: 3
+  code:
+    max_loops: 3
+  quality:
+    max_loops: 3
+escalation:
+  after_loops: 3
+parallel:
+  max_tasks: 3
+standards:
+  naming: "yes"
+`)
+	if _, err := ParseConfig(data); err == nil {
+		t.Fatal("expected error for invalid rule state, got nil")
+	}
+}
