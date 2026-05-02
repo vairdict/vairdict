@@ -285,7 +285,7 @@ func buildPlannerPrompt(intent string, feedback string, assumptions []state.Assu
 	if len(assumptions) > 0 {
 		b.WriteString("\n## Assumptions from Previous Loops\n")
 		for _, a := range assumptions {
-			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity, a.Description)
+			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity.Display(), a.Description)
 		}
 	}
 
@@ -305,7 +305,7 @@ func buildFeedbackSummary(verdict *state.Verdict) string {
 			if gap.Blocking {
 				blocking = " [BLOCKING]"
 			}
-			fmt.Fprintf(&b, "- [%s]%s %s\n", gap.Severity, blocking, gap.Description)
+			fmt.Fprintf(&b, "- [%s]%s %s\n", gap.Severity.Display(), blocking, gap.Description)
 		}
 	}
 

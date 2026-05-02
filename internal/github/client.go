@@ -768,7 +768,7 @@ func formatInlineComment(g state.Gap) string {
 	if g.Blocking {
 		icon = "🚫"
 	}
-	body := fmt.Sprintf("%s **[%s]** %s", icon, g.Severity, g.Description)
+	body := fmt.Sprintf("%s **[%s]** %s", icon, g.Severity.Display(), g.Description)
 	if g.Suggestion != "" {
 		body += "\n\n```suggestion\n" + g.Suggestion + "\n```"
 	}
@@ -860,7 +860,7 @@ func FormatPRBody(task *state.Task, issueNumber int, summary string) string {
 	if len(task.Assumptions) > 0 {
 		b.WriteString("## Assumptions made\n")
 		for _, a := range task.Assumptions {
-			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity, a.Description)
+			fmt.Fprintf(&b, "- [%s] %s\n", a.Severity.Display(), a.Description)
 		}
 		b.WriteString("\n")
 	}
@@ -938,7 +938,7 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 			if g.Blocking {
 				status = "BLOCKING"
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity, status, g.Description)
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", g.Severity.Display(), status, g.Description)
 		}
 		b.WriteString("\n")
 	} else if verdict.Pass {
@@ -961,7 +961,7 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 		if len(blocking) > 0 {
 			b.WriteString("### Blocking Gaps\n\n")
 			for _, g := range blocking {
-				fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity, g.Description)
+				fmt.Fprintf(&b, "- **[%s]** %s\n", g.Severity.Display(), g.Description)
 			}
 			b.WriteString("\n")
 		}

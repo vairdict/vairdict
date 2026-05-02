@@ -353,7 +353,7 @@ func TestFormatSummary_ContainsAllFields(t *testing.T) {
 		"Loops used:** 3",
 		"56", // 55.7 rounds to 56 with %.0f
 		"Blocking gaps",
-		"P0",
+		"Critical",
 		"intent mismatch",
 		"Human intervention required",
 	}

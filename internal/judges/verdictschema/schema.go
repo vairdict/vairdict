@@ -119,16 +119,25 @@ func ComputeScore(gaps []state.Gap) float64 {
 
 // ApplyBlocking sets the Blocking flag on each gap based on severity, using
 // the caller-supplied set of severities that count as blocking. Passing a nil
-// set means the default (P0 and P1) applies.
+// set means the default (Critical and High — formerly P0/P1) applies.
+//
+// Both the map keys and each gap's stored severity are run through
+// state.NormalizeSeverity, so vairdict.yaml configs that still spell the
+// blocking set as ["P0","P1"] continue to gate the new "critical"/"high"
+// gaps without any user-visible change.
 func ApplyBlocking(gaps []state.Gap, blockOn map[string]bool) {
 	if blockOn == nil {
 		blockOn = map[string]bool{
-			string(state.SeverityP0): true,
-			string(state.SeverityP1): true,
+			string(state.SeverityCritical): true,
+			string(state.SeverityHigh):     true,
 		}
 	}
+	normalized := make(map[state.Severity]bool, len(blockOn))
+	for k, v := range blockOn {
+		normalized[state.NormalizeSeverity(state.Severity(k))] = v
+	}
 	for i := range gaps {
-		gaps[i].Blocking = blockOn[string(gaps[i].Severity)]
+		gaps[i].Blocking = normalized[state.NormalizeSeverity(gaps[i].Severity)]
 	}
 }
 

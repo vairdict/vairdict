@@ -410,7 +410,7 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		{"score", "**Score:** 95%"},
 		{"phase", "**Phase:** quality"},
 		{"loop", "**Loop:** 1"},
-		{"gap severity", "| P3 |"},
+		{"gap severity", "| Low |"},
 		{"gap description", "minor style nit"},
 		{"footer", "@vairdict-judge"},
 	}
@@ -454,8 +454,8 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		{"score", "**Score:** 40%"},
 		{"loop", "**Loop:** 2"},
 		{"blocking section", "### Blocking Gaps"},
-		{"P0 gap", "**[P0]** build broken"},
-		{"P1 gap", "**[P1]** tests fail"},
+		{"critical gap", "**[Critical]** build broken"},
+		{"high gap", "**[High]** tests fail"},
 		{"question", "Is the API stable?"},
 		{"criteria table", "| Severity | Status | Description |"},
 	}
@@ -1013,7 +1013,7 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 	// When inlineGapIndices is passed, the inline gap should be excluded
 	// from the criteria table but the non-inline gap should remain.
 	summary := FormatVerdictComment(verdict, state.PhaseQuality, 1, result.InlineGapIndices)
-	if contains(summary, "| P1 |") {
+	if contains(summary, "| High |") {
 		t.Error("inline gap should NOT appear in criteria table when inlineGapIndices is set")
 	}
 	if !contains(summary, "architectural concern") {
@@ -1027,8 +1027,8 @@ func TestBuildInlineReview_MixedInlineAndSummary(t *testing.T) {
 func TestFormatInlineComment_Blocking(t *testing.T) {
 	g := state.Gap{Severity: state.SeverityP1, Description: "security issue", Blocking: true}
 	body := formatInlineComment(g)
-	if !contains(body, "[P1]") {
-		t.Errorf("expected [P1] in body, got %q", body)
+	if !contains(body, "[High]") {
+		t.Errorf("expected [High] in body, got %q", body)
 	}
 	if !contains(body, "security issue") {
 		t.Errorf("expected description in body, got %q", body)
@@ -1038,8 +1038,8 @@ func TestFormatInlineComment_Blocking(t *testing.T) {
 func TestFormatInlineComment_NonBlocking(t *testing.T) {
 	g := state.Gap{Severity: state.SeverityP3, Description: "style nit", Blocking: false}
 	body := formatInlineComment(g)
-	if !contains(body, "[P3]") {
-		t.Errorf("expected [P3] in body, got %q", body)
+	if !contains(body, "[Low]") {
+		t.Errorf("expected [Low] in body, got %q", body)
 	}
 }
 
@@ -1057,7 +1057,7 @@ func TestFormatInlineComment_WithSuggestion(t *testing.T) {
 	if !contains(body, "os.Getenv") {
 		t.Errorf("expected suggestion content, got %q", body)
 	}
-	if !contains(body, "[P1]") {
+	if !contains(body, "[High]") {
 		t.Errorf("expected severity prefix, got %q", body)
 	}
 	if !contains(body, "hardcoded key") {

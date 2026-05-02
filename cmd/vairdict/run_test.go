@@ -471,7 +471,7 @@ func TestBuildQualityHardConstraints_OnlyBlockingGaps(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 blocking constraints, got %d: %v", len(got), got)
 	}
-	if !strings.Contains(got[0], "P0") || !strings.Contains(got[0], "critical gap") {
+	if !strings.Contains(got[0], "Critical") || !strings.Contains(got[0], "critical gap") {
 		t.Errorf("first constraint should carry severity + description, got %q", got[0])
 	}
 	// File/line anchor should be preserved so the planner can reference

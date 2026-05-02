@@ -700,11 +700,11 @@ func TestBuildFeedbackSummary(t *testing.T) {
 	if !strings.Contains(summary, "Score: 55.5") {
 		t.Errorf("expected score in summary, got: %s", summary)
 	}
-	if !strings.Contains(summary, "[P0] [BLOCKING] critical issue") {
-		t.Errorf("expected P0 blocking gap, got: %s", summary)
+	if !strings.Contains(summary, "[Critical] [BLOCKING] critical issue") {
+		t.Errorf("expected Critical blocking gap, got: %s", summary)
 	}
-	if !strings.Contains(summary, "[P2] minor thing") {
-		t.Errorf("expected P2 gap, got: %s", summary)
+	if !strings.Contains(summary, "[Medium] minor thing") {
+		t.Errorf("expected Medium gap, got: %s", summary)
 	}
 	if !strings.Contains(summary, "[high] What DB?") {
 		t.Errorf("expected question, got: %s", summary)
