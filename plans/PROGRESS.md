@@ -14,6 +14,7 @@ Update this file when opening, completing, or blocking an issue.
 
 ## In Progress
 - #91 cmd/interactive: status, notes, pause/continue during execution
+- #126 agents/codex: Codex CLI completer (M6, branch claude/issue-126-tests-first-TBk7B)
 
 ## Blocked
 
