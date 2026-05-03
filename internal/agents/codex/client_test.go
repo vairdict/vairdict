@@ -199,7 +199,12 @@ func TestCompleteWithSystem_ContextCancelled(t *testing.T) {
 	cancel() // cancel immediately
 
 	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return fakeCmd(ctx, "sleep 30")
+		// `exec sleep 1` makes sh replace itself with sleep so the
+		// kill on ctx cancel reaps the actual sleeper and unblocks
+		// cmd.Run immediately. Bare `sh -c "sleep 1"` leaves an
+		// orphaned sleep holding the stdout pipe, which makes the
+		// test wait the full sleep duration.
+		return fakeCmd(ctx, "exec sleep 1")
 	}))
 
 	var got map[string]any
@@ -216,7 +221,7 @@ func TestCompleteWithSystem_Timeout(t *testing.T) {
 	c := New(
 		WithTimeout(50*time.Millisecond),
 		WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			return fakeCmd(ctx, "sleep 30")
+			return fakeCmd(ctx, "exec sleep 5")
 		}),
 	)
 
