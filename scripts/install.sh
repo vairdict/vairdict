@@ -7,11 +7,13 @@
 # Respects:
 #   INSTALL_DIR  — where to put the binary (default: /usr/local/bin)
 #   VERSION      — specific version to install (default: latest)
-#   GITHUB_TOKEN — bearer token for the releases API call. When set,
-#                  the latest-version probe is authenticated, raising
-#                  the rate limit from 60/hour (anon) to 5000/hour
-#                  and avoiding the "Failed to detect latest version"
-#                  exit that hits CI runner pools sharing IP space.
+#
+# Version resolution: this script follows the github.com /releases/latest
+# 302 redirect rather than calling the api.github.com REST endpoint.
+# The web redirect is not auth-rate-limited (the API path is — 60/hour
+# per anonymous IP, easily exhausted by CI runner pools sharing IPs,
+# which produced the recurring exit-22 failures the auto-review action
+# was hitting). No GITHUB_TOKEN needed.
 
 set -e
 # pipefail makes a curl failure inside a `curl | grep | sed` pipeline
@@ -49,41 +51,41 @@ esac
 # --- Resolve version ---
 
 if [ -z "$VERSION" ]; then
-  # fetch_latest queries the releases/latest API. When GITHUB_TOKEN is
-  # set, sends Authorization so the request is authenticated (5000/hour
-  # rate limit) instead of anonymous (60/hour shared by IP across the
-  # runner pool — easy to exhaust on busy days). Two branches keep the
-  # quoting clean: building one with a header injected via shell
-  # variable would word-split badly.
+  # fetch_latest follows the github.com /releases/latest redirect and
+  # returns the version from the Location header (e.g.
+  # `https://github.com/.../releases/tag/v0.0.8` -> `0.0.8`). Curl's
+  # `-I` issues a HEAD request so the body is never downloaded; `-f`
+  # makes 4xx/5xx return non-zero so this falls into the retry loop
+  # instead of producing empty output downstream.
   fetch_latest() {
-    if [ -n "$GITHUB_TOKEN" ]; then
-      curl -fsSL \
-        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-        -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: vairdict-install.sh" \
-        "https://api.github.com/repos/${REPO}/releases/latest"
-    else
-      curl -fsSL \
-        -H "Accept: application/vnd.github+json" \
-        -H "User-Agent: vairdict-install.sh" \
-        "https://api.github.com/repos/${REPO}/releases/latest"
-    fi
+    curl -fsSI \
+      -H "User-Agent: vairdict-install.sh" \
+      "https://github.com/${REPO}/releases/latest" \
+      | awk 'tolower($1) == "location:" {
+                sub(/\r$/, "", $2)
+                n = split($2, a, "/")
+                v = a[n]
+                sub(/^v/, "", v)
+                print v
+                exit
+              }'
   }
 
-  # Retry on transient API failures (rate-limit blips, network jitter,
-  # transient 5xx). Without retry the latest-version probe is a single
-  # point of failure on every PR's review check.
+  # Retry on transient network blips. The redirect endpoint is the
+  # same path the tarball download will hit moments later, so a
+  # persistent failure here is a strong signal the rest will fail
+  # too — bail with a clear message rather than retrying forever.
   attempt=1
   while [ "$attempt" -le 3 ]; do
-    if VERSION="$(fetch_latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')" && [ -n "$VERSION" ]; then
+    if VERSION="$(fetch_latest)" && [ -n "$VERSION" ]; then
       break
     fi
-    echo "Attempt ${attempt}: failed to fetch latest version, retrying..." >&2
+    echo "Attempt ${attempt}: failed to resolve latest version, retrying..." >&2
     attempt=$((attempt + 1))
     sleep 2
   done
   if [ -z "$VERSION" ]; then
-    echo "Failed to detect latest version after 3 attempts. Set VERSION explicitly." >&2
+    echo "Failed to resolve latest version after 3 attempts. Set VERSION explicitly." >&2
     exit 1
   fi
 fi
