@@ -8,9 +8,47 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/github"
 	"github.com/vairdict/vairdict/internal/state"
 )
+
+// TestRunReview_ValidatesOnlyQualityJudge guards the regression where
+// `vairdict review` was rejecting the dogfood config in CI because
+// validateBackends insists on a `claude` binary on PATH for the
+// agents.coder slot — even though `vairdict review` never invokes the
+// coder. The review subcommand only ever runs the quality judge, so
+// it must validate that one role and nothing else.
+//
+// The scenario we reproduce is the exact one the auto-review action
+// hits: a stock CI runner with no `claude` CLI installed and an
+// Anthropic API key in env, against the in-repo vairdict.yaml where
+// `agents.judge: claude` (smart default).
+func TestRunReview_ValidatesOnlyQualityJudge(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code", // would fail validateCoderBackend with no CLI
+		Judge:   "claude",      // smart default — no binary required
+	}}
+	probes := backendProbes{
+		cliAvailable:  func(string) bool { return false },
+		apiKeyPresent: func() bool { return true },
+	}
+
+	// Sanity: the full validateBackends would reject this config.
+	if err := validateBackends(cfg, probes); err == nil {
+		t.Fatal("test setup is wrong: validateBackends must reject when claude binary is missing")
+	}
+
+	// What review.go now does: validate only the quality judge slot.
+	if err := validateCompleterBackend(
+		"agents.quality_judge",
+		cfg.Agents.QualityJudgeBackend(),
+		probes,
+	); err != nil {
+		t.Errorf("review-scoped validation must accept smart-default judge with no binary: %v", err)
+	}
+}
 
 // fakeReviewGH is a hand-rolled fake covering only the surface that
 // runReviewWith uses. Records every PostVerdict call so tests can assert

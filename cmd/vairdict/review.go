@@ -112,7 +112,18 @@ func runReview(prNumber int) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	if err := validateBackends(cfg, defaultBackendProbes()); err != nil {
+	// `vairdict review` only ever runs the quality judge — never the
+	// planner, the code judge, or the coder. Validating the full agent
+	// matrix would reject the run on a stock CI runner that has no
+	// `claude` binary installed (the coder probe in `validateBackends`
+	// is unconditional). Scope the pre-flight to the role we actually
+	// invoke so review-mode auto-review works on any runner with just
+	// an Anthropic API key.
+	if err := validateCompleterBackend(
+		"agents.quality_judge",
+		cfg.Agents.QualityJudgeBackend(),
+		defaultBackendProbes(),
+	); err != nil {
 		return fmt.Errorf("backend validation: %w", err)
 	}
 
