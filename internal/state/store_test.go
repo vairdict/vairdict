@@ -249,7 +249,7 @@ func TestUpdateTask(t *testing.T) {
 
 	_ = task.Transition(StatePlanning)
 	task.Assumptions = []Assumption{
-		{Description: "API is stable", Severity: SeverityP2, Phase: PhasePlan},
+		{Description: "API is stable", Severity: SeverityMedium, Phase: PhasePlan},
 	}
 	task.Attempts = []Attempt{
 		{Phase: PhasePlan, Loop: 0, CreatedAt: time.Now()},
@@ -361,12 +361,12 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	_ = task.Transition(StatePlanning)
 	task.LoopCount[PhasePlan] = 2
 	task.Assumptions = []Assumption{
-		{Description: "test assumption", Severity: SeverityP1, Phase: PhasePlan},
+		{Description: "test assumption", Severity: SeverityHigh, Phase: PhasePlan},
 	}
 	task.Attempts = []Attempt{
 		{
 			Phase: PhasePlan, Loop: 1,
-			Verdict:   &Verdict{Score: 0.8, Pass: true, Gaps: []Gap{{Severity: SeverityP2, Description: "minor gap", Blocking: false}}},
+			Verdict:   &Verdict{Score: 0.8, Pass: true, Gaps: []Gap{{Severity: SeverityMedium, Description: "minor gap", Blocking: false}}},
 			CreatedAt: time.Now(),
 		},
 	}
@@ -394,7 +394,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if len(got.Assumptions) != 1 {
 		t.Fatalf("expected 1 assumption, got %d", len(got.Assumptions))
 	}
-	if got.Assumptions[0].Severity != SeverityP1 {
+	if got.Assumptions[0].Severity != SeverityHigh {
 		t.Errorf("expected severity P1, got %s", got.Assumptions[0].Severity)
 	}
 	if len(got.Attempts) != 1 {
