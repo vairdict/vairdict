@@ -475,6 +475,82 @@ func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
+// docsOnlyMarker is a stable substring of the docs-only framing block
+// the judge prepends when IsSourceDiff(diff) returns false. Tests
+// assert presence/absence by this marker so wording can evolve without
+// churn-y test diffs.
+const docsOnlyMarker = "docs/scoping PR"
+
+// TestJudge_DocsOnlyFraming_PrependedWhenDiffMissesSourcePaths is the
+// regression test for issue #136 / PR #135. The judge must detect that
+// a diff touches no paths matching commands.test/build/lint and tell
+// the LLM to grade it as a docs/scoping PR rather than against
+// arbitrary code criteria.
+func TestJudge_DocsOnlyFraming_PrependedWhenDiffMissesSourcePaths(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{}}
+	cfg := testConfig()
+	cfg.Commands.Test = "pytest tests/"
+	judge := New(fake, nil, cfg)
+
+	diff := dffOnly("plans/PROGRESS.md", "plans/ROADMAP.md")
+	if _, err := judge.Judge(context.Background(), "intent", "plan", diff, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(fake.Calls) != 1 {
+		t.Fatalf("expected 1 completer call, got %d", len(fake.Calls))
+	}
+	prompt := fake.Calls[0].Prompt
+	if !strings.Contains(prompt, docsOnlyMarker) {
+		t.Errorf("expected docs-only framing in prompt; missing marker %q.\nprompt:\n%s",
+			docsOnlyMarker, prompt)
+	}
+}
+
+// TestJudge_DocsOnlyFraming_AbsentWhenDiffTouchesSourcePaths is the
+// inverse — when the diff lands inside a configured source path, the
+// docs-only framing must NOT appear, otherwise the judge will go soft
+// on legitimate code PRs.
+func TestJudge_DocsOnlyFraming_AbsentWhenDiffTouchesSourcePaths(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{}}
+	cfg := testConfig()
+	cfg.Commands.Test = "pytest tests/"
+	judge := New(fake, nil, cfg)
+
+	diff := dffOnly("tests/test_foo.py")
+	if _, err := judge.Judge(context.Background(), "intent", "plan", diff, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	prompt := fake.Calls[0].Prompt
+	if strings.Contains(prompt, docsOnlyMarker) {
+		t.Errorf("docs-only framing leaked into a source-touching diff.\nprompt:\n%s", prompt)
+	}
+}
+
+// TestJudge_DocsOnlyFraming_AbsentWhenNoSourcePrefixesDerivable
+// guards the conservative default: when commands have no derivable
+// source paths (e.g. `make build`), IsSourceDiff falls back to true
+// and the framing must NOT fire.
+func TestJudge_DocsOnlyFraming_AbsentWhenNoSourcePrefixesDerivable(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{}}
+	cfg := testConfig()
+	cfg.Commands.Build = "make build"
+	cfg.Commands.Test = "make test"
+	cfg.Commands.Lint = "make lint"
+	judge := New(fake, nil, cfg)
+
+	diff := dffOnly("plans/PROGRESS.md")
+	if _, err := judge.Judge(context.Background(), "intent", "plan", diff, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	prompt := fake.Calls[0].Prompt
+	if strings.Contains(prompt, docsOnlyMarker) {
+		t.Errorf("docs-only framing fired when no source prefixes are derivable.\nprompt:\n%s", prompt)
+	}
+}
+
 func TestJudge_SummaryRoundTrip(t *testing.T) {
 	want := "## Reviewed\n- Intent matches implementation\n\n## Notes\n- e2e tests still green"
 	fake := &claude.FakeClient{

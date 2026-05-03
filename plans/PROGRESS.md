@@ -5,17 +5,28 @@ Update this file when opening, completing, or blocking an issue.
 
 ---
 
-## Current Milestone: M5 — Parallelism
+## Current Milestone: M6 — Pluggable Agents
+
+M5 is effectively done (one open perf load-test, #82). M6 work has
+already started — #128, #129, #137 are merged.
 
 ---
 
 ## Ready to Start
-- #82 perf: load test 5 concurrent tasks
+- #82 perf: load test 5 concurrent tasks (final M5)
+- #127 agents/gemini: Gemini CLI completer
+- #88 config/standards: team standards in vairdict.yaml
 
 ## In Progress
-- #91 cmd/interactive: status, notes, pause/continue during execution
+- #136 bug(judge/auto-review): wrong intent on docs/scoping PRs
 
 ## Blocked
+- #130 resolver: extend auto backend resolver — needs #126 + #127
+- #132 agents/codex: Codex CLI coder — needs #130
+- #133 agents/gemini: Gemini CLI coder — needs #130
+- #131 docs: agent backend selection guide — needs all M6 backend issues
+- #134 test/m6: cross-backend integration + e2e tests — needs all M6 backend issues
+- #89 phases/inner-loop: plan/execute/verify micro-cycle — needs M5 rewind work stable
 
 ## Done
 - #9 chore: repo infrastructure setup
@@ -71,7 +82,11 @@ Update this file when opening, completing, or blocking an issue.
 - #112 cmd: @vairdict fix — push code changes from PR comments
 - #113 cmd: @vairdict run — trigger full plan/code/quality loop from PR comment
 - #90 cmd/resume: resume interrupted run from last checkpoint
+- #91 cmd/interactive: status, notes, pause/continue during execution
 - #126 agents/codex: Codex CLI completer + resolver wiring (M6)
+- #128 config: per-phase backend selection in vairdict.yaml (M6)
+- #129 judge/pluggable: swap judge model in vairdict.yaml (M6)
+- #137 perf/plan: cut multi-loop latency on the plan phase (M6)
 
 ---
 
@@ -167,6 +182,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 15/17       |
-| M6        | in progress | 1/9         |
+| M5        | in progress | 16/17       |
+| M6        | in progress | 4/12        |
 | M7+       | not started | —           |

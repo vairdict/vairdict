@@ -741,26 +741,44 @@ func TestFetchPRDiff(t *testing.T) {
 
 func TestParseLinkedIssue(t *testing.T) {
 	cases := []struct {
+		name string
 		body string
 		want int
 	}{
-		{"Closes #42", 42},
-		{"closes #42", 42},
-		{"Fixes #7\n\nlots of context", 7},
-		{"Resolves #123 — done", 123},
-		{"fixed #5", 5},
-		{"resolved #5", 5},
-		{"some text Closes: #99", 99},
-		{"## Issue\nCloses #48\n", 48},
-		{"no linked issue here", 0},
-		{"#42 alone is not enough", 0},
-		{"see #42 for context", 0},
-		{"", 0},
+		// Positives — closing keyword directly attached to the #N ref.
+		{"closes capitalised", "Closes #42", 42},
+		{"closes lowercase", "closes #42", 42},
+		{"fixes with body", "Fixes #7\n\nlots of context", 7},
+		{"resolves with em-dash", "Resolves #123 — done", 123},
+		{"fixed past tense", "fixed #5", 5},
+		{"resolved past tense", "resolved #5", 5},
+		{"closes with colon", "some text Closes: #99", 99},
+		{"closes after heading", "## Issue\nCloses #48\n", 48},
+
+		// Negatives — no closing keyword, or keyword separated from #N.
+		{"plain prose", "no linked issue here", 0},
+		{"bare ref", "#42 alone is not enough", 0},
+		{"see ref", "see #42 for context", 0},
+		{"empty", "", 0},
+
+		// Negatives that the previous (greedy) regex got wrong — the
+		// keyword and the #N must be adjacent, otherwise the body is just
+		// referring to an issue, not committing to close it. These are
+		// the PR #135 / issue #136 reproducers.
+		{"fixes typo while referring to ref", "This PR fixes a typo while preparing for #126.", 0},
+		{"closes far from ref", "Closes the connection bug discussed in PR #135 about #126", 0},
+		{"fix preceding ref by word", "fix typo in #126 doc", 0},
+		{"unblocks bare ref", "Unblocks #126 work — docs only", 0},
+		{"updates bare refs", "Updates PROGRESS.md to track #126 progress and #128 too.", 0},
+		{"verbatim PR135 body", "No code changes — docs only.\n\nUnblocks #126 by recording that #128 has landed.", 0},
+		{"close in different sentence", "Closes the loop on logging.\nSee related discussion in #200.", 0},
 	}
 	for _, tc := range cases {
-		if got := ParseLinkedIssue(tc.body); got != tc.want {
-			t.Errorf("ParseLinkedIssue(%q) = %d, want %d", tc.body, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ParseLinkedIssue(tc.body); got != tc.want {
+				t.Errorf("ParseLinkedIssue(%q) = %d, want %d", tc.body, got, tc.want)
+			}
+		})
 	}
 }
 

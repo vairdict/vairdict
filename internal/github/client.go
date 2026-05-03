@@ -289,9 +289,13 @@ func (c *Client) FetchPRDiff(ctx context.Context, number int) (string, error) {
 }
 
 // linkedIssueRe matches GitHub's PR-closes-issue keywords. Case-insensitive,
-// matches `Closes #12`, `fixes #34`, `Resolves: #56`, etc. Captures the
-// issue number into group 1.
-var linkedIssueRe = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[^\n#]*#(\d+)`)
+// matches `Closes #12`, `fixes #34`, `Resolves: #56`, etc. The keyword and
+// the `#N` reference must be adjacent (optionally separated by `:` and
+// whitespace) — GitHub's own keyword spec requires this, and a looser
+// pattern produces false positives on prose like "this fixes a typo while
+// preparing for #126" (issue #136). Captures the issue number into
+// group 1.
+var linkedIssueRe = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)`)
 
 // ParseLinkedIssue scans a PR body for the first GitHub closing-keyword
 // reference (Closes/Fixes/Resolves) and returns the linked issue number,

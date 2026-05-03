@@ -740,6 +740,15 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	// review, not after it has already started forming opinions. Empty
 	// for first-round reviews (priorGaps==nil).
 	framing := RenderCrossPushFraming(priorGaps)
+	// Docs-only framing fires when the diff touches no path the
+	// repo's commands.build/test/lint configuration treats as source
+	// (issue #136). Conservative default — only fires when concrete
+	// source prefixes are derivable from the commands; ambiguous
+	// configurations (e.g. `make build`, `go build ./...`) leave this
+	// empty and the judge grades against the intent as before.
+	if !IsSourceDiff(diff, j.cfg.Commands) {
+		framing += renderDocsOnlyFraming()
+	}
 	acSection := verdictschema.RenderACSection(checklist)
 	prompt := fmt.Sprintf(
 		"%s## Original Intent\n%s\n\n## Approved Plan\n%s%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
