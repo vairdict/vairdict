@@ -107,6 +107,29 @@ func TestCLIRendererWritesOutput(t *testing.T) {
 	}
 }
 
+func TestCLIRendererPhaseDelta_StreamsToWriter(t *testing.T) {
+	var buf bytes.Buffer
+	r := New(Options{Out: &buf, Mode: ModeCLI, Colors: ColorsNone})
+	dp, ok := r.(DeltaPrinter)
+	if !ok {
+		t.Fatalf("cliRenderer must implement DeltaPrinter")
+	}
+	dp.PhaseDelta(state.PhasePlan, "first ")
+	dp.PhaseDelta(state.PhasePlan, "second ")
+	dp.PhaseDelta(state.PhasePlan, "third")
+	if got := buf.String(); got != "first second third" {
+		t.Errorf("expected concatenated stream, got %q", got)
+	}
+}
+
+func TestJSONRendererDoesNotImplementDeltaPrinter(t *testing.T) {
+	var buf bytes.Buffer
+	r := New(Options{Out: &buf, Mode: ModeJSON})
+	if _, ok := r.(DeltaPrinter); ok {
+		t.Error("json renderer must NOT implement DeltaPrinter — would mangle structured output")
+	}
+}
+
 func TestJSONRendererEmitsValidJSON(t *testing.T) {
 	var buf bytes.Buffer
 	r := New(Options{Out: &buf, Mode: ModeJSON})

@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vairdict/vairdict/internal/agents/claude"
+	"github.com/vairdict/vairdict/internal/agents/claudecli"
 	"github.com/vairdict/vairdict/internal/config"
+	"github.com/vairdict/vairdict/internal/state"
 )
 
 func TestChooseBackend(t *testing.T) {
@@ -168,6 +171,89 @@ func TestResolveCompleter_JudgeModelOverride(t *testing.T) {
 		if got := c.Model(); got != "claude-opus-4-7" {
 			t.Errorf("%s client model = %q, want claude-opus-4-7 (judge_model)", role, got)
 		}
+	}
+}
+
+// TestResolveCompleter_PlanJudgeCapsMaxTokens: the plan-judge API
+// client must cap max_tokens at 1024 (planJudgeMaxTokens) so verdicts
+// don't pay 4096 headroom they never use. Other roles keep the 4096
+// default. #137.
+func TestResolveCompleter_PlanJudgeCapsMaxTokens(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-maxtokens")
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude-api",
+		Judge:   "claude-api",
+		Model:   "claude-sonnet-4-20250514",
+	}}
+
+	cases := []struct {
+		role completerRole
+		want int
+	}{
+		{rolePlanJudge, planJudgeMaxTokens},
+		{rolePlanner, 4096},
+		{roleQualityJudge, 4096},
+		{roleCodeJudge, 4096},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.role), func(t *testing.T) {
+			c, _, err := resolveCompleter(cfg, tc.role)
+			if err != nil {
+				t.Fatalf("resolveCompleter(%s): %v", tc.role, err)
+			}
+			cc, ok := c.(*claude.Client)
+			if !ok {
+				t.Fatalf("expected *claude.Client for %s, got %T", tc.role, c)
+			}
+			if got := cc.MaxTokens(); got != tc.want {
+				t.Errorf("%s max_tokens = %d, want %d", tc.role, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSeedAndCaptureCLISession: the wiring between state.Task and the
+// claudecli.Client must round-trip cleanly so a `vairdict resume` after
+// an interrupt mid-plan-phase reattaches to the same session, and so
+// loop 2+ within a single phase reuses the session captured on loop 1.
+// #137.
+func TestSeedAndCaptureCLISession(t *testing.T) {
+	cli := claudecli.New()
+	task := state.NewTask("t1", "intent")
+
+	// 1. Seed with a session id from a prior run — Client picks it up.
+	task.CLISessionIDs = map[string]string{string(rolePlanner): "sess_seeded"}
+	seedCLISession(cli, task, rolePlanner)
+	if cli.SessionID() != "sess_seeded" {
+		t.Errorf("seedCLISession: client SessionID = %q, want sess_seeded", cli.SessionID())
+	}
+
+	// 2. Capture writes the current id back to the task. Simulate a
+	//    fresh id that overrides the seeded one (as a real call would).
+	cli.SetSessionID("sess_after_call")
+	emptyTask := state.NewTask("t2", "intent")
+	captureCLISession(cli, emptyTask, rolePlanner)
+	if emptyTask.CLISessionIDs[string(rolePlanner)] != "sess_after_call" {
+		t.Errorf("captureCLISession: task CLISessionIDs[planner] = %q, want sess_after_call",
+			emptyTask.CLISessionIDs[string(rolePlanner)])
+	}
+}
+
+func TestSeedCLISession_NoOpForAPIClient(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	apiClient, err := claude.NewClient(nil)
+	if err != nil {
+		t.Fatalf("creating api client: %v", err)
+	}
+	task := state.NewTask("t", "i")
+	task.CLISessionIDs = map[string]string{string(rolePlanner): "ignored"}
+	// Must not panic; api client doesn't have a session concept.
+	seedCLISession(apiClient, task, rolePlanner)
+	captureCLISession(apiClient, task, rolePlanner)
+	// Original entry stays untouched (capture doesn't add anything for
+	// the api client because it has no session to capture).
+	if task.CLISessionIDs[string(rolePlanner)] != "ignored" {
+		t.Errorf("api client should not affect task session ids, got %v", task.CLISessionIDs)
 	}
 }
 

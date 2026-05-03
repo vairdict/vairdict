@@ -90,6 +90,71 @@ func TestCreateAndGetTask_HardConstraintsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateAndGetTask_CLISessionIDsRoundTrip(t *testing.T) {
+	// #137: cli_session_ids column persists per-role Claude CLI session
+	// IDs so `vairdict resume` reattaches to the same session a previous
+	// run established instead of starting fresh.
+	store := newTestStore(t)
+	task := NewTask("task-cli", "ship the streaming feature")
+	task.CLISessionIDs = map[string]string{
+		"planner":    "sess_planner_abc",
+		"plan_judge": "sess_judge_xyz",
+	}
+
+	if err := store.CreateTask(task); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	got, err := store.GetTask("task-cli")
+	if err != nil {
+		t.Fatalf("getting task: %v", err)
+	}
+	if len(got.CLISessionIDs) != 2 {
+		t.Fatalf("expected 2 session ids, got %d: %v", len(got.CLISessionIDs), got.CLISessionIDs)
+	}
+	if got.CLISessionIDs["planner"] != "sess_planner_abc" {
+		t.Errorf("planner session id = %q, want sess_planner_abc", got.CLISessionIDs["planner"])
+	}
+	if got.CLISessionIDs["plan_judge"] != "sess_judge_xyz" {
+		t.Errorf("plan_judge session id = %q, want sess_judge_xyz", got.CLISessionIDs["plan_judge"])
+	}
+
+	// Update path: add a new role, change an existing one.
+	got.CLISessionIDs["planner"] = "sess_planner_updated"
+	got.CLISessionIDs["quality_judge"] = "sess_quality_new"
+	got.UpdatedAt = time.Now()
+	if err := store.UpdateTask(got); err != nil {
+		t.Fatalf("updating task: %v", err)
+	}
+	refetched, err := store.GetTask("task-cli")
+	if err != nil {
+		t.Fatalf("refetching: %v", err)
+	}
+	if refetched.CLISessionIDs["planner"] != "sess_planner_updated" {
+		t.Errorf("updated planner session id mismatch: %q", refetched.CLISessionIDs["planner"])
+	}
+	if refetched.CLISessionIDs["quality_judge"] != "sess_quality_new" {
+		t.Errorf("new quality_judge session id mismatch: %q", refetched.CLISessionIDs["quality_judge"])
+	}
+}
+
+func TestCreateAndGetTask_NoCLISessionIDs(t *testing.T) {
+	// Tasks created without any CLI session IDs (API path or pre-#137)
+	// must round-trip a nil/empty map cleanly — no panics, no spurious
+	// entries.
+	store := newTestStore(t)
+	task := NewTask("task-no-cli", "intent")
+	if err := store.CreateTask(task); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	got, err := store.GetTask("task-no-cli")
+	if err != nil {
+		t.Fatalf("getting task: %v", err)
+	}
+	if len(got.CLISessionIDs) != 0 {
+		t.Errorf("expected empty session map, got %v", got.CLISessionIDs)
+	}
+}
+
 func TestCreateAndGetTask_RewindContextsRoundTrip(t *testing.T) {
 	// #86: rewind_contexts column must persist and hydrate so structured
 	// failure context survives a process restart. Without persistence,
@@ -184,7 +249,7 @@ func TestUpdateTask(t *testing.T) {
 
 	_ = task.Transition(StatePlanning)
 	task.Assumptions = []Assumption{
-		{Description: "API is stable", Severity: SeverityP2, Phase: PhasePlan},
+		{Description: "API is stable", Severity: SeverityMedium, Phase: PhasePlan},
 	}
 	task.Attempts = []Attempt{
 		{Phase: PhasePlan, Loop: 0, CreatedAt: time.Now()},
@@ -296,12 +361,12 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	_ = task.Transition(StatePlanning)
 	task.LoopCount[PhasePlan] = 2
 	task.Assumptions = []Assumption{
-		{Description: "test assumption", Severity: SeverityP1, Phase: PhasePlan},
+		{Description: "test assumption", Severity: SeverityHigh, Phase: PhasePlan},
 	}
 	task.Attempts = []Attempt{
 		{
 			Phase: PhasePlan, Loop: 1,
-			Verdict:   &Verdict{Score: 0.8, Pass: true, Gaps: []Gap{{Severity: SeverityP2, Description: "minor gap", Blocking: false}}},
+			Verdict:   &Verdict{Score: 0.8, Pass: true, Gaps: []Gap{{Severity: SeverityMedium, Description: "minor gap", Blocking: false}}},
 			CreatedAt: time.Now(),
 		},
 	}
@@ -329,7 +394,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if len(got.Assumptions) != 1 {
 		t.Fatalf("expected 1 assumption, got %d", len(got.Assumptions))
 	}
-	if got.Assumptions[0].Severity != SeverityP1 {
+	if got.Assumptions[0].Severity != SeverityHigh {
 		t.Errorf("expected severity P1, got %s", got.Assumptions[0].Severity)
 	}
 	if len(got.Attempts) != 1 {

@@ -710,3 +710,97 @@ func TestBuildFeedbackSummary(t *testing.T) {
 		t.Errorf("expected question, got: %s", summary)
 	}
 }
+
+// --- Streaming planner tests (#137) ---
+
+// streamingClient is a test double that implements both Planner and the
+// streamingPlanner capability. blockingCalls / streamingCalls let tests
+// assert which dispatch path was actually taken.
+type streamingClient struct {
+	response       plannerResponse
+	deltaChunks    []string
+	blockingCalls  int
+	streamingCalls int
+}
+
+func (s *streamingClient) CompleteWithSystem(_ context.Context, _, _ string, target any) error {
+	s.blockingCalls++
+	data, _ := json.Marshal(s.response)
+	return json.Unmarshal(data, target)
+}
+
+func (s *streamingClient) CompleteWithSystemStream(_ context.Context, _, _ string, target any, onDelta func(text string)) error {
+	s.streamingCalls++
+	for _, c := range s.deltaChunks {
+		if onDelta != nil {
+			onDelta(c)
+		}
+	}
+	data, _ := json.Marshal(s.response)
+	return json.Unmarshal(data, target)
+}
+
+func TestPlanPhase_OnDeltaWithStreamingClient_UsesStreamingPath(t *testing.T) {
+	planner := &streamingClient{
+		response:    passingPlanResponse(),
+		deltaChunks: []string{"chunk-1 ", "chunk-2"},
+	}
+	judge := &fakeJudge{verdicts: []*state.Verdict{passingVerdict()}}
+
+	phase := New(planner, judge, testConfig())
+	var got []string
+	phase.OnDelta = func(text string) { got = append(got, text) }
+
+	if _, err := phase.Run(context.Background(), newPendingTask()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if planner.streamingCalls != 1 {
+		t.Errorf("expected 1 streaming call, got %d", planner.streamingCalls)
+	}
+	if planner.blockingCalls != 0 {
+		t.Errorf("expected 0 blocking calls, got %d", planner.blockingCalls)
+	}
+	if strings.Join(got, "") != "chunk-1 chunk-2" {
+		t.Errorf("delta accumulator mismatch: %v", got)
+	}
+}
+
+func TestPlanPhase_NoOnDelta_UsesBlockingPath(t *testing.T) {
+	// Default behavior — no OnDelta set, even on a streaming-capable
+	// client we must not pay the SSE cost.
+	planner := &streamingClient{response: passingPlanResponse()}
+	judge := &fakeJudge{verdicts: []*state.Verdict{passingVerdict()}}
+
+	phase := New(planner, judge, testConfig())
+
+	if _, err := phase.Run(context.Background(), newPendingTask()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if planner.streamingCalls != 0 {
+		t.Errorf("expected 0 streaming calls when OnDelta nil, got %d", planner.streamingCalls)
+	}
+	if planner.blockingCalls != 1 {
+		t.Errorf("expected 1 blocking call, got %d", planner.blockingCalls)
+	}
+}
+
+func TestPlanPhase_OnDeltaSet_NonStreamingClient_FallsBack(t *testing.T) {
+	// multiResponseClient does NOT implement streamingPlanner. Setting
+	// OnDelta must not blow up — fall back to the blocking path.
+	planner := &multiResponseClient{responses: []any{passingPlanResponse()}}
+	judge := &fakeJudge{verdicts: []*state.Verdict{passingVerdict()}}
+
+	phase := New(planner, judge, testConfig())
+	deltaCalls := 0
+	phase.OnDelta = func(string) { deltaCalls++ }
+
+	if _, err := phase.Run(context.Background(), newPendingTask()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deltaCalls != 0 {
+		t.Errorf("expected OnDelta unused on non-streaming client, got %d calls", deltaCalls)
+	}
+	if len(planner.calls) != 1 {
+		t.Errorf("expected 1 blocking call, got %d", len(planner.calls))
+	}
+}

@@ -760,6 +760,364 @@ func TestCompleteWithTools_UnknownTool(t *testing.T) {
 	}
 }
 
+// --- Prompt caching tests (#137) ---
+
+// largeSystemPrompt is a system prompt deterministically padded above the
+// cache threshold so caching tests don't depend on the exact threshold value.
+func largeSystemPrompt() string {
+	const base = "You are a senior engineer. "
+	out := strings.Builder{}
+	for out.Len() < cacheThresholdChars+256 {
+		out.WriteString(base)
+	}
+	return out.String()
+}
+
+func TestCompleteWithSystem_CacheControlAboveThreshold(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var rawBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	sys := largeSystemPrompt()
+	if err := c.CompleteWithSystem(context.Background(), sys, "prompt", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Inspect the marshalled body — System should be a typed-block array
+	// with cache_control.ephemeral, not a string.
+	var probe struct {
+		System []struct {
+			Type         string         `json:"type"`
+			Text         string         `json:"text"`
+			CacheControl map[string]any `json:"cache_control"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(rawBody, &probe); err != nil {
+		t.Fatalf("decoding request body: %v\nraw: %s", err, rawBody)
+	}
+	if len(probe.System) != 1 {
+		t.Fatalf("expected 1 system block, got %d (raw: %s)", len(probe.System), rawBody)
+	}
+	if probe.System[0].Type != "text" {
+		t.Errorf("expected system block type=text, got %q", probe.System[0].Type)
+	}
+	if probe.System[0].Text != sys {
+		t.Errorf("system block text mismatch (len=%d vs %d)", len(probe.System[0].Text), len(sys))
+	}
+	if got := probe.System[0].CacheControl["type"]; got != "ephemeral" {
+		t.Errorf("expected cache_control.type=ephemeral, got %v", got)
+	}
+}
+
+func TestCompleteWithSystem_NoCacheControlBelowThreshold(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var rawBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	if err := c.CompleteWithSystem(context.Background(), "you are a judge", "prompt", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Below the threshold, system must be a plain string — preserves
+	// existing behavior and avoids paying the cache-write cost on small
+	// prefixes.
+	var probe struct {
+		System json.RawMessage `json:"system"`
+	}
+	if err := json.Unmarshal(rawBody, &probe); err != nil {
+		t.Fatalf("decoding request body: %v", err)
+	}
+	if len(probe.System) == 0 || probe.System[0] != '"' {
+		t.Errorf("expected system to be a JSON string, got %s", probe.System)
+	}
+	if strings.Contains(string(rawBody), "cache_control") {
+		t.Errorf("expected no cache_control on small system prompt, got body: %s", rawBody)
+	}
+}
+
+func TestCompleteWithSystem_EmptySystemOmitted(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var rawBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	if err := c.Complete(context.Background(), "prompt", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(string(rawBody), `"system"`) {
+		t.Errorf("expected empty system to be omitted, got body: %s", rawBody)
+	}
+}
+
+func TestCompleteWithTool_CacheControlAboveThreshold(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var rawBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		resp := messagesResponse{
+			Content: []contentBlock{{
+				Type:  "tool_use",
+				Name:  "submit_verdict",
+				Input: json.RawMessage(`{"answer":"ok"}`),
+			}},
+			StopReason: "tool_use",
+		}
+		data, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tool := Tool{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}
+	var result testResult
+	if err := c.CompleteWithTool(context.Background(), largeSystemPrompt(), "prompt", tool, &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(rawBody), `"cache_control":{"type":"ephemeral"}`) {
+		t.Errorf("expected cache_control marker on tool call, got body: %s", truncateForLog(string(rawBody), 500))
+	}
+}
+
+func TestCompleteWithTools_CacheControlAboveThreshold(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var rawBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeToolUseResponse("t1", "submit_verdict", json.RawMessage(`{"answer":"done"}`))))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result testResult
+	err = c.CompleteWithTools(context.Background(), largeSystemPrompt(), "prompt",
+		[]Tool{{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}},
+		"submit_verdict", nil, &result)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(rawBody), `"cache_control":{"type":"ephemeral"}`) {
+		t.Errorf("expected cache_control marker on multi-turn call, got body: %s", truncateForLog(string(rawBody), 500))
+	}
+}
+
+func TestUsage_CacheTokensDecoded(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := messagesResponse{
+			Content:    []contentBlock{{Type: "text", Text: `{"answer":"cached","score":1}`}},
+			StopReason: "end_turn",
+			Usage: usage{
+				InputTokens:              4,
+				OutputTokens:             7,
+				CacheCreationInputTokens: 1500,
+				CacheReadInputTokens:     2300,
+			},
+		}
+		data, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Drive a successful call; the test verifies the usage struct
+	// can decode cache fields without dropping them.
+	var result testResult
+	if err := c.Complete(context.Background(), "prompt", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Answer != "cached" {
+		t.Errorf("unexpected result: %+v", result)
+	}
+
+	// Direct round-trip check on the usage struct so the response
+	// shape regression is caught even if logging is changed later.
+	var u usage
+	body, _ := json.Marshal(map[string]int{
+		"input_tokens":                4,
+		"output_tokens":               7,
+		"cache_creation_input_tokens": 1500,
+		"cache_read_input_tokens":     2300,
+	})
+	if err := json.Unmarshal(body, &u); err != nil {
+		t.Fatalf("decoding usage: %v", err)
+	}
+	if u.CacheCreationInputTokens != 1500 || u.CacheReadInputTokens != 2300 {
+		t.Errorf("cache tokens not decoded: %+v", u)
+	}
+}
+
+// truncateForLog avoids dragging the full base64-sized request body into
+// test failure output. Only used for assertion error messages.
+func truncateForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
+}
+
+// --- Per-client max_tokens tests (#137) ---
+
+func TestWithMaxTokens_DefaultsTo4096(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	if err := c.Complete(context.Background(), "p", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != defaultMaxTokens {
+		t.Errorf("expected default max_tokens=%d, got %d", defaultMaxTokens, captured.MaxTokens)
+	}
+}
+
+func TestWithMaxTokens_OverridesDefault(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithMaxTokens(1024))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	if err := c.Complete(context.Background(), "p", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != 1024 {
+		t.Errorf("expected max_tokens=1024, got %d", captured.MaxTokens)
+	}
+}
+
+func TestWithMaxTokens_NonPositiveIgnored(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(makeMessagesResponse(`{"answer":"ok","score":1}`)))
+	}))
+	defer srv.Close()
+
+	// 0 should fall through to the default — protects callers that
+	// pass a config-derived value without a sentinel guard.
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithMaxTokens(0))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	if err := c.Complete(context.Background(), "p", &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != defaultMaxTokens {
+		t.Errorf("expected default max_tokens when 0 passed, got %d", captured.MaxTokens)
+	}
+}
+
+func TestWithMaxTokens_AppliesToToolCall(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+
+	var captured messagesRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		resp := messagesResponse{
+			Content: []contentBlock{{
+				Type:  "tool_use",
+				Name:  "submit_verdict",
+				Input: json.RawMessage(`{"answer":"ok"}`),
+			}},
+			StopReason: "tool_use",
+		}
+		data, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(nil, WithEndpoint(srv.URL), WithMaxTokens(1024))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result testResult
+	tool := Tool{Name: "submit_verdict", InputSchema: json.RawMessage(`{}`)}
+	if err := c.CompleteWithTool(context.Background(), "", "p", tool, &result); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if captured.MaxTokens != 1024 {
+		t.Errorf("expected max_tokens=1024 on tool call, got %d", captured.MaxTokens)
+	}
+}
+
 func TestExtractJSON(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -150,6 +150,15 @@ type Renderer interface {
 	Close() error
 }
 
+// DeltaPrinter is the optional capability satisfied by renderers that
+// can show streaming planner output. cli mode implements it; json and
+// ci modes do not — for those, deltas would mangle structured output.
+// Callers in cmd/vairdict/run.go type-assert against this and wire
+// PlanPhase.OnDelta only when the renderer supports it.
+type DeltaPrinter interface {
+	PhaseDelta(phase state.Phase, text string)
+}
+
 // PaletteForCLI extracts the palette from a Renderer if it is the CLI
 // renderer. Returns a zero palette (no ANSI escapes) for other renderers.
 // This is used by the spinner, which writes directly to stdout.

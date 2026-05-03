@@ -28,6 +28,14 @@ func setupTestRepo(t *testing.T) string {
 	run("init", "-b", "main")
 	run("config", "user.email", "test@test.com")
 	run("config", "user.name", "test")
+	// Disable commit signing for the test fixture. CI / sandbox
+	// environments may inherit a global signing config that injects
+	// itself into every `git commit` and fails on temp repos that
+	// don't have a matching key. This setting is scoped to the
+	// per-test temp repo only and does not change anything about
+	// how vairdict signs production commits.
+	run("config", "commit.gpgsign", "false")
+	run("config", "tag.gpgsign", "false")
 
 	// Create an initial commit so HEAD exists.
 	initial := filepath.Join(dir, "README.md")

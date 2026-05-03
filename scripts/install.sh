@@ -7,8 +7,18 @@
 # Respects:
 #   INSTALL_DIR  — where to put the binary (default: /usr/local/bin)
 #   VERSION      — specific version to install (default: latest)
+#   GITHUB_TOKEN — bearer token for the releases API call. When set,
+#                  the latest-version probe is authenticated, raising
+#                  the rate limit from 60/hour (anon) to 5000/hour
+#                  and avoiding the "Failed to detect latest version"
+#                  exit that hits CI runner pools sharing IP space.
 
 set -e
+# pipefail makes a curl failure inside a `curl | grep | sed` pipeline
+# propagate to set -e instead of producing empty output that the
+# downstream tools cheerfully consume. Posix /bin/sh doesn't all
+# support `set -o pipefail`; guard so this still runs on dash etc.
+(set -o pipefail) 2>/dev/null && set -o pipefail || true
 
 REPO="vairdict/vairdict"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
@@ -39,9 +49,41 @@ esac
 # --- Resolve version ---
 
 if [ -z "$VERSION" ]; then
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')"
+  # fetch_latest queries the releases/latest API. When GITHUB_TOKEN is
+  # set, sends Authorization so the request is authenticated (5000/hour
+  # rate limit) instead of anonymous (60/hour shared by IP across the
+  # runner pool — easy to exhaust on busy days). Two branches keep the
+  # quoting clean: building one with a header injected via shell
+  # variable would word-split badly.
+  fetch_latest() {
+    if [ -n "$GITHUB_TOKEN" ]; then
+      curl -fsSL \
+        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "User-Agent: vairdict-install.sh" \
+        "https://api.github.com/repos/${REPO}/releases/latest"
+    else
+      curl -fsSL \
+        -H "Accept: application/vnd.github+json" \
+        -H "User-Agent: vairdict-install.sh" \
+        "https://api.github.com/repos/${REPO}/releases/latest"
+    fi
+  }
+
+  # Retry on transient API failures (rate-limit blips, network jitter,
+  # transient 5xx). Without retry the latest-version probe is a single
+  # point of failure on every PR's review check.
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    if VERSION="$(fetch_latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')" && [ -n "$VERSION" ]; then
+      break
+    fi
+    echo "Attempt ${attempt}: failed to fetch latest version, retrying..." >&2
+    attempt=$((attempt + 1))
+    sleep 2
+  done
   if [ -z "$VERSION" ]; then
-    echo "Failed to detect latest version. Set VERSION explicitly." >&2
+    echo "Failed to detect latest version after 3 attempts. Set VERSION explicitly." >&2
     exit 1
   fi
 fi

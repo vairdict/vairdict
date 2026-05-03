@@ -26,6 +26,12 @@ const (
 	defaultMaxTokens        = 4096
 	maxRetries              = 3
 	baseBackoff             = 1 * time.Second
+
+	// cacheThresholdChars is the minimum size of a system prompt before the
+	// client adds an ephemeral cache_control marker. ~4 chars/token gives
+	// roughly 1024 tokens — Anthropic's documented minimum cacheable prefix.
+	// Below this, paying the cache-write cost isn't worth it.
+	cacheThresholdChars = 4096
 )
 
 // AuthError is returned when the API key is missing or rejected.
@@ -71,14 +77,55 @@ func (e *APIError) Error() string {
 }
 
 // messagesRequest is the request body for the Anthropic Messages API.
+//
+// System is `any` so the client can send the field either as a plain
+// string (small prompts) or as a typed-block array carrying a
+// cache_control marker (large prompts that benefit from prompt
+// caching). Use systemPayload to construct the value.
 type messagesRequest struct {
 	Model       string      `json:"model"`
 	MaxTokens   int         `json:"max_tokens"`
-	System      string      `json:"system,omitempty"`
+	System      any         `json:"system,omitempty"`
 	Messages    []message   `json:"messages"`
 	Temperature *float64    `json:"temperature,omitempty"`
 	Tools       []Tool      `json:"tools,omitempty"`
 	ToolChoice  *ToolChoice `json:"tool_choice,omitempty"`
+}
+
+// systemBlock is the typed-content-block form of a system prompt. Used
+// when the prompt is large enough to benefit from prompt caching; below
+// the threshold the client sends `system` as a plain string instead.
+type systemBlock struct {
+	Type         string        `json:"type"`
+	Text         string        `json:"text"`
+	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+// cacheControl marks a content block as cacheable. "ephemeral" is the
+// only currently-supported type; Anthropic stores the cached prefix for
+// ~5 minutes.
+type cacheControl struct {
+	Type string `json:"type"`
+}
+
+// systemPayload returns the value to send as the `system` field. An
+// empty string returns nil so omitempty drops the field; below the
+// cache threshold it returns the plain string (preserving existing
+// behavior); at or above the threshold it returns a single typed text
+// block carrying an ephemeral cache_control marker so Anthropic caches
+// the prefix between calls.
+func systemPayload(text string) any {
+	if text == "" {
+		return nil
+	}
+	if len(text) >= cacheThresholdChars {
+		return []systemBlock{{
+			Type:         "text",
+			Text:         text,
+			CacheControl: &cacheControl{Type: "ephemeral"},
+		}}
+	}
+	return text
 }
 
 type message struct {
@@ -139,6 +186,14 @@ type ToolHandler func(ctx context.Context, input json.RawMessage) (string, error
 type usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// CacheCreationInputTokens is the number of input tokens written to
+	// the prompt cache on this request. Non-zero on the first call that
+	// crosses the cache threshold and pays the cache-write cost.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	// CacheReadInputTokens is the number of input tokens read from the
+	// prompt cache. Non-zero on subsequent calls that hit a still-warm
+	// cached prefix — the dominant lever for plan-phase loop latency.
+	CacheReadInputTokens int `json:"cache_read_input_tokens"`
 }
 
 // HTTPClient is the interface for making HTTP requests. This allows injecting
@@ -154,6 +209,7 @@ type Client struct {
 	endpoint    string
 	httpClient  HTTPClient
 	temperature *float64
+	maxTokens   int
 }
 
 // Option configures a Client.
@@ -188,6 +244,19 @@ func WithTemperature(t float64) Option {
 	}
 }
 
+// WithMaxTokens caps max_tokens on every request from this client.
+// Defaults to defaultMaxTokens (4096). The plan judge uses this with
+// 1024 — verdicts are typically 300-800 tokens, the larger default
+// just buys headroom that's never used. Non-positive values are
+// ignored so callers can pass a config-derived 0 without surprise.
+func WithMaxTokens(n int) Option {
+	return func(cl *Client) {
+		if n > 0 {
+			cl.maxTokens = n
+		}
+	}
+}
+
 // NewClient creates a new Anthropic API client. It resolves the API key from:
 // 1. ANTHROPIC_API_KEY environment variable
 // 2. ~/.config/vairdict/config.yaml
@@ -212,6 +281,7 @@ func NewClient(cfg *config.Config, opts ...Option) (*Client, error) {
 		model:      model,
 		endpoint:   defaultEndpoint,
 		httpClient: &http.Client{Timeout: 120 * time.Second},
+		maxTokens:  defaultMaxTokens,
 	}
 
 	for _, opt := range opts {
@@ -233,13 +303,19 @@ func (c *Client) Complete(ctx context.Context, prompt string, target any) error 
 // it so PR comments and logs can show which model graded the change.
 func (c *Client) Model() string { return c.model }
 
+// MaxTokens returns the max_tokens value the client caps every request
+// at. Defaults to defaultMaxTokens (4096); the plan judge constructs
+// a client with WithMaxTokens(1024). Exposed for symmetry with Model()
+// so the resolver can be unit-tested.
+func (c *Client) MaxTokens() int { return c.maxTokens }
+
 // CompleteWithSystem sends a prompt with a system message to the Anthropic
 // Messages API and unmarshals the JSON response into the target struct.
 func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, target any) error {
 	reqBody := messagesRequest{
 		Model:       c.model,
-		MaxTokens:   defaultMaxTokens,
-		System:      system,
+		MaxTokens:   c.maxTokens,
+		System:      systemPayload(system),
 		Messages:    []message{{Role: "user", Content: prompt}},
 		Temperature: c.temperature,
 	}
@@ -255,8 +331,8 @@ func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, 
 func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, tool Tool, target any) error {
 	reqBody := messagesRequest{
 		Model:       c.model,
-		MaxTokens:   defaultMaxTokens,
-		System:      system,
+		MaxTokens:   c.maxTokens,
+		System:      systemPayload(system),
 		Messages:    []message{{Role: "user", Content: prompt}},
 		Temperature: c.temperature,
 		Tools:       []Tool{tool},
@@ -271,11 +347,12 @@ func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, to
 const maxToolRounds = 10
 
 // multiTurnRequest is like messagesRequest but uses anyMessage to support
-// structured content (tool results) in the conversation.
+// structured content (tool results) in the conversation. System is `any`
+// for the same string-or-typed-block reason as messagesRequest.
 type multiTurnRequest struct {
 	Model       string       `json:"model"`
 	MaxTokens   int          `json:"max_tokens"`
-	System      string       `json:"system,omitempty"`
+	System      any          `json:"system,omitempty"`
 	Messages    []anyMessage `json:"messages"`
 	Temperature *float64     `json:"temperature,omitempty"`
 	Tools       []Tool       `json:"tools,omitempty"`
@@ -302,8 +379,8 @@ func (c *Client) CompleteWithTools(
 
 		reqBody := multiTurnRequest{
 			Model:       c.model,
-			MaxTokens:   defaultMaxTokens,
-			System:      system,
+			MaxTokens:   c.maxTokens,
+			System:      systemPayload(system),
 			Messages:    messages,
 			Temperature: c.temperature,
 			Tools:       tools,
@@ -319,6 +396,7 @@ func (c *Client) CompleteWithTools(
 		if err := json.Unmarshal(body, &resp); err != nil {
 			return &ParseError{Body: string(body), Err: fmt.Errorf("unmarshalling response: %w", err)}
 		}
+		logUsage(c.model, resp.Usage)
 
 		// Check if the model called the final tool.
 		for _, block := range resp.Content {
@@ -435,6 +513,20 @@ func (c *Client) doRequestAny(ctx context.Context, reqBody any) ([]byte, error) 
 	return nil, fmt.Errorf("completing request after %d retries: %w", maxRetries, lastErr)
 }
 
+// logUsage emits a single slog.Info per successful Anthropic response so
+// cache hit / miss behavior is greppable in `vairdict logs`. The fields
+// match the issue #137 observability contract: model, input_tokens,
+// output_tokens, cache_creation_input_tokens, cache_read_input_tokens.
+func logUsage(model string, u usage) {
+	slog.Info("anthropic response",
+		"model", model,
+		"input_tokens", u.InputTokens,
+		"output_tokens", u.OutputTokens,
+		"cache_creation_input_tokens", u.CacheCreationInputTokens,
+		"cache_read_input_tokens", u.CacheReadInputTokens,
+	)
+}
+
 // sendAndParse drives the retry loop for a single request and hands the
 // decoded response to the caller-supplied extractor.
 func (c *Client) sendAndParse(ctx context.Context, reqBody messagesRequest, extract func(*messagesResponse) error) error {
@@ -450,6 +542,7 @@ func (c *Client) sendAndParse(ctx context.Context, reqBody messagesRequest, extr
 			if decodeErr := json.Unmarshal(body, &resp); decodeErr != nil {
 				return &ParseError{Body: string(body), Err: fmt.Errorf("unmarshalling response: %w", decodeErr)}
 			}
+			logUsage(c.model, resp.Usage)
 			return extract(&resp)
 		}
 

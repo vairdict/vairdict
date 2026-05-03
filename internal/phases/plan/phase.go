@@ -36,6 +36,14 @@ type Planner interface {
 	CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
 }
 
+// streamingPlanner is the optional capability satisfied by planners that
+// can stream output. PlanPhase type-asserts against it; planners that
+// don't satisfy it (e.g. claudecli — the CLI doesn't expose SSE) silently
+// fall back to the non-streaming Planner path even when OnDelta is set.
+type streamingPlanner interface {
+	CompleteWithSystemStream(ctx context.Context, system, prompt string, target any, onDelta func(text string)) error
+}
+
 // Judge is the interface for the plan judge that evaluates plans.
 type Judge interface {
 	Judge(ctx context.Context, intent string, plan string, acknowledged []state.Assumption) (*state.Verdict, error)
@@ -47,6 +55,15 @@ type PlanPhase struct {
 	judge      Judge
 	cfg        config.PlanPhaseConfig
 	OnProgress func(loop, max int, step string, score float64, pass bool, gaps []state.Gap)
+	// OnDelta, when non-nil, receives partial planner output as it
+	// streams in. The total wall-clock time of a planner call is
+	// roughly unchanged — this exists so the user sees the plan
+	// forming instead of staring at "generating plan" until the
+	// final message returns. Only takes effect when the underlying
+	// planner satisfies the streamingPlanner capability (the
+	// claude-api client does; claudecli does not). Nil is the
+	// default and matches pre-#137 behavior exactly.
+	OnDelta func(text string)
 }
 
 // New creates a PlanPhase with the given planner client, judge, and config.
@@ -62,6 +79,18 @@ func (p *PlanPhase) notify(loop, max int, step string, score float64, pass bool,
 	if p.OnProgress != nil {
 		p.OnProgress(loop, max, step, score, pass, gaps)
 	}
+}
+
+// completePlanner dispatches to the streaming planner when both the
+// client supports it and OnDelta is wired; otherwise the original
+// blocking path. Pulled out so Run stays focused on phase orchestration.
+func (p *PlanPhase) completePlanner(ctx context.Context, system, prompt string, target any) error {
+	if p.OnDelta != nil {
+		if sp, ok := p.planner.(streamingPlanner); ok {
+			return sp.CompleteWithSystemStream(ctx, system, prompt, target, p.OnDelta)
+		}
+	}
+	return p.planner.CompleteWithSystem(ctx, system, prompt, target)
 }
 
 const plannerSystemPromptCore = `You are a software development planner. Your job is to take a task intent and produce a detailed requirements document and implementation plan.
@@ -120,10 +149,13 @@ func (p *PlanPhase) Run(ctx context.Context, task *state.Task) (*PhaseResult, er
 			task.Notes = nil
 		}
 
-		// Call the planner agent.
+		// Call the planner agent. Stream when both the underlying
+		// client supports it AND OnDelta is set; otherwise fall
+		// back to the blocking call so claudecli (no SSE) and
+		// callers that don't care about deltas keep working.
 		p.notify(loop+1, p.cfg.MaxLoops, "generating plan", 0, false, nil)
 		var resp plannerResponse
-		if err := p.planner.CompleteWithSystem(ctx, plannerSystemPrompt, prompt, &resp); err != nil {
+		if err := p.completePlanner(ctx, plannerSystemPrompt, prompt, &resp); err != nil {
 			return nil, fmt.Errorf("calling planner agent: %w", err)
 		}
 

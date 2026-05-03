@@ -45,6 +45,12 @@ runs:
       shell: bash
       env:
         VAIRDICT_VERSION: ${{ inputs.version }}
+        # Authenticate the `releases/latest` probe so we don't share
+        # the 60/hour anonymous rate-limit bucket with every other
+        # runner on the same IP. install.sh reads $GITHUB_TOKEN.
+        # Falls back to github.token (job-default GITHUB_TOKEN);
+        # any caller-set GH_TOKEN env (eg. the App token) still wins.
+        GITHUB_TOKEN: ${{ env.GH_TOKEN || github.token }}
       run: |
         if [ "$VAIRDICT_VERSION" = "latest" ]; then
           curl -fsSL https://raw.githubusercontent.com/vairdict/vairdict/main/scripts/install.sh | INSTALL_DIR="${{ runner.temp }}" sh
