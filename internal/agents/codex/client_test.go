@@ -13,32 +13,53 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 )
 
-// fakeCmd builds an exec.Cmd that runs `sh -c script` via the given ctx so
-// each test can script stdout/stderr/exit-code precisely without touching
-// the real codex binary.
+// --- Test helpers ---
+
+// fakeCmd builds an exec.Cmd that runs `sh -c script` via the given ctx
+// so each test can script stdout/stderr/exit-code precisely without
+// touching the real codex binary.
 func fakeCmd(ctx context.Context, script string) *exec.Cmd {
 	return exec.CommandContext(ctx, "sh", "-c", script)
 }
 
-// stdoutCmd returns a fake exec.Cmd that prints the given bytes verbatim
-// on stdout. Bytes are passed through an env var to sidestep shell quoting.
-func stdoutCmd(ctx context.Context, stdout string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "sh", "-c", `printf '%s' "$FAKE_STDOUT"`)
-	cmd.Env = append(os.Environ(), "FAKE_STDOUT="+stdout)
-	return cmd
+// flagValue returns the value following the named flag in args, or "" if
+// the flag is not present or has no value following it.
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
-// stdoutCmdWithStderr is a fake exec.Cmd that prints stdout AND stderr
-// and exits with the given code. Used for non-zero-exit error tests.
-func stdoutCmdWithStderr(ctx context.Context, stdout, stderr string, exit int) *exec.Cmd {
-	script := `printf '%s' "$FAKE_STDOUT"; printf '%s' "$FAKE_STDERR" >&2; exit ${FAKE_EXIT:-0}`
+// writeAndExitCmd returns a sh -c command that writes content to path
+// (when path is non-empty) and exits with the given code. Used by the
+// fake command factory to simulate codex writing the final agent
+// message to the file passed via --output-last-message.
+func writeAndExitCmd(ctx context.Context, path, content, stderr string, exit int) *exec.Cmd {
+	script := `if [ -n "$FAKE_PATH" ]; then printf '%s' "$FAKE_CONTENT" > "$FAKE_PATH"; fi; if [ -n "$FAKE_STDERR" ]; then printf '%s' "$FAKE_STDERR" >&2; fi; exit ${FAKE_EXIT:-0}`
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Env = append(os.Environ(),
-		"FAKE_STDOUT="+stdout,
+		"FAKE_CONTENT="+content,
+		"FAKE_PATH="+path,
 		"FAKE_STDERR="+stderr,
 		"FAKE_EXIT="+itoa(exit),
 	)
 	return cmd
+}
+
+// writingFactory returns a CommandFactory that captures argv into
+// captured (if non-nil) and writes content to whatever path follows
+// --output-last-message in the args.
+func writingFactory(content string, captured *[][]string) CommandFactory {
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if captured != nil {
+			*captured = append(*captured, append([]string{name}, args...))
+		}
+		path := flagValue(args, "--output-last-message")
+		return writeAndExitCmd(ctx, path, content, "", 0)
+	}
 }
 
 func itoa(n int) string {
@@ -64,10 +85,7 @@ func itoa(n int) string {
 // --- Core CompleteWithSystem behaviour ---
 
 func TestCompleteWithSystem_HappyPath(t *testing.T) {
-	envelope := `{"type":"result","is_error":false,"result":"{\"answer\":42,\"label\":\"ok\"}"}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, envelope)
-	}))
+	c := New(WithCommandFactory(writingFactory(`{"answer":42,"label":"ok"}`, nil)))
 
 	var got struct {
 		Answer int    `json:"answer"`
@@ -82,11 +100,9 @@ func TestCompleteWithSystem_HappyPath(t *testing.T) {
 }
 
 func TestCompleteWithSystem_FencedResult(t *testing.T) {
-	// Codex sometimes wraps the result in ```json … ``` fences.
-	envelope := "{\"type\":\"result\",\"is_error\":false,\"result\":\"```json\\n{\\\"x\\\":1}\\n```\"}"
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, envelope)
-	}))
+	// Even with --output-schema available, models sometimes still wrap
+	// output in ```json … ``` fences. extractJSON tolerates that.
+	c := New(WithCommandFactory(writingFactory("```json\n{\"x\":1}\n```", nil)))
 
 	var got struct {
 		X int `json:"x"`
@@ -99,9 +115,13 @@ func TestCompleteWithSystem_FencedResult(t *testing.T) {
 	}
 }
 
-func TestCompleteWithSystem_EnvelopeParseError(t *testing.T) {
+func TestCompleteWithSystem_OutputFileMissing(t *testing.T) {
+	// Process exits 0 but never writes the output file. Real failure
+	// mode if codex crashed silently or was killed mid-flight.
 	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, "not json at all")
+		// Empty FAKE_PATH means the script does not write the file,
+		// even though the actual --output-last-message path was real.
+		return exec.CommandContext(ctx, "sh", "-c", "exit 0")
 	}))
 
 	var got map[string]any
@@ -110,33 +130,10 @@ func TestCompleteWithSystem_EnvelopeParseError(t *testing.T) {
 	if !errors.As(err, &parseErr) {
 		t.Fatalf("expected ParseError, got %T: %v", err, err)
 	}
-	if !strings.Contains(parseErr.Raw, "not json") {
-		t.Errorf("expected raw to contain stdout, got %q", parseErr.Raw)
-	}
 }
 
-func TestCompleteWithSystem_IsErrorEnvelope(t *testing.T) {
-	envelope := `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"oh no"}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, envelope)
-	}))
-
-	var got map[string]any
-	err := c.Complete(context.Background(), "hi", &got)
-	var parseErr *ParseError
-	if !errors.As(err, &parseErr) {
-		t.Fatalf("expected ParseError, got %T: %v", err, err)
-	}
-	if !strings.Contains(parseErr.Err.Error(), "is_error=true") {
-		t.Errorf("expected is_error message, got %v", parseErr.Err)
-	}
-}
-
-func TestCompleteWithSystem_EmptyResult(t *testing.T) {
-	envelope := `{"type":"result","is_error":false,"result":""}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, envelope)
-	}))
+func TestCompleteWithSystem_OutputFileEmpty(t *testing.T) {
+	c := New(WithCommandFactory(writingFactory("", nil)))
 
 	var got map[string]any
 	err := c.Complete(context.Background(), "hi", &got)
@@ -147,18 +144,19 @@ func TestCompleteWithSystem_EmptyResult(t *testing.T) {
 }
 
 func TestCompleteWithSystem_TargetDecodeFailure(t *testing.T) {
-	// Envelope ok, result ok JSON but not an object — decoding into a
-	// struct target should surface as ParseError.
-	envelope := `{"type":"result","is_error":false,"result":"\"a string\""}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, envelope)
-	}))
+	// Output is valid JSON but not an object — decoding into a struct
+	// target should surface as ParseError with the raw content
+	// preserved.
+	c := New(WithCommandFactory(writingFactory(`"a string"`, nil)))
 
 	var got struct{ X int }
 	err := c.Complete(context.Background(), "hi", &got)
 	var parseErr *ParseError
 	if !errors.As(err, &parseErr) {
 		t.Fatalf("expected ParseError, got %T: %v", err, err)
+	}
+	if !strings.Contains(parseErr.Raw, "a string") {
+		t.Errorf("expected raw to preserve output, got %q", parseErr.Raw)
 	}
 }
 
@@ -199,11 +197,6 @@ func TestCompleteWithSystem_ContextCancelled(t *testing.T) {
 	cancel() // cancel immediately
 
 	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		// `exec sleep 1` makes sh replace itself with sleep so the
-		// kill on ctx cancel reaps the actual sleeper and unblocks
-		// cmd.Run immediately. Bare `sh -c "sleep 1"` leaves an
-		// orphaned sleep holding the stdout pipe, which makes the
-		// test wait the full sleep duration.
 		return fakeCmd(ctx, "exec sleep 1")
 	}))
 
@@ -232,21 +225,18 @@ func TestCompleteWithSystem_Timeout(t *testing.T) {
 	}
 }
 
-// --- Argv shape ---
+// --- Argv shape (verified against codex-rs/exec/src/cli.rs) ---
 
-func TestCompleteWithSystem_ArgsIncludeSubcommandJSONAndExtras(t *testing.T) {
-	// Production argv shape: codex exec --json [--model M] [<extra>...] <prompt>.
-	// System prompt is bundled into the prompt arg (codex has no separate
-	// --system flag in non-interactive mode), so the prompt arg must
-	// contain the system text when system is set.
-	var captured []string
-	envelope := `{"type":"result","is_error":false,"result":"{}"}`
+func TestCompleteWithSystem_ArgvShape(t *testing.T) {
+	// Production argv shape against the real codex-exec binary:
+	//   codex exec --output-last-message <tmpfile> [--model M] [extras...] <prompt>
+	// Critically, --json is NOT used: that flag emits streaming JSONL
+	// telemetry events, not a single structured result. The structured
+	// final response comes from --output-last-message reading.
+	var captured [][]string
 	c := New(
 		WithExtraArgs("--dangerously-bypass-approvals-and-sandbox"),
-		WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			captured = append([]string{name}, args...)
-			return stdoutCmd(ctx, envelope)
-		}),
+		WithCommandFactory(writingFactory(`{}`, &captured)),
 	)
 
 	var got map[string]any
@@ -254,21 +244,35 @@ func TestCompleteWithSystem_ArgsIncludeSubcommandJSONAndExtras(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(captured) == 0 {
-		t.Fatalf("nothing captured")
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 invocation, got %d", len(captured))
 	}
-	if captured[0] != "codex" {
-		t.Errorf("binary = %q, want codex", captured[0])
+	run := captured[0]
+	if run[0] != "codex" {
+		t.Errorf("binary = %q, want codex", run[0])
 	}
-	joined := strings.Join(captured, " ")
-	for _, w := range []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox"} {
-		if !strings.Contains(joined, w) {
-			t.Errorf("captured args %q missing %q", joined, w)
-		}
+	if run[1] != "exec" {
+		t.Errorf("first arg must be subcommand `exec`, got %q", run[1])
 	}
-	// Prompt must be last and must contain both the system prompt and
-	// the user prompt.
-	last := captured[len(captured)-1]
+	joined := strings.Join(run, " ")
+	if strings.Contains(joined, "--json") {
+		t.Errorf("argv must NOT contain --json (it streams JSONL telemetry, not structured output): %s", joined)
+	}
+	if !strings.Contains(joined, "--output-last-message") {
+		t.Errorf("argv must contain --output-last-message: %s", joined)
+	}
+	if !strings.Contains(joined, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Errorf("argv missing extra arg: %s", joined)
+	}
+	// Output file path must be a real path string after the flag.
+	outPath := flagValue(run[1:], "--output-last-message")
+	if outPath == "" {
+		t.Errorf("--output-last-message has no value: %v", run)
+	}
+	// Prompt is the last arg and contains both system + user prompt
+	// (bundled, no markers — codex exec has no separate
+	// system-prompt flag in non-interactive mode).
+	last := run[len(run)-1]
 	if !strings.Contains(last, "you are a judge") {
 		t.Errorf("prompt arg %q must contain system prompt", last)
 	}
@@ -277,15 +281,34 @@ func TestCompleteWithSystem_ArgsIncludeSubcommandJSONAndExtras(t *testing.T) {
 	}
 }
 
+func TestCompleteWithSystem_TempFilesCleanedUp(t *testing.T) {
+	// The output file the client passes to codex must be removed after
+	// the call returns. Otherwise long-running judge loops leak temp
+	// files into /tmp.
+	var captured [][]string
+	c := New(WithCommandFactory(writingFactory(`{}`, &captured)))
+
+	var got map[string]any
+	if err := c.Complete(context.Background(), "p", &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 invocation, got %d", len(captured))
+	}
+	outPath := flagValue(captured[0][1:], "--output-last-message")
+	if outPath == "" {
+		t.Fatal("--output-last-message path missing")
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Errorf("output tempfile %q must be cleaned up after call (stat err = %v)", outPath, err)
+	}
+}
+
 func TestCompleteWithSystem_WithModelAddsFlag(t *testing.T) {
-	var captured []string
-	envelope := `{"type":"result","is_error":false,"result":"{}"}`
+	var captured [][]string
 	c := New(
 		WithModel("gpt-5-codex"),
-		WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			captured = append([]string{name}, args...)
-			return stdoutCmd(ctx, envelope)
-		}),
+		WithCommandFactory(writingFactory(`{}`, &captured)),
 	)
 
 	var got map[string]any
@@ -295,69 +318,72 @@ func TestCompleteWithSystem_WithModelAddsFlag(t *testing.T) {
 	if c.Model() != "gpt-5-codex" {
 		t.Errorf("client Model() = %q, want gpt-5-codex", c.Model())
 	}
-	joined := strings.Join(captured, " ")
+	joined := strings.Join(captured[0], " ")
 	if !strings.Contains(joined, "--model gpt-5-codex") {
-		t.Errorf("captured args missing --model gpt-5-codex: %v", captured)
+		t.Errorf("captured args missing --model gpt-5-codex: %v", captured[0])
 	}
 }
 
 func TestCompleteWithSystem_NoModelSkipsFlag(t *testing.T) {
-	var captured []string
-	envelope := `{"type":"result","is_error":false,"result":"{}"}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		captured = append([]string{name}, args...)
-		return stdoutCmd(ctx, envelope)
-	}))
+	var captured [][]string
+	c := New(WithCommandFactory(writingFactory(`{}`, &captured)))
 
 	var got map[string]any
 	if err := c.CompleteWithSystem(context.Background(), "", "p", &got); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, a := range captured {
+	for _, a := range captured[0] {
 		if a == "--model" {
-			t.Errorf("client without WithModel must not add --model flag: %v", captured)
+			t.Errorf("client without WithModel must not add --model flag: %v", captured[0])
 		}
 	}
 }
 
 func TestCompleteWithSystem_NoSystemPromptKeepsPromptClean(t *testing.T) {
-	// When system is empty, the prompt arg is the user prompt verbatim —
-	// no bundled-in system fragment, no prefix.
-	var captured []string
-	envelope := `{"type":"result","is_error":false,"result":"{}"}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		captured = append([]string{name}, args...)
-		return stdoutCmd(ctx, envelope)
-	}))
+	// When system is empty, the prompt arg is the user prompt verbatim.
+	var captured [][]string
+	c := New(WithCommandFactory(writingFactory(`{}`, &captured)))
 
 	var got map[string]any
 	if err := c.CompleteWithSystem(context.Background(), "", "just the prompt", &got); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if captured[len(captured)-1] != "just the prompt" {
-		t.Errorf("expected last arg to equal user prompt verbatim when system empty, got %q", captured[len(captured)-1])
+	if captured[0][len(captured[0])-1] != "just the prompt" {
+		t.Errorf("expected last arg to equal user prompt verbatim when system empty, got %q", captured[0][len(captured[0])-1])
 	}
 }
 
-// --- Tool use ---
+// --- Tool use (uses --output-schema for native structured output) ---
 
-func TestCompleteWithTool_InjectsSchemaAndParsesResult(t *testing.T) {
-	// CompleteWithTool must (a) inject the tool's JSON Schema into the
-	// system prompt the subprocess sees, and (b) parse the envelope's
-	// result back into the target as plain JSON.
-	var captured []string
-	envelope := `{"type":"result","is_error":false,"result":"{\"verdict\":\"pass\",\"score\":0.9}"}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		captured = append([]string{name}, args...)
-		return stdoutCmd(ctx, envelope)
-	}))
+func TestCompleteWithTool_PassesOutputSchemaFile(t *testing.T) {
+	// CompleteWithTool must (a) write the tool's InputSchema to a
+	// tempfile, (b) pass it via --output-schema, and (c) parse the
+	// agent's final message file into the target. The schema file
+	// content must match the InputSchema verbatim — that's how codex
+	// enforces the response shape.
+	var captured [][]string
+	var capturedSchemaContent string
 
+	schemaJSON := `{"type":"object","properties":{"verdict":{"type":"string"},"score":{"type":"number"}},"required":["verdict","score"]}`
 	tool := claude.Tool{
 		Name:        "verdict",
 		Description: "judge verdict",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"verdict":{"type":"string"},"score":{"type":"number"}}}`),
+		InputSchema: json.RawMessage(schemaJSON),
 	}
+
+	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		captured = append(captured, append([]string{name}, args...))
+		// Capture schema file content before codex would consume it.
+		schemaPath := flagValue(args, "--output-schema")
+		if schemaPath != "" {
+			b, err := os.ReadFile(schemaPath)
+			if err == nil {
+				capturedSchemaContent = string(b)
+			}
+		}
+		path := flagValue(args, "--output-last-message")
+		return writeAndExitCmd(ctx, path, `{"verdict":"pass","score":0.9}`, "", 0)
+	}))
 
 	var got struct {
 		Verdict string  `json:"verdict"`
@@ -369,43 +395,62 @@ func TestCompleteWithTool_InjectsSchemaAndParsesResult(t *testing.T) {
 	if got.Verdict != "pass" || got.Score != 0.9 {
 		t.Errorf("got %+v, want {pass 0.9}", got)
 	}
-
-	// The schema must reach the subprocess somewhere in the prompt arg.
-	last := captured[len(captured)-1]
-	if !strings.Contains(last, "verdict") {
-		t.Errorf("prompt arg must mention tool name, got %q", last)
+	if !strings.Contains(strings.Join(captured[0], " "), "--output-schema") {
+		t.Errorf("argv must include --output-schema for tool use: %v", captured[0])
 	}
-	if !strings.Contains(last, `"score"`) {
-		t.Errorf("prompt arg must include schema fragment, got %q", last)
+	if capturedSchemaContent != schemaJSON {
+		t.Errorf("schema file content mismatch:\n got: %s\nwant: %s", capturedSchemaContent, schemaJSON)
 	}
 }
 
-func TestCompleteWithTool_RecoveryOnProseResult(t *testing.T) {
-	// First subprocess call returns prose that won't parse as JSON.
-	// Client must retry once with a recovery prompt and parse the
-	// second response. The recovery call's prompt arg must reference
-	// the schema and contain the original prose.
-	proseEnvelope := `{"type":"result","is_error":false,"result":"sure thing! the answer is x=7"}`
-	recoveryEnvelope := `{"type":"result","is_error":false,"result":"{\"x\":7}"}`
+func TestCompleteWithTool_SchemaFileCleanedUp(t *testing.T) {
+	tool := claude.Tool{
+		Name:        "x",
+		InputSchema: json.RawMessage(`{"type":"object"}`),
+	}
 
-	calls := 0
-	var capturedRuns [][]string
+	var capturedSchemaPath string
 	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		capturedRuns = append(capturedRuns, append([]string{name}, args...))
-		calls++
-		switch calls {
-		case 1:
-			return stdoutCmd(ctx, proseEnvelope)
-		default:
-			return stdoutCmd(ctx, recoveryEnvelope)
-		}
+		capturedSchemaPath = flagValue(args, "--output-schema")
+		path := flagValue(args, "--output-last-message")
+		return writeAndExitCmd(ctx, path, `{}`, "", 0)
 	}))
 
+	var got map[string]any
+	if err := c.CompleteWithTool(context.Background(), "", "p", tool, &got); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedSchemaPath == "" {
+		t.Fatal("schema path was not captured")
+	}
+	if _, err := os.Stat(capturedSchemaPath); !os.IsNotExist(err) {
+		t.Errorf("schema tempfile %q must be cleaned up after call (stat err = %v)", capturedSchemaPath, err)
+	}
+}
+
+func TestCompleteWithTool_RecoveryOnDecodeFailure(t *testing.T) {
+	// First call writes prose to the output file (model ignored the
+	// schema, which can happen). Client must retry once with a
+	// recovery prompt and parse the second response.
 	tool := claude.Tool{
 		Name:        "answer",
 		Description: "give answer",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{"type":"integer"}}}`),
 	}
+
+	calls := 0
+	var capturedPrompts []string
+	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		calls++
+		capturedPrompts = append(capturedPrompts, args[len(args)-1])
+		path := flagValue(args, "--output-last-message")
+		switch calls {
+		case 1:
+			return writeAndExitCmd(ctx, path, "sure thing! the answer is x=7", "", 0)
+		default:
+			return writeAndExitCmd(ctx, path, `{"x":7}`, "", 0)
+		}
+	}))
 
 	var got struct {
 		X int `json:"x"`
@@ -419,19 +464,13 @@ func TestCompleteWithTool_RecoveryOnProseResult(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("expected 2 subprocess calls (initial + recovery), got %d", calls)
 	}
-
-	// Recovery prompt must include the prose that failed to parse.
-	recoveryPromptArg := capturedRuns[1][len(capturedRuns[1])-1]
-	if !strings.Contains(recoveryPromptArg, "x=7") {
-		t.Errorf("recovery prompt should include original prose, got %q", recoveryPromptArg)
+	if !strings.Contains(capturedPrompts[1], "x=7") {
+		t.Errorf("recovery prompt should include the original prose, got %q", capturedPrompts[1])
 	}
 }
 
 func TestCompleteWithTools_RoutesToFinalTool(t *testing.T) {
-	envelope := `{"type":"result","is_error":false,"result":"{\"verdict\":\"pass\"}"}`
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, envelope)
-	}))
+	c := New(WithCommandFactory(writingFactory(`{"verdict":"pass"}`, nil)))
 
 	tools := []claude.Tool{
 		{
@@ -458,9 +497,7 @@ func TestCompleteWithTools_RoutesToFinalTool(t *testing.T) {
 }
 
 func TestCompleteWithTools_UnknownFinalToolErrors(t *testing.T) {
-	c := New(WithCommandFactory(func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return stdoutCmd(ctx, `{"type":"result","is_error":false,"result":"{}"}`)
-	}))
+	c := New(WithCommandFactory(writingFactory(`{}`, nil)))
 
 	tools := []claude.Tool{{Name: "verdict", InputSchema: json.RawMessage(`{}`)}}
 
@@ -474,11 +511,25 @@ func TestCompleteWithTools_UnknownFinalToolErrors(t *testing.T) {
 	}
 }
 
+// --- Compile-time interface check ---
+
+func TestClient_HasCompleterShape(t *testing.T) {
+	// Compile-time guard mirroring the cmd/vairdict completer
+	// interface. If the interface drifts and this package isn't
+	// updated, the build here breaks immediately rather than failing
+	// later at the wiring site.
+	type completerLike interface {
+		CompleteWithSystem(ctx context.Context, system, prompt string, target any) error
+		CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error
+		CompleteWithTools(ctx context.Context, system, prompt string, tools []claude.Tool, finalTool string, handlers map[string]claude.ToolHandler, target any) error
+		Model() string
+	}
+	var _ completerLike = (*Client)(nil)
+}
+
 // --- Availability + helpers ---
 
 func TestIsAvailable_SmokeTest(t *testing.T) {
-	// Just ensure it doesn't panic and returns a bool — we can't assume
-	// the test host has codex installed or not.
 	_ = IsAvailable()
 }
 
@@ -534,28 +585,37 @@ func TestExtractJSON(t *testing.T) {
 }
 
 func TestBuildArgs_Shape(t *testing.T) {
-	t.Run("base_no_model_no_extra", func(t *testing.T) {
-		args := buildArgs("", nil, "user prompt")
+	t.Run("base_no_model_no_schema_no_extra", func(t *testing.T) {
+		args := buildArgs("", "/tmp/out", "", nil, "user prompt")
 		if args[0] != "exec" {
 			t.Errorf("first arg must be subcommand exec, got %q", args[0])
 		}
 		joined := strings.Join(args, " ")
-		if !strings.Contains(joined, "--json") {
-			t.Errorf("missing --json: %s", joined)
+		if !strings.Contains(joined, "--output-last-message /tmp/out") {
+			t.Errorf("missing --output-last-message: %s", joined)
+		}
+		if strings.Contains(joined, "--json") {
+			t.Errorf("must NOT include --json: %s", joined)
 		}
 		if strings.Contains(joined, "--model") {
 			t.Errorf("must not include --model when empty: %s", joined)
+		}
+		if strings.Contains(joined, "--output-schema") {
+			t.Errorf("must not include --output-schema when empty: %s", joined)
 		}
 		if args[len(args)-1] != "user prompt" {
 			t.Errorf("prompt must be last: %v", args)
 		}
 	})
 
-	t.Run("with_model_and_extra", func(t *testing.T) {
-		args := buildArgs("gpt-5-codex", []string{"--dangerously-bypass-approvals-and-sandbox"}, "p")
+	t.Run("with_model_schema_and_extra", func(t *testing.T) {
+		args := buildArgs("gpt-5-codex", "/tmp/out", "/tmp/schema", []string{"--dangerously-bypass-approvals-and-sandbox"}, "p")
 		joined := strings.Join(args, " ")
 		if !strings.Contains(joined, "--model gpt-5-codex") {
 			t.Errorf("missing --model gpt-5-codex: %s", joined)
+		}
+		if !strings.Contains(joined, "--output-schema /tmp/schema") {
+			t.Errorf("missing --output-schema /tmp/schema: %s", joined)
 		}
 		if !strings.Contains(joined, "--dangerously-bypass-approvals-and-sandbox") {
 			t.Errorf("missing extra arg: %s", joined)
@@ -564,4 +624,19 @@ func TestBuildArgs_Shape(t *testing.T) {
 			t.Errorf("prompt must be last: %v", args)
 		}
 	})
+}
+
+func TestBundlePrompt(t *testing.T) {
+	if got := bundlePrompt("", "user"); got != "user" {
+		t.Errorf("empty system: got %q, want %q", got, "user")
+	}
+	got := bundlePrompt("sys", "user")
+	if !strings.Contains(got, "sys") || !strings.Contains(got, "user") {
+		t.Errorf("bundle missing parts: %q", got)
+	}
+	// No invented [system]/[user] markers — the model would not honor
+	// them. Plain join only.
+	if strings.Contains(got, "[system]") || strings.Contains(got, "[user]") {
+		t.Errorf("bundlePrompt must not invent role markers: %q", got)
+	}
 }

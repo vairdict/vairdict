@@ -1,16 +1,39 @@
 // Package codex implements a Completer that shells out to the local
-// OpenAI Codex CLI (`codex exec --json`) instead of calling an Anthropic
+// OpenAI Codex CLI (`codex exec`) instead of calling an Anthropic
 // HTTP API.
 //
-// This is the first non-Anthropic completer for VAIrdict — it lets users
-// with the Codex CLI installed run vairdict end-to-end without an
-// Anthropic key, and proves the completer interface generalises across
-// CLI families. Mirrors internal/agents/claudecli in shape so the
-// follow-up registry work (#130) can register both behind a single
-// resolver path.
+// This is the first non-Anthropic completer for VAIrdict — it lets
+// users with the Codex CLI installed run vairdict end-to-end without
+// an Anthropic key, and proves the completer interface generalises
+// across CLI families.
 //
-// The Client is safe to share across goroutines. Each CompleteWithSystem
-// call spawns a fresh `codex` subprocess and blocks until it finishes.
+// Wire shape (verified against codex-rs/exec/src/cli.rs in
+// github.com/openai/codex):
+//
+//	codex exec [--model <m>] [--output-schema <schemafile>] \
+//	    --output-last-message <tmpfile> [<extras>...] <prompt>
+//
+// We deliberately do NOT pass `--json`. That flag emits a stream of
+// JSONL telemetry events (one per state change) — useful for
+// observability, not for getting back a single structured result.
+// Instead `--output-last-message` writes only the agent's final
+// message to a file, which is exactly the shape the planner and
+// judges consume.
+//
+// Tool use uses native enforcement via `--output-schema <file>`: the
+// tool's InputSchema is written to a tempfile and codex constrains
+// the model to a JSON response conforming to it. Falls back to a
+// single recovery round-trip if the model returns prose anyway.
+//
+// System prompt handling is deliberately simple: the system text is
+// prepended to the prompt arg with a blank-line separator. Codex's
+// non-interactive mode has no `--system` flag; the proper alternative
+// (`-c base_instructions=<toml-escaped>`) needs verification against a
+// real binary before we commit to it. Tracking that as a follow-up.
+//
+// The Client is safe to share across goroutines. Each
+// CompleteWithSystem call spawns a fresh `codex` subprocess and blocks
+// until it finishes.
 package codex
 
 import (
@@ -19,6 +42,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -26,8 +50,8 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 )
 
-// NotInstalledError is returned when the `codex` binary cannot be found
-// on PATH. Callers can use errors.As to surface a friendlier
+// NotInstalledError is returned when the `codex` binary cannot be
+// found on PATH. Callers can use errors.As to surface a friendlier
 // install-me message.
 type NotInstalledError struct {
 	Err error
@@ -39,10 +63,10 @@ func (e *NotInstalledError) Error() string {
 
 func (e *NotInstalledError) Unwrap() error { return e.Err }
 
-// ParseError is returned when the CLI produced output that could not be
-// decoded into the envelope or the caller's target struct. Raw carries
-// the original (truncated) stdout so operators can see what Codex
-// actually said.
+// ParseError is returned when codex's output file was missing, empty,
+// or could not be decoded into the caller's target struct. Raw
+// carries the original (truncated) file content so operators can see
+// what codex actually said.
 type ParseError struct {
 	Raw string
 	Err error
@@ -55,8 +79,6 @@ func (e *ParseError) Error() string {
 func (e *ParseError) Unwrap() error { return e.Err }
 
 // ExitError is returned when `codex` exits with a non-zero status.
-// Stderr carries the truncated stderr output so callers don't see a
-// bare "exit status 1".
 type ExitError struct {
 	ExitCode int
 	Stderr   string
@@ -75,7 +97,7 @@ func (e *ExitError) Unwrap() error { return e.Err }
 
 // CommandFactory constructs exec.Cmd instances. The production default
 // is exec.CommandContext; tests inject a factory that returns a fake
-// binary (typically `sh -c`).
+// binary.
 type CommandFactory func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 // Client is a Completer backed by the Codex CLI.
@@ -89,8 +111,7 @@ type Client struct {
 // Option configures a Client.
 type Option func(*Client)
 
-// WithTimeout caps how long a single Codex CLI call may run. Defaults
-// to 5 minutes to mirror the claudecli client.
+// WithTimeout caps how long a single Codex CLI call may run.
 func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.timeout = d }
 }
@@ -102,14 +123,16 @@ func WithCommandFactory(f CommandFactory) Option {
 }
 
 // WithExtraArgs appends additional flags before the prompt. Useful for
-// `--dangerously-bypass-approvals-and-sandbox`, etc. The core flags
-// (`exec`, `--json`) are always set.
+// `--dangerously-bypass-approvals-and-sandbox`,
+// `--skip-git-repo-check`, etc. The core flags (`exec`,
+// `--output-last-message`) are always set.
 func WithExtraArgs(args ...string) Option {
 	return func(c *Client) { c.extraArgs = append(c.extraArgs, args...) }
 }
 
 // WithModel pins the Codex CLI subprocess to a specific model via the
-// `--model` flag. Empty string is a no-op (the CLI picks its default).
+// `--model` flag (`SharedCliOptions.model` upstream). Empty string is a
+// no-op.
 func WithModel(model string) Option {
 	return func(c *Client) { c.model = model }
 }
@@ -126,15 +149,13 @@ func New(opts ...Option) *Client {
 	return c
 }
 
-// IsAvailable reports whether the `codex` binary is on PATH. Callers
-// use this for auto-detect logic. Cheap and safe to call repeatedly.
+// IsAvailable reports whether the `codex` binary is on PATH.
 func IsAvailable() bool {
 	_, err := exec.LookPath("codex")
 	return err == nil
 }
 
-// Model returns the model the client is pinned to via WithModel, or
-// empty string when the client uses the CLI's default.
+// Model returns the model the client is pinned to via WithModel.
 func (c *Client) Model() string { return c.model }
 
 // Complete is a convenience wrapper for CompleteWithSystem with an
@@ -143,37 +164,26 @@ func (c *Client) Complete(ctx context.Context, prompt string, target any) error 
 	return c.CompleteWithSystem(ctx, "", prompt, target)
 }
 
-// CompleteWithSystem runs `codex exec --json` and unmarshals the
-// assistant's JSON output into target. The Codex CLI has no separate
-// system-prompt flag in non-interactive mode, so when system is set it
-// is bundled into the prompt arg with a delimiter. Errors are typed:
-// NotInstalledError when the binary is missing, ExitError on non-zero
-// exit, ParseError for any JSON decode failure.
+// CompleteWithSystem runs `codex exec` and unmarshals the agent's
+// final message into target. The system prompt is bundled into the
+// prompt arg; codex non-interactive mode has no separate
+// system-prompt flag.
 func (c *Client) CompleteWithSystem(ctx context.Context, system, prompt string, target any) error {
-	return c.runAndDecode(ctx, system, prompt, target)
+	return c.run(ctx, system, prompt, "", target)
 }
 
-// CompleteWithTool injects the tool's JSON Schema into the system
-// prompt and reuses the prose-to-JSON parser. The Codex CLI does not
-// expose native tool-use with a forced schema, so this falls back to
-// the same approach as claudecli. On parse failure a single recovery
-// call re-prompts Codex with its own raw output and asks for just the
-// JSON.
+// CompleteWithTool runs `codex exec --output-schema <schemafile>` so
+// codex enforces the agent's final message conforms to the tool's
+// InputSchema. On parse failure the client makes a single recovery
+// call asking the model to reformat the original prose as JSON.
 func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, tool claude.Tool, target any) error {
-	augmented := system
-	if augmented != "" {
-		augmented += "\n\n"
+	schemaPath, cleanup, err := writeTempFile("codex-schema-*.json", tool.InputSchema)
+	if err != nil {
+		return fmt.Errorf("writing schema tempfile: %w", err)
 	}
-	augmented += fmt.Sprintf(
-		"## Response tool: %s\n%s\n\n"+
-			"CRITICAL INSTRUCTION — OUTPUT FORMAT:\n"+
-			"Respond with ONLY a single JSON object that conforms to this JSON Schema.\n"+
-			"No prose before or after. No markdown fences. No explanation. Just the raw JSON object.\n\n"+
-			"Schema:\n%s",
-		tool.Name, tool.Description, string(tool.InputSchema),
-	)
+	defer cleanup()
 
-	err := c.runAndDecode(ctx, augmented, prompt, target)
+	err = c.run(ctx, system, prompt, schemaPath, target)
 	if err == nil {
 		return nil
 	}
@@ -192,7 +202,7 @@ func (c *Client) CompleteWithTool(ctx context.Context, system, prompt string, to
 			"Original text:\n%s",
 		string(tool.InputSchema), truncate(parseErr.Raw, 4000),
 	)
-	return c.runAndDecode(ctx, "", recoveryPrompt, target)
+	return c.run(ctx, "", recoveryPrompt, schemaPath, target)
 }
 
 // CompleteWithTools falls back to single-turn CompleteWithTool using
@@ -207,47 +217,55 @@ func (c *Client) CompleteWithTools(ctx context.Context, system, prompt string, t
 	return fmt.Errorf("final tool %q not found in tools list", finalTool)
 }
 
-// envelope is the subset of Codex's `--json` result we care about.
-// Mirrors claudecli's shape so the parser is identical.
-type envelope struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
-	IsError bool   `json:"is_error"`
-	Result  string `json:"result"`
-}
-
-// runAndDecode executes the subprocess, decodes the envelope, and
-// unmarshals the extracted result into target.
-func (c *Client) runAndDecode(ctx context.Context, system, prompt string, target any) error {
-	env, err := c.runOnce(ctx, system, prompt)
+// run is the core invocation path. Creates an output tempfile, runs
+// codex, reads the tempfile, extracts JSON from the model's final
+// message, and unmarshals into target. schemaPath is optional — when
+// non-empty it's passed via --output-schema for native shape
+// enforcement.
+func (c *Client) run(ctx context.Context, system, prompt, schemaPath string, target any) error {
+	outputPath, cleanup, err := writeTempFile("codex-output-*.txt", nil)
 	if err != nil {
+		return fmt.Errorf("creating output tempfile: %w", err)
+	}
+	defer cleanup()
+
+	if err := c.runOnce(ctx, system, prompt, outputPath, schemaPath); err != nil {
 		return err
 	}
 
-	cleaned := extractJSON(env.Result)
+	raw, err := os.ReadFile(outputPath)
+	if err != nil {
+		return &ParseError{Raw: "", Err: fmt.Errorf("reading output file: %w", err)}
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return &ParseError{Raw: string(raw), Err: fmt.Errorf("codex wrote empty output file")}
+	}
+
+	cleaned := extractJSON(string(raw))
 	if err := json.Unmarshal([]byte(cleaned), target); err != nil {
 		slog.Debug("codex cli parse failed",
 			"err", err,
-			"raw_len", len(env.Result),
+			"raw_len", len(raw),
 			"cleaned_len", len(cleaned),
-			"raw_head", truncate(env.Result, 500),
+			"raw_head", truncate(string(raw), 500),
 			"cleaned_head", truncate(cleaned, 500),
 		)
-		return &ParseError{Raw: env.Result, Err: fmt.Errorf("decoding result into target: %w", err)}
+		return &ParseError{Raw: string(raw), Err: fmt.Errorf("decoding output into target: %w", err)}
 	}
 	return nil
 }
 
-// runOnce executes a single CLI subprocess attempt. Returns the decoded
-// envelope on success; typed errors on failure.
-func (c *Client) runOnce(ctx context.Context, system, prompt string) (envelope, error) {
+// runOnce executes a single codex subprocess. Returns typed errors
+// (NotInstalledError, ExitError) on failure. Side effect on success:
+// codex writes the agent's final message to outputPath.
+func (c *Client) runOnce(ctx context.Context, system, prompt, outputPath, schemaPath string) error {
 	start := time.Now()
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	bundled := bundlePrompt(system, prompt)
-	args := buildArgs(c.model, c.extraArgs, bundled)
+	args := buildArgs(c.model, outputPath, schemaPath, c.extraArgs, bundled)
 	cmd := c.cmdFactory(ctx, "codex", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -257,65 +275,82 @@ func (c *Client) runOnce(ctx context.Context, system, prompt string) (envelope, 
 
 	if err := cmd.Run(); err != nil {
 		if execErr, ok := err.(*exec.Error); ok {
-			return envelope{}, &NotInstalledError{Err: execErr}
+			return &NotInstalledError{Err: execErr}
 		}
 		if ctx.Err() != nil {
-			return envelope{}, fmt.Errorf("codex cli cancelled: %w", ctx.Err())
+			return fmt.Errorf("codex cli cancelled: %w", ctx.Err())
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return envelope{}, &ExitError{
+			return &ExitError{
 				ExitCode: exitErr.ExitCode(),
 				Stderr:   stderr.String(),
 				Err:      err,
 			}
 		}
-		return envelope{}, fmt.Errorf("running codex cli: %w", err)
+		return fmt.Errorf("running codex cli: %w", err)
 	}
 
 	slog.Debug("codex cli completed", "duration", time.Since(start))
-
-	var env envelope
-	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
-		return envelope{}, &ParseError{Raw: stdout.String(), Err: fmt.Errorf("decoding envelope: %w", err)}
-	}
-	if env.IsError {
-		return envelope{}, &ParseError{Raw: env.Result, Err: fmt.Errorf("codex cli returned is_error=true (subtype=%s)", env.Subtype)}
-	}
-	if env.Result == "" {
-		return envelope{}, &ParseError{Raw: stdout.String(), Err: fmt.Errorf("empty result field in envelope")}
-	}
-
-	return env, nil
+	return nil
 }
 
-// bundlePrompt produces the single positional prompt arg passed to
-// `codex exec`. When system is empty the user prompt is returned
-// verbatim; otherwise the two are joined with a labelled delimiter so
-// the model can tell them apart. Codex's non-interactive mode has no
-// separate system-prompt flag.
+// bundlePrompt prepends the system prompt to the user prompt with a
+// blank-line separator. No role markers — codex has no convention for
+// parsing them, and inventing `[system]/[user]` would be cargo-culting
+// from chat formats the model wasn't trained to honor.
 func bundlePrompt(system, prompt string) string {
 	if system == "" {
 		return prompt
 	}
-	return fmt.Sprintf("[system]\n%s\n\n[user]\n%s", system, prompt)
+	return system + "\n\n" + prompt
 }
 
 // buildArgs returns the argv after the binary name for one
-// `codex exec --json` invocation. Pulled out as a free function so
-// it's trivially unit-testable.
-func buildArgs(model string, extra []string, prompt string) []string {
-	args := make([]string, 0, 6+len(extra))
-	args = append(args, "exec", "--json")
+// `codex exec` invocation. Pulled out as a free function so it's
+// trivially unit-testable.
+//
+// outputPath is required. schemaPath is optional ("" = omit
+// --output-schema). model is optional ("" = omit --model). extras and
+// prompt are appended last so the prompt always lands as the final
+// positional arg.
+func buildArgs(model, outputPath, schemaPath string, extra []string, prompt string) []string {
+	args := make([]string, 0, 8+len(extra))
+	args = append(args, "exec", "--output-last-message", outputPath)
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if schemaPath != "" {
+		args = append(args, "--output-schema", schemaPath)
 	}
 	args = append(args, extra...)
 	args = append(args, prompt)
 	return args
 }
 
-// truncate returns the first n characters of s (never panics on short
-// strings). Used purely for bounded debug logging of raw Codex output.
+// writeTempFile creates a temp file with the given pattern, writes
+// content to it (when non-nil), closes it, and returns its path plus a
+// cleanup func. Cleanup is safe to call multiple times.
+func writeTempFile(pattern string, content []byte) (string, func(), error) {
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", func() {}, err
+	}
+	path := f.Name()
+	if content != nil {
+		if _, err := f.Write(content); err != nil {
+			f.Close()
+			os.Remove(path)
+			return "", func() {}, err
+		}
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", func() {}, err
+	}
+	return path, func() { os.Remove(path) }, nil
+}
+
+// truncate returns the first n characters of s.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -323,12 +358,11 @@ func truncate(s string, n int) string {
 	return s[:n]
 }
 
-// extractJSON pulls a JSON object out of Codex's result string,
-// tolerating prose preambles and markdown fences. Strategy: prefer
-// string-aware brace matching from the first `{` to its balanced `}`,
-// which handles bare objects, prose-wrapped objects, AND fenced
-// objects in one pass. Fenced extraction is a last-resort fallback
-// for non-object payloads.
+// extractJSON pulls a JSON object out of codex's output text,
+// tolerating prose preambles and markdown fences. Even with
+// --output-schema active, models occasionally still wrap their final
+// response in ```json fences; this lets us recover instead of
+// failing parse.
 func extractJSON(text string) string {
 	if obj := extractBraceObject(text); obj != "" {
 		return obj
@@ -351,17 +385,16 @@ func extractFencedBlock(text string) string {
 	if nl := strings.IndexByte(text[bodyStart:], '\n'); nl != -1 {
 		bodyStart += nl + 1
 	}
-	close := strings.Index(text[bodyStart:], fence)
-	if close == -1 {
+	end := strings.Index(text[bodyStart:], fence)
+	if end == -1 {
 		return ""
 	}
-	return text[bodyStart : bodyStart+close]
+	return text[bodyStart : bodyStart+end]
 }
 
 // extractBraceObject scans for the first `{` and walks forward
 // counting braces (respecting JSON string literals) until it finds the
-// matching closing `}`. Returns the balanced slice, or empty string if
-// no match.
+// matching closing `}`.
 func extractBraceObject(text string) string {
 	start := strings.IndexByte(text, '{')
 	if start == -1 {
