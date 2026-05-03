@@ -338,16 +338,16 @@ func writeTempFile(pattern string, content []byte) (string, func(), error) {
 	path := f.Name()
 	if content != nil {
 		if _, err := f.Write(content); err != nil {
-			f.Close()
-			os.Remove(path)
+			_ = f.Close()
+			_ = os.Remove(path)
 			return "", func() {}, err
 		}
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", func() {}, err
 	}
-	return path, func() { os.Remove(path) }, nil
+	return path, func() { _ = os.Remove(path) }, nil
 }
 
 // truncate returns the first n characters of s.
