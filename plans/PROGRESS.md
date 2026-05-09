@@ -14,7 +14,6 @@ Update this file when opening, completing, or blocking an issue.
 
 ## In Progress
 - #91 cmd/interactive: status, notes, pause/continue during execution
-- #126 agents/codex: Codex CLI completer (M6, branch claude/issue-126-tests-first-TBk7B)
 
 ## Blocked
 
@@ -72,6 +71,7 @@ Update this file when opening, completing, or blocking an issue.
 - #112 cmd: @vairdict fix — push code changes from PR comments
 - #113 cmd: @vairdict run — trigger full plan/code/quality loop from PR comment
 - #90 cmd/resume: resume interrupted run from last checkpoint
+- #126 agents/codex: Codex CLI completer + resolver wiring (M6)
 
 ---
 
@@ -168,5 +168,5 @@ reviewed by the agent judge, only then created in GitHub.
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
 | M5        | in progress | 15/17       |
-| M6        | not started | 0/9         |
+| M6        | in progress | 1/9         |
 | M7+       | not started | —           |

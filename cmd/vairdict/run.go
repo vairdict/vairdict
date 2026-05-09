@@ -175,6 +175,41 @@ func fetchIssueIntent(number int) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// populateTaskChecklist fetches the linked issue and parses its
+// `- [ ]` checklist into task.Checklist so the quality judge can
+// enforce per-item ticking. Best-effort: a fetch failure logs a
+// warning and the task continues in legacy (no-AC-gate) mode rather
+// than blocking the whole run on a transient GitHub error.
+//
+// issueNumber == 0 means the run was started without --issue, so
+// there's no body to parse — early-return as a no-op.
+//
+// When the fetch succeeds and the body has no `- [ ]` items, we
+// also no-op (empty Checklist). The judge then runs in legacy mode
+// for that task.
+func populateTaskChecklist(ctx context.Context, gh *github.Client, store *state.Store, task *state.Task, issueNumber int) {
+	if issueNumber <= 0 {
+		return
+	}
+	iss, err := gh.FetchIssue(ctx, issueNumber)
+	if err != nil {
+		slog.Warn("could not fetch issue body for AC checklist; running in legacy mode",
+			"issue", issueNumber, "error", err)
+		return
+	}
+	items := github.ParseChecklist(iss.Body)
+	if len(items) == 0 {
+		return
+	}
+	task.Checklist = items
+	if err := store.UpdateTask(task); err != nil {
+		// Persistence failure is non-fatal — the in-memory task still
+		// carries the checklist for this run. `vairdict resume` would
+		// re-fetch from the issue, so a missed write is recoverable.
+		slog.Warn("failed to persist task checklist", "task", task.ID, "error", err)
+	}
+}
+
 func execCommand(name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	return cmd.Output()
@@ -492,6 +527,13 @@ func runTask(intent string, issueNumber int, mode ui.Mode, colors ui.ColorScheme
 	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
 
+	// Populate the AC checklist from the linked issue's body so the
+	// quality judge can enforce per-item ticking. Best-effort: a fetch
+	// failure logs a warning and the task continues in legacy mode
+	// (no AC gate). issueNumber == 0 means the run was started without
+	// --issue, so there's nothing to fetch.
+	populateTaskChecklist(ctx, ghClient, store, task, issueNumber)
+
 	deps := defaultRunDeps(cfg, comps, store, workDir, r, ghClient, issueNumber)
 
 	// Interactive input loop: if stdin is a TTY and --no-tty is not
@@ -716,6 +758,8 @@ func runSingleTask(
 	workDir := ws.Path
 	ghRunner := &github.ExecRunner{Dir: repoRoot}
 	ghClient := github.New(ghRunner)
+
+	populateTaskChecklist(ctx, ghClient, store, task, issueNumber)
 
 	deps := defaultRunDeps(cfg, comps, store, workDir, r, ghClient, issueNumber)
 	// In concurrent mode, escalation returns an error instead of os.Exit.
