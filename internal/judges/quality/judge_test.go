@@ -1244,8 +1244,7 @@ func TestJudge_AC_PromptIncludesItems(t *testing.T) {
 	// Negative-space instruction must reach the model — that's the
 	// load-bearing instruction for catching "looked plausible, not
 	// actually done" misses.
-	if !strings.Contains(prompt, "files would I expect to change") &&
-		!strings.Contains(prompt, "files would you expect to change") {
+	if !strings.Contains(prompt, "evidence would I expect to see") {
 		t.Errorf("prompt missing negative-space instruction\n%s", prompt)
 	}
 }

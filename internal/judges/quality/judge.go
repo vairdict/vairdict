@@ -740,7 +740,7 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	// review, not after it has already started forming opinions. Empty
 	// for first-round reviews (priorGaps==nil).
 	framing := RenderCrossPushFraming(priorGaps)
-	acSection := renderACSection(checklist)
+	acSection := verdictschema.RenderACSection(checklist)
 	prompt := fmt.Sprintf(
 		"%s## Original Intent\n%s\n\n## Approved Plan\n%s%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
 		framing, intent, plan, facts, acSection, diffSection,
@@ -757,40 +757,6 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	}
 
 	return &verdict, nil
-}
-
-// renderACSection produces the "## Acceptance Criteria" prompt
-// fragment listing the AC items the judge must tick, with explicit
-// per-item-evidence instructions. Empty when the task carries no AC
-// checklist; in that case the judge runs in legacy mode (score-based
-// pass, no AC enforcement).
-//
-// The instructions are deliberately repetitive of the schema's
-// `checklist` field description — the prompt repeats the contract so
-// the model walks it consciously instead of treating it as a side
-// effect of the tool call. The negative-space prompt ("which files
-// would I expect to change?") is the load-bearing part — without it
-// the model tends to mark items met based on plausibility rather
-// than diff evidence.
-func renderACSection(items []state.ChecklistItem) string {
-	if len(items) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\n\n## Acceptance Criteria\n\n")
-	b.WriteString("For EACH item below, populate one entry in the submit_verdict tool's `checklist` array. Use the exact `name` shown.\n\n")
-	b.WriteString("Contract:\n")
-	b.WriteString("- `passed=true` requires concrete file:line evidence in `reason`. If you can't cite a hunk in the diff that satisfies the criterion, do not mark it passed.\n")
-	b.WriteString("- `passed=false` requires a deferral note in `reason` explaining why this item isn't being completed (e.g. \"blocked on #N\", \"needs upstream X\", \"out of scope per <commit>\"). Empty `reason` on an unpassed item BLOCKS the verdict — the judge cannot quietly skip an AC item.\n\n")
-	b.WriteString("Negative-space check, run for each item before deciding `passed`:\n")
-	b.WriteString("1. Which files would I expect to change to satisfy this criterion?\n")
-	b.WriteString("2. Did those files actually change in the diff?\n")
-	b.WriteString("3. If no, this item is NOT done, even if related work is present.\n\n")
-	b.WriteString("Items:\n")
-	for _, it := range items {
-		b.WriteString(fmt.Sprintf("- `%s`: %s\n", it.Name, it.Description))
-	}
-	return b.String()
 }
 
 // runE2E executes the configured e2e command and returns a Gap if it fails, or nil on success.

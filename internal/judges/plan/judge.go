@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/config"
@@ -140,7 +141,7 @@ var systemPrompt = systemPromptCore + "\n\n" + standards.Block
 // Pass is determined by whether the score meets the configured coverage
 // threshold AND there are no blocking gaps. Blocking is assigned from the
 // configured severity block-on list, not the LLM's opinion.
-func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, acknowledged []state.Assumption) (*state.Verdict, error) {
+func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, acknowledged []state.Assumption, checklist []state.ChecklistItem) (*state.Verdict, error) {
 	prompt := fmt.Sprintf("## Intent\n%s\n\n## Plan\n%s", intent, plan)
 
 	if len(acknowledged) > 0 {
@@ -152,10 +153,37 @@ func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, ackno
 		}
 	}
 
+	// Inject the AC list when the task carries one. Same shared
+	// helper as the quality judge — the contract is identical, the
+	// evidence form differs (here it's a quote from the plan,
+	// downstream it's a file:line in the diff). Catching missed AC
+	// at plan time saves a wasted code phase on a doomed plan.
+	prompt += verdictschema.RenderACSection(checklist)
+
 	var verdict state.Verdict
 	tool := verdictschema.VerdictTool("Submit the plan judge verdict as a structured object. Omit score, pass, and blocking — they are computed from the gap severities.")
 	if err := j.client.CompleteWithTool(ctx, systemPrompt, prompt, tool, &verdict); err != nil {
 		return nil, fmt.Errorf("judging plan: %w", err)
+	}
+
+	// AC tracing post-processing. Mirrors quality judge: merge audit
+	// + source, surface a Critical Blocking gap for any Required
+	// item the model left unpassed without a deferral reason.
+	if len(checklist) > 0 {
+		merged := verdictschema.MergeChecklistAudit(checklist, verdict.Checklist)
+		verdict.Checklist = merged
+		for _, it := range merged {
+			if !it.Required || it.Passed {
+				continue
+			}
+			if strings.TrimSpace(it.Reason) != "" {
+				continue
+			}
+			verdict.Gaps = append(verdict.Gaps, state.Gap{
+				Severity:    state.SeverityCritical,
+				Description: fmt.Sprintf("Plan does not cover acceptance criterion: %s", it.Description),
+			})
+		}
 	}
 
 	// Always pass a non-nil map — empty BlockOn must mean "nothing blocks",
@@ -193,7 +221,15 @@ func (j *PlanJudge) Judge(ctx context.Context, intent string, plan string, ackno
 	}
 
 	verdict.Score = verdictschema.ComputeScoreWithAcknowledged(verdict.Gaps, acknowledged)
-	verdict.Pass = verdict.Score >= j.cfg.CoverageThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
+	// Pass gate: when the task carries an AC list, use the new
+	// mechanical gate (DeriveVerdictState — zero blocking gaps +
+	// every Required item Passed-or-deferred-with-reason). Legacy
+	// tasks without a checklist keep the threshold-based pass.
+	if len(verdict.Checklist) > 0 {
+		verdict.Pass = state.DeriveVerdictState(verdict.Gaps, verdict.Checklist) == state.VerdictPass
+	} else {
+		verdict.Pass = verdict.Score >= j.cfg.CoverageThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
+	}
 	verdict.Model = j.client.Model()
 
 	return &verdict, nil

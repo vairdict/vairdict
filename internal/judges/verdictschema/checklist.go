@@ -1,6 +1,49 @@
 package verdictschema
 
-import "github.com/vairdict/vairdict/internal/state"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/vairdict/vairdict/internal/state"
+)
+
+// RenderACSection produces the "## Acceptance Criteria" prompt
+// fragment listing the AC items the judge must tick, with explicit
+// per-item-evidence instructions. Empty when the items slice is
+// empty; in that case the judge runs in legacy mode (no AC
+// enforcement).
+//
+// The instructions are deliberately repetitive of the schema's
+// `checklist` field description (schema.go) — the prompt repeats
+// the contract so the model walks it consciously instead of
+// treating it as a side effect of the tool call. The
+// negative-space prompt ("which files would I expect to change?")
+// is the load-bearing part — without it the model marks items met
+// based on plausibility rather than evidence.
+//
+// Shared between the plan judge (evidence is plan text covering
+// each AC) and the quality judge (evidence is file:line in the
+// diff). Both judges enforce the same per-item contract.
+func RenderACSection(items []state.ChecklistItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## Acceptance Criteria\n\n")
+	b.WriteString("For EACH item below, populate one entry in the submit_verdict tool's `checklist` array. Use the exact `name` shown.\n\n")
+	b.WriteString("Contract:\n")
+	b.WriteString("- `passed=true` requires concrete evidence in `reason` (file:line in the diff for the quality judge; a quote from the plan for the plan judge). If you can't cite the evidence, do not mark it passed.\n")
+	b.WriteString("- `passed=false` requires a deferral note in `reason` explaining why this item isn't being completed (e.g. \"blocked on #N\", \"needs upstream X\", \"out of scope per <commit>\"). Empty `reason` on an unpassed item BLOCKS the verdict — the judge cannot quietly skip an AC item.\n\n")
+	b.WriteString("Negative-space check, run for each item before deciding `passed`:\n")
+	b.WriteString("1. What concrete evidence would I expect to see to satisfy this criterion?\n")
+	b.WriteString("2. Is that evidence present?\n")
+	b.WriteString("3. If no, this item is NOT done, even if related work is present.\n\n")
+	b.WriteString("Items:\n")
+	for _, it := range items {
+		b.WriteString(fmt.Sprintf("- `%s`: %s\n", it.Name, it.Description))
+	}
+	return b.String()
+}
 
 // MergeChecklistAudit combines the source AC list (parsed from the
 // issue body) with the judge's per-item ticks into the final

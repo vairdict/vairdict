@@ -152,6 +152,45 @@ func TestMergeChecklistAudit_NilSource(t *testing.T) {
 	}
 }
 
+// TestRenderACSection_Empty: an empty items slice produces an empty
+// string so the prompt builder can concatenate it unconditionally
+// without leaving a stray header.
+func TestRenderACSection_Empty(t *testing.T) {
+	if got := RenderACSection(nil); got != "" {
+		t.Errorf("RenderACSection(nil) = %q, want empty", got)
+	}
+	if got := RenderACSection([]state.ChecklistItem{}); got != "" {
+		t.Errorf("RenderACSection(empty) = %q, want empty", got)
+	}
+}
+
+// TestRenderACSection_IncludesItemsAndContract: with a non-empty
+// list, the rendered fragment must include every item by name +
+// description, the contract bullets (passed/reason rules), and the
+// negative-space instruction. The schema's description and this
+// prompt fragment together form the model's instructions; one
+// without the other is incomplete.
+func TestRenderACSection_IncludesItemsAndContract(t *testing.T) {
+	items := []state.ChecklistItem{
+		{Name: "ac_1", Description: "first item"},
+		{Name: "ac_2", Description: "second item"},
+	}
+	got := RenderACSection(items)
+	for _, want := range []string{
+		"## Acceptance Criteria",
+		"ac_1", "first item",
+		"ac_2", "second item",
+		"passed=true", "passed=false",
+		"reason",
+		"BLOCKS the verdict",
+		"evidence would I expect to see",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RenderACSection missing %q\n%s", want, got)
+		}
+	}
+}
+
 // TestVerdictTool_DescriptionMentionsChecklistContract: the schema's
 // description text must tell the model it has to populate the
 // checklist with one entry per AC item and explain the
