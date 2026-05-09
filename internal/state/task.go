@@ -270,6 +270,14 @@ type Verdict struct {
 	// independently of the producer model. Empty for verdicts produced
 	// without an LLM (e.g. the code judge's deterministic shell checks).
 	Model string `json:"model,omitempty"`
+	// Checklist is the per-acceptance-criteria audit. Populated by the
+	// judge when the task carries a Checklist parsed from the issue
+	// body — one entry per AC item, with Passed and Reason filled by
+	// the judge's per-item tick. Empty for legacy tasks (no AC list)
+	// and for judges that do not consume AC. The new pass gate
+	// (DeriveVerdictState) consumes this alongside Gaps to compute
+	// PASS / NEEDS_WORK.
+	Checklist []ChecklistItem `json:"checklist,omitempty"`
 }
 
 // Attempt records one execution of a phase.
@@ -428,7 +436,18 @@ type Task struct {
 	// keeps them out of the DB column) — consumed exactly once by the
 	// next plan or code prompt, then cleared. A fresh `vairdict run`
 	// or `resume` starts with no pending notes.
-	Notes     []string  `json:"-"`
+	Notes []string `json:"-"`
+
+	// Checklist is the per-acceptance-criteria list parsed from the
+	// linked GitHub issue body when the task is created. Empty for
+	// tasks created from intents alone (no `- [ ]` source). When
+	// non-empty, the quality judge enforces per-item ticking and the
+	// pass gate requires every Required item Passed-or-deferred-with-
+	// reason. Stays in sync with the issue body the orchestrator saw
+	// at task-creation time; mid-run edits to the issue do not
+	// retroactively change the contract.
+	Checklist []ChecklistItem `json:"checklist,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

@@ -641,9 +641,9 @@ func RenderCrossPushFraming(priorGaps []state.Gap) string {
 // instead of inventing fresh findings for code that pre-dated the
 // prior review. nil/empty disables the framing — used for first-round
 // reviews and one-shot calls (e.g. `vairdict review`).
-func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap) (*state.Verdict, error) {
+func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap, checklist []state.ChecklistItem) (*state.Verdict, error) {
 	// Step 1: AI intent verification.
-	verdict, err := j.evaluateIntent(ctx, intent, plan, diff, priorGaps)
+	verdict, err := j.evaluateIntent(ctx, intent, plan, diff, priorGaps, checklist)
 	if err != nil {
 		return nil, fmt.Errorf("evaluating intent: %w", err)
 	}
@@ -654,6 +654,32 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 	if j.cfg.Phases.Quality.E2ERequired && j.cfg.Commands.E2E != "" {
 		if e2eGap := j.runE2E(ctx, "."); e2eGap != nil {
 			verdict.Gaps = append(verdict.Gaps, *e2eGap)
+		}
+	}
+
+	// Step 3: AC tracing. When the task carries a parsed AC checklist
+	// from the issue body, merge the model's per-item audit response
+	// (verdict.Checklist as returned by the tool) with the source list
+	// — the source contributes Description/Required/Name (which the
+	// model cannot rewrite), the audit contributes Passed/Reason. For
+	// every Required item the gate would fail on (unpassed AND no
+	// reason), surface a Critical Blocking gap so the verdict comment
+	// explains what's missing rather than just emitting an opaque
+	// NEEDS_WORK.
+	if len(checklist) > 0 {
+		merged := verdictschema.MergeChecklistAudit(checklist, verdict.Checklist)
+		verdict.Checklist = merged
+		for _, it := range merged {
+			if !it.Required || it.Passed {
+				continue
+			}
+			if strings.TrimSpace(it.Reason) != "" {
+				continue
+			}
+			verdict.Gaps = append(verdict.Gaps, state.Gap{
+				Severity:    state.SeverityCritical,
+				Description: fmt.Sprintf("Acceptance criterion not satisfied: %s", it.Description),
+			})
 		}
 	}
 
@@ -669,7 +695,17 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 		slog.Info("baseline rule forced blocking", "gaps_promoted", promoted)
 	}
 	verdict.Score = verdictschema.ComputeScore(verdict.Gaps)
-	verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
+	// Pass gate: when the task ships an AC list, use the new
+	// mechanical gate (DeriveVerdictState — zero blocking gaps + every
+	// Required item Passed-or-deferred-with-reason). Legacy tasks
+	// without a checklist keep the threshold-based pass for
+	// backwards compatibility; flipping that path is out of scope
+	// here.
+	if len(verdict.Checklist) > 0 {
+		verdict.Pass = state.DeriveVerdictState(verdict.Gaps, verdict.Checklist) == state.VerdictPass
+	} else {
+		verdict.Pass = verdict.Score >= PassThreshold && !verdictschema.HasBlockingGap(verdict.Gaps)
+	}
 	verdict.ReturnTo = normaliseReturnTo(verdict.ReturnTo, verdict.Pass, verdict.Gaps)
 	verdict.Model = j.client.Model()
 
@@ -677,6 +713,7 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 		"score", verdict.Score,
 		"pass", verdict.Pass,
 		"gaps", len(verdict.Gaps),
+		"checklist", len(verdict.Checklist),
 		"model", verdict.Model,
 	)
 
@@ -684,7 +721,7 @@ func (j *QualityJudge) Judge(ctx context.Context, intent string, plan string, di
 }
 
 // evaluateIntent uses the Claude API to assess whether the diff matches the intent.
-func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap) (*state.Verdict, error) {
+func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap, checklist []state.ChecklistItem) (*state.Verdict, error) {
 	diffSection := diff
 	if strings.TrimSpace(diffSection) == "" {
 		diffSection = "(no diff provided — judge cannot evaluate code changes)"
@@ -703,9 +740,10 @@ func (j *QualityJudge) evaluateIntent(ctx context.Context, intent string, plan s
 	// review, not after it has already started forming opinions. Empty
 	// for first-round reviews (priorGaps==nil).
 	framing := RenderCrossPushFraming(priorGaps)
+	acSection := verdictschema.RenderACSection(checklist)
 	prompt := fmt.Sprintf(
-		"%s## Original Intent\n%s\n\n## Approved Plan\n%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
-		framing, intent, plan, facts, diffSection,
+		"%s## Original Intent\n%s\n\n## Approved Plan\n%s%s%s\n\n## Diff (unified format)\n```diff\n%s\n```",
+		framing, intent, plan, facts, acSection, diffSection,
 	)
 
 	var verdict state.Verdict

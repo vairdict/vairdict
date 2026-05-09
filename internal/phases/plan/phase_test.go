@@ -67,7 +67,7 @@ type fakeJudge struct {
 	calls    int
 }
 
-func (f *fakeJudge) Judge(_ context.Context, _, _ string, _ []state.Assumption) (*state.Verdict, error) {
+func (f *fakeJudge) Judge(_ context.Context, _, _ string, _ []state.Assumption, _ []state.ChecklistItem) (*state.Verdict, error) {
 	i := f.calls
 	f.calls++
 

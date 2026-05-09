@@ -47,7 +47,7 @@ func TestJudge_BaselineViolationForcedBlocking_UnderPermissiveConfig(t *testing.
 	}
 	judge := New(fake, cfg)
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestJudge_NonBaselineP1StillGovernedByConfig(t *testing.T) {
 	}
 	judge := New(fake, cfg)
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestJudge_Pass_NoGapsScoresFull(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes\n3. Write tests", nil)
+	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers\n2. Add routes\n3. Write tests", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestJudge_Fail_BlockingGapsDriveScoreDown(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers", nil)
+	verdict, err := judge.Judge(context.Background(), "build a REST API", "1. Create handlers", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestJudge_BlockingIgnoresLLMOpinion(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestJudge_AccumulatedP2sDragScoreBelowThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestJudge_PassTrueAtExactThreshold(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestJudge_P3GapsDeferred(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestJudge_ClientError(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	_, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	_, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err == nil {
 		t.Fatal("expected error when client fails")
 	}
@@ -300,7 +300,7 @@ func TestJudge_CustomSeverityConfig(t *testing.T) {
 	}
 
 	judge := New(fake, cfg)
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestJudge_EmptyGapsAndQuestions(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +349,7 @@ func TestJudge_SummaryRoundTrip(t *testing.T) {
 	}
 
 	judge := New(fake, defaultCfg())
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestJudge_AcknowledgedAssumptionsInPrompt(t *testing.T) {
 		{Description: "caching strategy TBD", Severity: state.SeverityMedium, Phase: state.PhasePlan},
 	}
 
-	_, err := judge.Judge(context.Background(), "intent", "plan", assumptions)
+	_, err := judge.Judge(context.Background(), "intent", "plan", assumptions, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestJudge_VerdictStampedWithModel(t *testing.T) {
 	}
 	judge := New(fake, defaultCfg())
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestJudge_ReflaggedGapHalvedPenalty(t *testing.T) {
 		{Description: "database choice unclear", Severity: state.SeverityMedium},
 	}
 
-	verdict, err := judge.Judge(context.Background(), "intent", "plan", acknowledged)
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", acknowledged, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -461,5 +461,125 @@ func TestJudge_ReflaggedGapHalvedPenalty(t *testing.T) {
 	// 100 - 5 (halved re-flag) - 10 (new) = 85
 	if verdict.Score != 85 {
 		t.Errorf("expected score 85 (halved re-flag penalty), got %f", verdict.Score)
+	}
+}
+
+// --- AC tracing tests (mirror quality judge AC tests) ---
+//
+// Plan-time AC enforcement catches missed AC items before the code
+// phase runs — saves a wasted code phase on a doomed plan. Same
+// shape as the quality-judge AC contract: per-item ticking, deferral
+// allowed with non-empty reason, omission blocks.
+
+func TestJudge_AC_PromptIncludesItems(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{}}
+	judge := New(fake, defaultCfg())
+	checklist := []state.ChecklistItem{
+		{Name: "ac_1", Description: "Add codex completer", Required: true},
+		{Name: "ac_2", Description: "Wire into resolver", Required: true},
+	}
+	if _, err := judge.Judge(context.Background(), "intent", "plan", nil, checklist); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	prompt := fake.Calls[0].Prompt
+	for _, want := range []string{"## Acceptance Criteria", "ac_1", "ac_2", "Add codex completer", "Wire into resolver", "evidence would I expect to see"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("plan judge prompt missing %q\n%s", want, prompt)
+		}
+	}
+}
+
+func TestJudge_AC_AllPassedYieldsPass(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Passed: true, Reason: "plan section 1: builds completer"},
+			{Name: "ac_2", Passed: true, Reason: "plan section 3: wires resolver"},
+		},
+	}}
+	judge := New(fake, defaultCfg())
+	checklist := []state.ChecklistItem{
+		{Name: "ac_1", Description: "first", Required: true},
+		{Name: "ac_2", Description: "second", Required: true},
+	}
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, checklist)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Pass {
+		t.Errorf("verdict.Pass = false, want true; gaps: %+v", verdict.Gaps)
+	}
+	if verdict.Checklist[0].Description != "first" {
+		t.Errorf("checklist[0].Description = %q, want first", verdict.Checklist[0].Description)
+	}
+}
+
+func TestJudge_AC_UnmetWithoutReasonBlocks(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Passed: true, Reason: "covered in plan"},
+			{Name: "ac_2", Passed: false}, // omitted from plan, no reason
+		},
+	}}
+	judge := New(fake, defaultCfg())
+	checklist := []state.ChecklistItem{
+		{Name: "ac_1", Description: "first", Required: true},
+		{Name: "ac_2", Description: "wire codex into resolver", Required: true},
+	}
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, checklist)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if verdict.Pass {
+		t.Errorf("verdict.Pass = true, want false (ac_2 unmet)")
+	}
+	var found bool
+	for _, g := range verdict.Gaps {
+		// Plan judge phrasing is "Plan does not cover ..." so the
+		// surfaced gap is distinguishable from the quality judge's.
+		if g.Blocking && strings.Contains(g.Description, "Plan does not cover") && strings.Contains(g.Description, "wire codex into resolver") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected a Critical Blocking gap for the unmet AC item\ngaps: %+v", verdict.Gaps)
+	}
+}
+
+func TestJudge_AC_DeferredWithReasonPasses(t *testing.T) {
+	fake := &claude.FakeClient{Response: state.Verdict{
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Passed: true, Reason: "plan covers it"},
+			{Name: "ac_2", Passed: false, Reason: "blocked on #130 (registry doesn't exist yet)"},
+		},
+	}}
+	judge := New(fake, defaultCfg())
+	checklist := []state.ChecklistItem{
+		{Name: "ac_1", Description: "first", Required: true},
+		{Name: "ac_2", Description: "register with registry", Required: true},
+	}
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, checklist)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Pass {
+		t.Errorf("verdict.Pass = false, want true (ac_2 deferred with reason)")
+	}
+}
+
+func TestJudge_AC_EmptyChecklistPreservesLegacyBehaviour(t *testing.T) {
+	// No AC list → score-based legacy gate stays active. With no
+	// gaps the score is 100 and Pass is true.
+	fake := &claude.FakeClient{Response: state.Verdict{}}
+	judge := New(fake, defaultCfg())
+	verdict, err := judge.Judge(context.Background(), "intent", "plan", nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verdict.Pass {
+		t.Error("legacy-mode plan verdict with no gaps should pass")
+	}
+	if strings.Contains(fake.Calls[0].Prompt, "## Acceptance Criteria") {
+		t.Error("plan judge prompt should not include AC section when checklist is empty")
 	}
 }

@@ -60,8 +60,11 @@ func TestChecklistTally(t *testing.T) {
 }
 
 // TestRequiredPassed reports whether every Required item in the
-// checklist is Passed. Optional items are ignored. This is one half
-// of the new pass gate (the other half: zero blocking gaps).
+// checklist is "satisfied" — either Passed=true, or unpassed with a
+// non-empty Reason explaining the deferral. An unpassed Required
+// item with no Reason fails the check; that's the forcing-function
+// for the judge to either complete the AC item or write down why
+// it isn't being completed.
 func TestRequiredPassed(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -73,9 +76,16 @@ func TestRequiredPassed(t *testing.T) {
 			{Name: "a", Required: true, Passed: true},
 			{Name: "b", Required: true, Passed: true},
 		}, true},
-		{"required_unticked_fails", []ChecklistItem{
+		{"required_unticked_no_reason_fails", []ChecklistItem{
 			{Name: "a", Required: true, Passed: true},
 			{Name: "b", Required: true, Passed: false},
+		}, false},
+		{"required_unticked_with_reason_passes", []ChecklistItem{
+			{Name: "a", Required: true, Passed: true},
+			{Name: "b", Required: true, Passed: false, Reason: "blocked on #130"},
+		}, true},
+		{"required_unticked_whitespace_only_reason_fails", []ChecklistItem{
+			{Name: "a", Required: true, Passed: false, Reason: "   "},
 		}, false},
 		{"optional_unticked_still_passes", []ChecklistItem{
 			{Name: "a", Required: true, Passed: true},
@@ -138,6 +148,12 @@ func TestDeriveVerdictState(t *testing.T) {
 			nil,
 			[]ChecklistItem{{Required: true, Passed: false}},
 			VerdictNeedsWork,
+		},
+		{
+			"deferred_required_with_reason_does_not_fail",
+			nil,
+			[]ChecklistItem{{Required: true, Passed: false, Reason: "blocked on #130"}},
+			VerdictPass,
 		},
 		{
 			"unticked_optional_does_not_fail",

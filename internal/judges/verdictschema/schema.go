@@ -64,6 +64,20 @@ const inputSchema = `{
       "type": "string",
       "enum": ["", "code", "plan", "escalate"],
       "description": "Quality-judge-only. On a failing verdict, the phase the outer loop should rewind to. Omit or leave empty on passing verdicts and on judges that do not drive cross-phase routing."
+    },
+    "checklist": {
+      "type": "array",
+      "description": "Per-acceptance-criteria audit. When the prompt provides a numbered AC list, emit ONE entry per AC item using the exact name (ac_1, ac_2, …) the prompt assigns. Set passed=true only when the diff actually satisfies the criterion — populate reason with concrete evidence (file:line). Set passed=false when the diff does not satisfy it AND populate reason with a deferral note (e.g. 'blocked on #N', 'needs upstream X'). An unpassed item with empty reason is treated as 'not done, no excuse' and blocks the verdict. Omit the array (or send []) when the prompt did not supply an AC list.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "description": "Stable id from the AC list in the prompt (ac_1, ac_2, …). Echo it verbatim."},
+          "passed": {"type": "boolean", "description": "true iff the diff satisfies this acceptance criterion."},
+          "reason": {"type": "string", "description": "When passed=true: file:line evidence. When passed=false: why this item is being deferred. Empty when passed=false blocks the verdict."}
+        },
+        "required": ["name", "passed"],
+        "additionalProperties": false
+      }
     }
   },
   "required": ["summary", "gaps", "questions"],

@@ -97,14 +97,16 @@ func (f *fakeReviewGH) MergePR(_ context.Context, _ int) error {
 // fakeReviewJudge captures the inputs to Judge so tests can verify the
 // command threads intent / plan / diff through correctly.
 type fakeReviewJudge struct {
-	verdict *state.Verdict
-	err     error
-	intent  string
-	plan    string
-	diff    string
+	verdict   *state.Verdict
+	err       error
+	intent    string
+	plan      string
+	diff      string
+	checklist []state.ChecklistItem
 }
 
-func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, diff string, _ []state.Gap) (*state.Verdict, error) {
+func (f *fakeReviewJudge) Judge(_ context.Context, intent, plan, diff string, _ []state.Gap, checklist []state.ChecklistItem) (*state.Verdict, error) {
+	f.checklist = checklist
 	f.intent = intent
 	f.plan = plan
 	f.diff = diff

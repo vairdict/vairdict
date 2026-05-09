@@ -20,7 +20,7 @@ type fakeJudge struct {
 	priorGapsByCall [][]state.Gap
 }
 
-func (f *fakeJudge) Judge(_ context.Context, _, _, _ string, priorGaps []state.Gap) (*state.Verdict, error) {
+func (f *fakeJudge) Judge(_ context.Context, _, _, _ string, priorGaps []state.Gap, _ []state.ChecklistItem) (*state.Verdict, error) {
 	f.priorGapsByCall = append(f.priorGapsByCall, priorGaps)
 	if f.err != nil {
 		return nil, f.err

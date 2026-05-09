@@ -96,7 +96,7 @@ type reviewGH interface {
 // nil — cross-push memory across CLI invocations would need a separate
 // state store and is out of scope for the subcommand.
 type reviewJudge interface {
-	Judge(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap) (*state.Verdict, error)
+	Judge(ctx context.Context, intent string, plan string, diff string, priorGaps []state.Gap, checklist []state.ChecklistItem) (*state.Verdict, error)
 }
 
 // runReview is the production entry point: it loads the config, builds
@@ -165,7 +165,7 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 		return err
 	}
 
-	intent, err := resolveReviewIntent(ctx, deps.gh, pr, deps.intent)
+	intent, checklist, err := resolveReviewIntent(ctx, deps.gh, pr, deps.intent)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,10 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	// Review mode has no plan — pass empty. The diff is what the judge
 	// actually evaluates. priorGaps is nil because `vairdict review` is
 	// a one-shot CLI invocation with no persisted prior verdict.
-	verdict, err := deps.judge.Judge(ctx, intent, "", diff, nil)
+	// `checklist` carries the per-AC items parsed from the linked
+	// issue body (or PR body fallback) so the judge can enforce
+	// per-item ticking.
+	verdict, err := deps.judge.Judge(ctx, intent, "", diff, nil, checklist)
 	if err != nil {
 		return fmt.Errorf("running quality judge: %w", err)
 	}
@@ -205,16 +208,20 @@ func runReviewWith(ctx context.Context, prNumber int, deps reviewDeps) error {
 	return nil
 }
 
-// resolveReviewIntent picks the intent for the judge. Priority:
-//  1. Explicit --intent override
-//  2. Linked issue body (Closes/Fixes/Resolves #N in PR body)
-//  3. PR title + body as fallback
+// resolveReviewIntent picks the intent and the AC checklist for the
+// judge. Priority for intent:
+//  1. Explicit --intent override (no checklist extracted in this case
+//     — the override is the user's bespoke text, not an issue body)
+//  2. Linked issue body (Closes/Fixes/Resolves #N in PR body) — the
+//     checklist is parsed from the issue body
+//  3. PR title + body as fallback (checklist parsed from the PR body
+//     itself, which is unusual but harmless when absent)
 //
-// The override is passed in (not read from package state) so the core is
-// parallel-test-safe.
-func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails, override string) (string, error) {
+// The override is passed in (not read from package state) so the core
+// is parallel-test-safe.
+func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails, override string) (string, []state.ChecklistItem, error) {
 	if override != "" {
-		return override, nil
+		return override, nil, nil
 	}
 	issueNum := github.ParseLinkedIssue(pr.Body)
 	if issueNum > 0 {
@@ -222,10 +229,11 @@ func resolveReviewIntent(ctx context.Context, gh reviewGH, pr *github.PRDetails,
 		if err != nil {
 			slog.Warn("failed to fetch linked issue, falling back to PR title", "issue", issueNum, "error", err)
 		} else {
-			return iss.Title + "\n\n" + iss.Body, nil
+			return iss.Title + "\n\n" + iss.Body, github.ParseChecklist(iss.Body), nil
 		}
 	}
-	// Fall back to PR title + body as intent.
+	// Fall back to PR title + body as intent. Parse a checklist from
+	// the PR body too — many devs include their own AC list there.
 	slog.Info("no linked issue or --intent, using PR title+body as intent", "pr", pr.Number)
-	return pr.Title + "\n\n" + pr.Body, nil
+	return pr.Title + "\n\n" + pr.Body, github.ParseChecklist(pr.Body), nil
 }
