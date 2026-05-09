@@ -201,6 +201,93 @@ func TestRunReview_NoLinkedIssue_FallsBackToPRTitleBody(t *testing.T) {
 	}
 }
 
+// TestRunReview_Issue136_Fixtures covers the three scenarios called
+// out in the acceptance criteria for issue #136:
+//
+//	(a) Closes #N PR with matching diff → judge runs against the
+//	    linked issue's intent, verdict passes.
+//	(b) Closes #N PR with empty diff → judge runs against the linked
+//	    issue's intent and fails (correct behaviour).
+//	(c) PR with only bare #N references in the body and docs-only
+//	    diff → judge falls back to PR title+body; the linked issue
+//	    is NOT consulted, so its acceptance criteria do not bleed
+//	    into the verdict.
+//
+// Scenario (c) is the regression: PR #135 hit a P0 false-blocker
+// because a bare "#126" mention in its body was interpreted as a
+// closing keyword link.
+func TestRunReview_Issue136_Fixtures(t *testing.T) {
+	t.Parallel()
+	const codeIssueIntentMarker = "internal/agents/codex package required"
+	const docsBodyMarker = "No code changes — docs only."
+
+	cases := []struct {
+		name              string
+		body              string
+		title             string
+		diff              string
+		verdict           *state.Verdict
+		wantIntentHas     string
+		wantIntentMissing string
+		wantErr           bool
+	}{
+		{
+			name:          "(a) Closes #N with matching diff — passes",
+			body:          "Closes #48",
+			title:         "feat: add review subcommand",
+			diff:          "diff --git a/cmd/review.go b/cmd/review.go\n+++ b/cmd/review.go\n+func Review() {}\n",
+			verdict:       passingVerdict(),
+			wantIntentHas: codeIssueIntentMarker,
+		},
+		{
+			name:          "(b) Closes #N with empty diff — fails",
+			body:          "Closes #48",
+			title:         "feat: add review subcommand",
+			diff:          "",
+			verdict:       failingVerdict(),
+			wantIntentHas: codeIssueIntentMarker,
+			wantErr:       true,
+		},
+		{
+			name:              "(c) bare #N references on docs-only PR — no false blocker",
+			body:              docsBodyMarker + "\n\nUnblocks #126 by recording that #128 has landed.",
+			title:             "docs: update PROGRESS.md and ROADMAP.md",
+			diff:              "diff --git a/plans/PROGRESS.md b/plans/PROGRESS.md\n+++ b/plans/PROGRESS.md\n+ - #128 done\n",
+			verdict:           passingVerdict(),
+			wantIntentHas:     docsBodyMarker,
+			wantIntentMissing: codeIssueIntentMarker,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := &fakeReviewGH{
+				pr: &github.PRDetails{Number: 999, Title: tc.title, Body: tc.body},
+				// Linked-issue body is the would-be wrong rubric — if
+				// the regex incorrectly matches a bare #N, this body
+				// would be threaded into the judge's intent and trigger
+				// the PR #135 failure mode. The test checks it stays
+				// out for scenario (c).
+				issue: &github.IssueDetails{Number: 126, Title: "agents/codex backend", Body: codeIssueIntentMarker},
+				diff:  tc.diff,
+			}
+			judge := &fakeReviewJudge{verdict: tc.verdict}
+
+			err := runReviewWith(context.Background(), 999, baseDeps(gh, judge))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if tc.wantIntentHas != "" && !strings.Contains(judge.intent, tc.wantIntentHas) {
+				t.Errorf("intent missing %q.\nintent:\n%s", tc.wantIntentHas, judge.intent)
+			}
+			if tc.wantIntentMissing != "" && strings.Contains(judge.intent, tc.wantIntentMissing) {
+				t.Errorf("intent must not contain %q (linked-issue body bled in).\nintent:\n%s",
+					tc.wantIntentMissing, judge.intent)
+			}
+		})
+	}
+}
+
 func TestRunReview_JudgeError_Propagates(t *testing.T) {
 	t.Parallel()
 	gh := &fakeReviewGH{

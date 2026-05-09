@@ -407,7 +407,6 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		{"logo", `<img src="`},
 		{"logo alt", `alt="VAIrdict"`},
 		{"logo height", `height="24"`},
-		{"score", "**Score:** 95%"},
 		{"phase", "**Phase:** quality"},
 		{"loop", "**Loop:** 1"},
 		{"gap severity", "| Low |"},
@@ -451,7 +450,6 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		{"logo", `<img src="`},
 		{"logo alt", `alt="VAIrdict"`},
 		{"logo height", `height="24"`},
-		{"score", "**Score:** 40%"},
 		{"loop", "**Loop:** 2"},
 		{"blocking section", "### Blocking Gaps"},
 		{"critical gap", "**[Critical]** build broken"},
@@ -511,7 +509,7 @@ func TestFormatVerdictComment_RendersModel(t *testing.T) {
 
 func TestFormatVerdictComment_NoModelOmitted(t *testing.T) {
 	// Code judge runs deterministic shell checks (lint/test/build) and
-	// leaves Model empty. The score line must omit the model field
+	// leaves Model empty. The summary line must omit the model field
 	// rather than render an empty `Model: \`\`` artifact.
 	verdict := &state.Verdict{
 		Score: 100,
@@ -522,6 +520,33 @@ func TestFormatVerdictComment_NoModelOmitted(t *testing.T) {
 
 	if contains(comment, "**Model:**") {
 		t.Errorf("comment must omit Model label when verdict has no model, got:\n%s", comment)
+	}
+}
+
+// TestFormatVerdictComment_OmitsScoreField pins the deliberate
+// removal of the Score field from the rendered comment. With AC
+// tracing landed, Pass / NEEDS_WORK is mechanical — gate is
+// DeriveVerdictState(gaps, checklist), not score. A 100% score next
+// to a NEEDS_WORK verdict (or 60% next to PASS) is more confusing
+// than helpful, and the header / Criteria table / AC matrix already
+// convey what the reader needs. Score still lives on state.Verdict
+// for debug logs; just not in the rendered comment.
+func TestFormatVerdictComment_OmitsScoreField(t *testing.T) {
+	cases := []struct {
+		name string
+		v    *state.Verdict
+	}{
+		{"pass with full score", &state.Verdict{Score: 100, Pass: true}},
+		{"fail with low score", &state.Verdict{Score: 40, Pass: false}},
+		{"pass with mid score", &state.Verdict{Score: 75, Pass: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatVerdictComment(tc.v, state.PhaseQuality, 1, nil)
+			if contains(got, "**Score:**") {
+				t.Errorf("rendered comment must not contain **Score:** label, got:\n%s", got)
+			}
+		})
 	}
 }
 
@@ -741,26 +766,44 @@ func TestFetchPRDiff(t *testing.T) {
 
 func TestParseLinkedIssue(t *testing.T) {
 	cases := []struct {
+		name string
 		body string
 		want int
 	}{
-		{"Closes #42", 42},
-		{"closes #42", 42},
-		{"Fixes #7\n\nlots of context", 7},
-		{"Resolves #123 — done", 123},
-		{"fixed #5", 5},
-		{"resolved #5", 5},
-		{"some text Closes: #99", 99},
-		{"## Issue\nCloses #48\n", 48},
-		{"no linked issue here", 0},
-		{"#42 alone is not enough", 0},
-		{"see #42 for context", 0},
-		{"", 0},
+		// Positives — closing keyword directly attached to the #N ref.
+		{"closes capitalised", "Closes #42", 42},
+		{"closes lowercase", "closes #42", 42},
+		{"fixes with body", "Fixes #7\n\nlots of context", 7},
+		{"resolves with em-dash", "Resolves #123 — done", 123},
+		{"fixed past tense", "fixed #5", 5},
+		{"resolved past tense", "resolved #5", 5},
+		{"closes with colon", "some text Closes: #99", 99},
+		{"closes after heading", "## Issue\nCloses #48\n", 48},
+
+		// Negatives — no closing keyword, or keyword separated from #N.
+		{"plain prose", "no linked issue here", 0},
+		{"bare ref", "#42 alone is not enough", 0},
+		{"see ref", "see #42 for context", 0},
+		{"empty", "", 0},
+
+		// Negatives that the previous (greedy) regex got wrong — the
+		// keyword and the #N must be adjacent, otherwise the body is just
+		// referring to an issue, not committing to close it. These are
+		// the PR #135 / issue #136 reproducers.
+		{"fixes typo while referring to ref", "This PR fixes a typo while preparing for #126.", 0},
+		{"closes far from ref", "Closes the connection bug discussed in PR #135 about #126", 0},
+		{"fix preceding ref by word", "fix typo in #126 doc", 0},
+		{"unblocks bare ref", "Unblocks #126 work — docs only", 0},
+		{"updates bare refs", "Updates PROGRESS.md to track #126 progress and #128 too.", 0},
+		{"verbatim PR135 body", "No code changes — docs only.\n\nUnblocks #126 by recording that #128 has landed.", 0},
+		{"close in different sentence", "Closes the loop on logging.\nSee related discussion in #200.", 0},
 	}
 	for _, tc := range cases {
-		if got := ParseLinkedIssue(tc.body); got != tc.want {
-			t.Errorf("ParseLinkedIssue(%q) = %d, want %d", tc.body, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ParseLinkedIssue(tc.body); got != tc.want {
+				t.Errorf("ParseLinkedIssue(%q) = %d, want %d", tc.body, got, tc.want)
+			}
+		})
 	}
 }
 
