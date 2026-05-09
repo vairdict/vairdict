@@ -1,5 +1,7 @@
 package state
 
+import "strings"
+
 // VerdictState is the binary outcome of the new pass gate. The score
 // number that judges historically returned is now decorative — the
 // gate is mechanical, derived from the checklist + blocking gaps.
@@ -23,15 +25,24 @@ const (
 // is the human-readable label that ends up in the verdict comment.
 //
 // Required items participate in the pass gate: an unticked Required
-// item flips the verdict to NEEDS_WORK. Optional items show up in the
-// checklist for transparency but don't fail the verdict — useful for
-// "tests cover the change" style observations that aren't appropriate
-// gates for every change but are still worth recording.
+// item flips the verdict to NEEDS_WORK *unless* the judge populates
+// Reason with a non-empty deferral note (e.g. "blocked on #130",
+// "needs upstream X"). The forcing function is: if you can't tick
+// it, write down why. Reason for ticked items is the evidence cite —
+// typically a file:line that proves the AC item is satisfied.
+//
+// Optional items (Required=false) show up in the checklist for
+// transparency but never fail the verdict — useful for "tests cover
+// the change" style observations.
 type ChecklistItem struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required"`
 	Passed      bool   `json:"passed"`
+	// Reason is evidence (file:line) when Passed=true, or a deferral
+	// note when Passed=false on a Required item. Empty Reason on an
+	// unticked Required item blocks the verdict.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ChecklistTally returns the (passed, total) counts across every
@@ -48,11 +59,22 @@ func ChecklistTally(items []ChecklistItem) (passed, total int) {
 }
 
 // RequiredPassed reports whether every Required item in the checklist
-// is Passed. Optional items are ignored. Half of the new pass gate;
-// the other half is "zero blocking gaps" (see DeriveVerdictState).
+// is "satisfied" — Passed=true, OR unpassed with a non-empty Reason
+// explaining the deferral. Optional items are ignored. Half of the
+// new pass gate; the other half is "zero blocking gaps" (see
+// DeriveVerdictState).
+//
+// Whitespace-only Reason counts as empty: the judge has to write
+// down a real explanation, not paper over the gap with spaces.
 func RequiredPassed(items []ChecklistItem) bool {
 	for _, it := range items {
-		if it.Required && !it.Passed {
+		if !it.Required {
+			continue
+		}
+		if it.Passed {
+			continue
+		}
+		if strings.TrimSpace(it.Reason) == "" {
 			return false
 		}
 	}
