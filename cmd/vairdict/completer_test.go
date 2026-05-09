@@ -6,6 +6,7 @@ import (
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecli"
+	"github.com/vairdict/vairdict/internal/agents/codex"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -33,6 +34,11 @@ func TestChooseBackend(t *testing.T) {
 		{"strict cli with cli", "claude-cli", true, backendClaudeCLI, false},
 		{"strict api", "claude-api", true, backendClaudeAPI, false},
 		{"strict api no cli", "claude-api", false, backendClaudeAPI, false},
+		// Codex pinned — explicit choice, no smart fall-through to claude.
+		// cliAvailable here refers to the *claude* CLI; it must not
+		// influence codex resolution either way.
+		{"codex no claude cli", "codex", false, backendCodex, false},
+		{"codex with claude cli", "codex", true, backendCodex, false},
 		// Typos surface as a hard error so users don't silently get the
 		// wrong backend.
 		{"unknown value", "openai", true, "", true},
@@ -414,6 +420,98 @@ func TestValidateBackends_AutoDoesNotErrorWhenFamilyUnavailable(t *testing.T) {
 	}
 	if err := validateBackends(cfg, probes); err != nil {
 		t.Errorf("smart-default config should not error, got: %v", err)
+	}
+}
+
+// TestResolveCompleter_CodexBackend: agents.judge: codex must construct a
+// codex.Client (not a claude one) and route through resolveCompleter
+// without touching the claude API path. AC item from #126: the new
+// client is reachable from the resolver.
+func TestResolveCompleter_CodexBackend(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "codex",
+		Judge:   "codex",
+		Model:   "gpt-5-codex",
+	}}
+
+	for _, role := range []completerRole{rolePlanner, rolePlanJudge, roleCodeJudge, roleQualityJudge} {
+		c, kind, err := resolveCompleter(cfg, role)
+		if err != nil {
+			t.Fatalf("resolveCompleter(%s): %v", role, err)
+		}
+		if kind != backendCodex {
+			t.Errorf("%s kind = %q, want %q", role, kind, backendCodex)
+		}
+		cc, ok := c.(*codex.Client)
+		if !ok {
+			t.Fatalf("expected *codex.Client for %s, got %T", role, c)
+		}
+		if got := cc.Model(); got != "gpt-5-codex" {
+			t.Errorf("%s codex client model = %q, want gpt-5-codex", role, got)
+		}
+	}
+}
+
+// TestValidateBackends_CodexNeedsBinary: codex pinned but `codex` not
+// on PATH must error and name both the role and the missing binary.
+// Mirrors the claude-cli missing-binary check.
+func TestValidateBackends_CodexNeedsBinary(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude",
+		// QualityJudge is the explicit pinned slot that should fail.
+		QualityJudge: "codex",
+	}}
+	probes := backendProbes{
+		// claude available (so coder + smart-default judges validate),
+		// codex absent.
+		cliAvailable:  func(name string) bool { return name == "claude" },
+		apiKeyPresent: func() bool { return true },
+	}
+	err := validateBackends(cfg, probes)
+	if err == nil {
+		t.Fatal("expected error for missing codex binary")
+	}
+	if !strings.Contains(err.Error(), "quality_judge") {
+		t.Errorf("error should name the role (quality_judge), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "codex") {
+		t.Errorf("error should name the missing binary (codex), got: %v", err)
+	}
+}
+
+// TestValidateBackends_CodexAvailable: codex pinned and the binary is
+// on PATH validates without error.
+func TestValidateBackends_CodexAvailable(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "codex",
+		Coder:   "claude-code",
+		Judge:   "codex",
+	}}
+	probes := backendProbes{
+		// Both binaries present — claude for the coder, codex for the
+		// completers.
+		cliAvailable:  func(string) bool { return true },
+		apiKeyPresent: func() bool { return false },
+	}
+	if err := validateBackends(cfg, probes); err != nil {
+		t.Errorf("codex pinned with binary present should validate, got: %v", err)
+	}
+}
+
+// TestSeedCLISession_NoOpForCodexClient: codex has no session-resume
+// concept (no --resume in our wrapper). seed/capture must be safe
+// no-ops so the orchestrator's existing wiring keeps working.
+func TestSeedCLISession_NoOpForCodexClient(t *testing.T) {
+	codexClient := codex.New()
+	task := state.NewTask("t", "i")
+	task.CLISessionIDs = map[string]string{string(rolePlanner): "ignored"}
+	// Must not panic; codex client doesn't have a session concept.
+	seedCLISession(codexClient, task, rolePlanner)
+	captureCLISession(codexClient, task, rolePlanner)
+	if task.CLISessionIDs[string(rolePlanner)] != "ignored" {
+		t.Errorf("codex client should not affect task session ids, got %v", task.CLISessionIDs)
 	}
 }
 
