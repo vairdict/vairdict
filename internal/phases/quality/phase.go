@@ -44,7 +44,7 @@ type PhaseResult struct {
 // the cross-push framing block when this is non-empty so it doesn't re-flag
 // concerns already raised.
 type Judge interface {
-	Judge(ctx context.Context, intent, plan, diff string, priorGaps []state.Gap) (*state.Verdict, error)
+	Judge(ctx context.Context, intent, plan, diff string, priorGaps []state.Gap, checklist []state.ChecklistItem) (*state.Verdict, error)
 }
 
 // QualityPhase orchestrates the quality phase: judge loop on already-coded work.
@@ -104,7 +104,7 @@ func (p *QualityPhase) Run(ctx context.Context, task *state.Task, plan string) (
 		}
 
 		p.notify(loop+1, p.cfg.MaxLoops, "reviewing", 0, false, nil)
-		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff, priorGaps)
+		verdict, err := p.judge.Judge(ctx, task.Intent, plan, p.diff, priorGaps, task.Checklist)
 		if err != nil {
 			return nil, fmt.Errorf("running quality judge: %w", err)
 		}
