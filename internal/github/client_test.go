@@ -1718,3 +1718,100 @@ func TestBuildInlineReview_StandardsAlwaysInline(t *testing.T) {
 		t.Fatalf("expected 1 inline Standards comment, got %+v", got)
 	}
 }
+
+// --- AC checklist rendering tests ---
+
+func TestFormatVerdictComment_AC_AllPassed(t *testing.T) {
+	v := &state.Verdict{
+		Pass: true, Score: 100,
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Description: "Add codex completer", Required: true, Passed: true, Reason: "internal/agents/codex/client.go:127"},
+			{Name: "ac_2", Description: "Wire into resolver", Required: true, Passed: true, Reason: "cmd/vairdict/completer.go:160"},
+		},
+	}
+	got := FormatVerdictComment(v, state.PhaseQuality, 1, nil)
+	if !strings.Contains(got, "Acceptance Criteria (2/2 passed)") {
+		t.Errorf("missing tally header\n%s", got)
+	}
+	for _, want := range []string{
+		"✅", "Add codex completer", "internal/agents/codex/client.go:127",
+		"Wire into resolver", "cmd/vairdict/completer.go:160",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatVerdictComment_AC_DeferredAndUnmet(t *testing.T) {
+	v := &state.Verdict{
+		Pass: false, Score: 60,
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Description: "first done", Required: true, Passed: true, Reason: "file:1"},
+			{Name: "ac_2", Description: "deferred item", Required: true, Passed: false, Reason: "blocked on #130"},
+			{Name: "ac_3", Description: "missed", Required: true, Passed: false},
+		},
+	}
+	got := FormatVerdictComment(v, state.PhaseQuality, 1, nil)
+	// Tally counts only passed (Passed=true) — deferred and missed
+	// don't count.
+	if !strings.Contains(got, "Acceptance Criteria (1/3 passed)") {
+		t.Errorf("tally wrong\n%s", got)
+	}
+	if !strings.Contains(got, "⏸️") {
+		t.Error("missing ⏸️ for deferred-with-reason item")
+	}
+	if !strings.Contains(got, "❌") {
+		t.Error("missing ❌ for unmet-no-reason item")
+	}
+	if !strings.Contains(got, "blocked on #130") {
+		t.Error("missing deferral reason text")
+	}
+	if !strings.Contains(got, "_(no reason given)_") {
+		t.Error("missing placeholder for missing reason")
+	}
+}
+
+func TestFormatVerdictComment_AC_OptionalItem(t *testing.T) {
+	v := &state.Verdict{
+		Pass: true, Score: 100,
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Description: "required pass", Required: true, Passed: true, Reason: "f:1"},
+			{Name: "opt_1", Description: "optional, unticked", Required: false, Passed: false},
+		},
+	}
+	got := FormatVerdictComment(v, state.PhaseQuality, 1, nil)
+	if !strings.Contains(got, "⚪") {
+		t.Errorf("missing ⚪ for optional unticked item\n%s", got)
+	}
+	if !strings.Contains(got, "(optional)") {
+		t.Errorf("missing (optional) prefix on optional item\n%s", got)
+	}
+}
+
+func TestFormatVerdictComment_AC_OmittedWhenChecklistEmpty(t *testing.T) {
+	// Legacy verdict (no AC list) must not emit an empty AC section.
+	v := &state.Verdict{Pass: true, Score: 100}
+	got := FormatVerdictComment(v, state.PhaseQuality, 1, nil)
+	if strings.Contains(got, "Acceptance Criteria") {
+		t.Errorf("AC section must not appear when checklist is empty\n%s", got)
+	}
+}
+
+func TestFormatVerdictComment_AC_EscapesPipesInDescription(t *testing.T) {
+	// Markdown table cells break if a literal | leaks through. The
+	// renderer must escape pipes in both Description and Reason.
+	v := &state.Verdict{
+		Pass: true, Score: 100,
+		Checklist: []state.ChecklistItem{
+			{Name: "ac_1", Description: "match foo|bar pattern", Required: true, Passed: true, Reason: "see grep|sed pipeline"},
+		},
+	}
+	got := FormatVerdictComment(v, state.PhaseQuality, 1, nil)
+	if !strings.Contains(got, `match foo\|bar pattern`) {
+		t.Errorf("pipe in description not escaped\n%s", got)
+	}
+	if !strings.Contains(got, `see grep\|sed pipeline`) {
+		t.Errorf("pipe in reason not escaped\n%s", got)
+	}
+}

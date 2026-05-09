@@ -944,6 +944,15 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 		b.WriteString("\n\n")
 	}
 
+	// AC matrix — when the task carried a parsed AC list from the
+	// issue body, render the per-item status so reviewers can see at
+	// a glance which criteria were ticked, deferred, or missed. The
+	// underlying gate (DeriveVerdictState) already drove Pass; this
+	// section just makes the why visible.
+	if len(verdict.Checklist) > 0 {
+		b.WriteString(renderChecklistSection(verdict.Checklist))
+	}
+
 	// Separate gaps into inline (already visible on specific lines) and
 	// summary-only (belong in this comment).
 	var summaryGaps []state.Gap
@@ -1018,4 +1027,63 @@ func GeneratePRTitle(task *state.Task) string {
 		title = title[:67] + "..."
 	}
 	return title
+}
+
+// renderChecklistSection produces the "### Acceptance Criteria"
+// markdown table for a verdict's per-AC audit. Status icons follow
+// the four states the gate distinguishes:
+//
+//   - ✅ Required && Passed — criterion met, reason is the evidence cite
+//   - ⏸️ Required && !Passed && Reason != "" — deferred with reason; gate allows
+//   - ❌ Required && !Passed && Reason == "" — unmet, no excuse; gate blocks
+//   - ⚪ !Required — optional item (passed or not, never blocks)
+//
+// The header line shows a tally so reviewers can skim "5/8 passed"
+// without reading the whole table.
+func renderChecklistSection(items []state.ChecklistItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	passed, total := state.ChecklistTally(items)
+	var b strings.Builder
+	fmt.Fprintf(&b, "### Acceptance Criteria (%d/%d passed)\n\n", passed, total)
+	b.WriteString("| | Item | Evidence / Reason |\n")
+	b.WriteString("|---|------|-------------------|\n")
+	for _, it := range items {
+		icon := checklistIcon(it)
+		reason := strings.TrimSpace(it.Reason)
+		if reason == "" {
+			reason = "_(no reason given)_"
+		}
+		desc := it.Description
+		if !it.Required {
+			desc = "(optional) " + desc
+		}
+		// Pipes inside table cells must be escaped or the table breaks.
+		desc = strings.ReplaceAll(desc, "|", "\\|")
+		reason = strings.ReplaceAll(reason, "|", "\\|")
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", icon, desc, reason)
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// checklistIcon returns the status emoji for one ChecklistItem per
+// the four-state matrix. Keep this in lockstep with the gate's view
+// (state.RequiredPassed) so the rendered icons match the actual
+// pass/block decision.
+func checklistIcon(it state.ChecklistItem) string {
+	if !it.Required {
+		if it.Passed {
+			return "✅"
+		}
+		return "⚪"
+	}
+	if it.Passed {
+		return "✅"
+	}
+	if strings.TrimSpace(it.Reason) != "" {
+		return "⏸️"
+	}
+	return "❌"
 }
