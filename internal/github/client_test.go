@@ -407,7 +407,6 @@ func TestFormatVerdictComment_Pass(t *testing.T) {
 		{"logo", `<img src="`},
 		{"logo alt", `alt="VAIrdict"`},
 		{"logo height", `height="24"`},
-		{"score", "**Score:** 95%"},
 		{"phase", "**Phase:** quality"},
 		{"loop", "**Loop:** 1"},
 		{"gap severity", "| Low |"},
@@ -451,7 +450,6 @@ func TestFormatVerdictComment_Fail(t *testing.T) {
 		{"logo", `<img src="`},
 		{"logo alt", `alt="VAIrdict"`},
 		{"logo height", `height="24"`},
-		{"score", "**Score:** 40%"},
 		{"loop", "**Loop:** 2"},
 		{"blocking section", "### Blocking Gaps"},
 		{"critical gap", "**[Critical]** build broken"},
@@ -511,7 +509,7 @@ func TestFormatVerdictComment_RendersModel(t *testing.T) {
 
 func TestFormatVerdictComment_NoModelOmitted(t *testing.T) {
 	// Code judge runs deterministic shell checks (lint/test/build) and
-	// leaves Model empty. The score line must omit the model field
+	// leaves Model empty. The summary line must omit the model field
 	// rather than render an empty `Model: \`\`` artifact.
 	verdict := &state.Verdict{
 		Score: 100,
@@ -522,6 +520,33 @@ func TestFormatVerdictComment_NoModelOmitted(t *testing.T) {
 
 	if contains(comment, "**Model:**") {
 		t.Errorf("comment must omit Model label when verdict has no model, got:\n%s", comment)
+	}
+}
+
+// TestFormatVerdictComment_OmitsScoreField pins the deliberate
+// removal of the Score field from the rendered comment. With AC
+// tracing landed, Pass / NEEDS_WORK is mechanical — gate is
+// DeriveVerdictState(gaps, checklist), not score. A 100% score next
+// to a NEEDS_WORK verdict (or 60% next to PASS) is more confusing
+// than helpful, and the header / Criteria table / AC matrix already
+// convey what the reader needs. Score still lives on state.Verdict
+// for debug logs; just not in the rendered comment.
+func TestFormatVerdictComment_OmitsScoreField(t *testing.T) {
+	cases := []struct {
+		name string
+		v    *state.Verdict
+	}{
+		{"pass with full score", &state.Verdict{Score: 100, Pass: true}},
+		{"fail with low score", &state.Verdict{Score: 40, Pass: false}},
+		{"pass with mid score", &state.Verdict{Score: 75, Pass: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatVerdictComment(tc.v, state.PhaseQuality, 1, nil)
+			if contains(got, "**Score:**") {
+				t.Errorf("rendered comment must not contain **Score:** label, got:\n%s", got)
+			}
+		})
 	}
 }
 

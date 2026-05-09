@@ -934,7 +934,17 @@ func FormatVerdictComment(verdict *state.Verdict, phase state.Phase, loop int, i
 	// Summary line. The model field is appended when the judge stamped
 	// it (every LLM-backed judge does); deterministic judges that don't
 	// call an LLM leave it empty and the field is omitted from the line.
-	fmt.Fprintf(&b, "**Score:** %.0f%% | **Phase:** %s | **Loop:** %d", verdict.Score, phase, loop)
+	//
+	// Score was historically rendered here but no longer drives the
+	// gate — DeriveVerdictState(gaps, checklist) is mechanical (zero
+	// blocking gaps + every Required AC item satisfied). The score
+	// field still lives on state.Verdict for debug logs, but rendering
+	// it next to a PASS / NEEDS_WORK header that may disagree with it
+	// (a 100% score on a NEEDS_WORK verdict from one unticked AC, or a
+	// 60% score on a PASS verdict) is more confusing than helpful. The
+	// header, the Criteria table, and the AC matrix already convey
+	// everything a reader needs.
+	fmt.Fprintf(&b, "**Phase:** %s | **Loop:** %d", phase, loop)
 	if verdict.Model != "" {
 		fmt.Fprintf(&b, " | **Model:** `%s`", verdict.Model)
 	}
