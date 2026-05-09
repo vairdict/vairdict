@@ -40,7 +40,7 @@ func RenderACSection(items []state.ChecklistItem) string {
 	b.WriteString("3. If no, this item is NOT done, even if related work is present.\n\n")
 	b.WriteString("Items:\n")
 	for _, it := range items {
-		b.WriteString(fmt.Sprintf("- `%s`: %s\n", it.Name, it.Description))
+		fmt.Fprintf(&b, "- `%s`: %s\n", it.Name, it.Description)
 	}
 	return b.String()
 }
