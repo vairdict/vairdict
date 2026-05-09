@@ -2,17 +2,20 @@
 // planner and judges (the "completer" roles, distinct from the "coder" role
 // in internal/agents/claudecode which uses tools and edits the filesystem).
 //
-// Three values are accepted in vairdict.yaml under agents.planner /
+// Four values are accepted in vairdict.yaml under agents.planner /
 // agents.judge (and the per-phase overrides agents.plan_judge,
 // agents.code_judge, agents.quality_judge):
 //
 //	claude      — smart default: try claude-cli, fall back to claude-api
 //	claude-cli  — strict local subprocess (errors if `claude` not on PATH)
 //	claude-api  — strict HTTP API client (errors if no API key configured)
+//	codex       — OpenAI Codex CLI (errors if `codex` not on PATH)
 //
-// The bare value `claude` exists so future families (gpt, gemini, …) can
+// The bare value `claude` exists so future families (gemini, …) can
 // follow the same convention: bare = smart default for the family, suffixed
-// = explicit transport.
+// = explicit transport. `codex` is single-transport today (no
+// codex-cli/codex-api distinction); when an OpenAI HTTP client lands the
+// same suffix pattern applies.
 package main
 
 import (
@@ -22,6 +25,7 @@ import (
 
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecli"
+	"github.com/vairdict/vairdict/internal/agents/codex"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -65,6 +69,7 @@ type backendKind string
 const (
 	backendClaudeCLI backendKind = "claude-cli" // local `claude -p`
 	backendClaudeAPI backendKind = "claude-api" // HTTP API
+	backendCodex     backendKind = "codex"      // OpenAI Codex CLI (`codex exec`)
 )
 
 // backendForRole reads the configured backend string for the given role
@@ -134,8 +139,14 @@ func chooseBackendForRole(roleName, setting string, cliAvailable bool) (backendK
 		return backendClaudeCLI, nil
 	case "claude-api":
 		return backendClaudeAPI, nil
+	case "codex":
+		// Codex is single-transport today — there is no codex-api
+		// fallback because we don't have an OpenAI HTTP client. The
+		// caller errors later if `codex` isn't on PATH (handled in
+		// validateCompleterBackend).
+		return backendCodex, nil
 	default:
-		return "", fmt.Errorf("unknown %s backend %q (want claude|claude-cli|claude-api)", roleName, setting)
+		return "", fmt.Errorf("unknown %s backend %q (want claude|claude-cli|claude-api|codex)", roleName, setting)
 	}
 }
 
@@ -186,6 +197,18 @@ func resolveCompleter(cfg *config.Config, role completerRole) (completer, backen
 			return nil, "", fmt.Errorf("creating claude client: %w", err)
 		}
 		return c, kind, nil
+	case backendCodex:
+		// --dangerously-bypass-approvals-and-sandbox lets the
+		// subprocess complete tool-style operations without
+		// interactive prompts. --skip-git-repo-check covers calls
+		// outside a git working tree (review/comment handlers).
+		opts := []codex.Option{
+			codex.WithExtraArgs("--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"),
+		}
+		if model != "" {
+			opts = append(opts, codex.WithModel(model))
+		}
+		return codex.New(opts...), kind, nil
 	default:
 		return nil, "", fmt.Errorf("unreachable backend kind: %s", kind)
 	}
@@ -262,8 +285,13 @@ func validateCompleterBackend(roleName, setting string, probes backendProbes) er
 			return fmt.Errorf("%s: claude-api requires ANTHROPIC_API_KEY (env var or ~/.config/vairdict/config.yaml)", roleName)
 		}
 		return nil
+	case "codex":
+		if !probes.cliAvailable("codex") {
+			return fmt.Errorf("%s: codex requires the `codex` binary on PATH", roleName)
+		}
+		return nil
 	default:
-		return fmt.Errorf("%s: unknown backend %q (want claude|claude-cli|claude-api)", roleName, setting)
+		return fmt.Errorf("%s: unknown backend %q (want claude|claude-cli|claude-api|codex)", roleName, setting)
 	}
 }
 
