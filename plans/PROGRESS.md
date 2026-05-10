@@ -7,13 +7,12 @@ Update this file when opening, completing, or blocking an issue.
 
 ## Current Milestone: M6 — Pluggable Agents
 
-M5 is effectively done (one open perf load-test, #82). M6 work has
-already started — #128, #129, #137 are merged.
+M5 is done — #82 closed the parallelism gate, surfaced and fixed a
+real SQLite contention bug along the way. M6 work continues.
 
 ---
 
 ## Ready to Start
-- #82 perf: load test 5 concurrent tasks (final M5)
 - #127 agents/gemini: Gemini CLI completer
 - #88 config/standards: team standards in vairdict.yaml
 
@@ -76,6 +75,7 @@ already started — #128, #129, #137 are merged.
 - #81 conflicts: merge conflict detection
 - #87 state/rewind: verdict ReturnTo field + phase rewind in outer loop
 - #86 state/rewind-context: structured failure context propagation on rewind
+- #82 perf: load test 5 concurrent tasks (M5 def-of-done gate)
 - #114 cmd: @vairdict mention commands — explain, fix, run
 - #111 cmd: @vairdict explain — answer questions about PR changes inline
 - #112 cmd: @vairdict fix — push code changes from PR comments
@@ -182,6 +182,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | in progress | 16/17       |
+| M5        | done        | 17/17       |
 | M6        | in progress | 5/16        |
 | M7+       | not started | —           |
