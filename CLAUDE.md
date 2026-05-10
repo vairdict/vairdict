@@ -142,25 +142,31 @@ type Gap struct {
 
 ## skillpkg / spm
 
-The ship skill handles lint, format, tests, and build
-in the code phase judge. Do not reimplement this logic
-— call spm instead:
+The code phase judge runs the project's configured
+`commands.build`, `commands.test`, and `commands.lint`
+(from `vairdict.yaml`) plus a formatter selected by
+`conventions.formatter`. Implementation lives in
+`internal/judges/code/judge.go` and shells out via
+`os/exec` directly — there is no spm invocation at
+runtime.
 
-```
-spm exec ship
-```
+The `ship` skill (installable via `spm install ship`)
+is conceptually parallel — same set of quality gates,
+agent-facing — and is what an AI agent uses ad-hoc.
+VAIrdict does not shell out to the skill because spm
+is a package manager, not an executor; it has no
+skill-execution subcommand.
 
-spm must be installed in the environment.
-ship skill must be installed: `spm install ship`
-
-Do NOT add spm dependencies before M2 code phase work.
+If you change the judge's quality-gate set, also
+revisit the ship skill so the agent-facing and
+judge-facing surfaces stay aligned.
 
 ## Not yet integrated
 
-- Slack notifications (M7)
-- Web UI dashboard (M8)
-- Coder environment (M10)
-- skillpkg runtime skill loading (M11)
+- skillpkg runtime skill loading (Milestone 14)
+- Slack notifications (Milestone 23)
+- Web UI dashboard (Web UI section, post-Milestone 18)
+- Coder environment (Milestone 25)
 
 Do not implement these before their milestone.
 
