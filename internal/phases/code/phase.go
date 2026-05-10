@@ -25,7 +25,8 @@ type Coder interface {
 	Run(ctx context.Context, prompt string, workDir string) (state.AgentResult, error)
 }
 
-// Judge is the interface for the code judge (spm exec ship).
+// Judge is the interface for the code judge — runs the project's
+// build/test/lint/format quality gates.
 type Judge interface {
 	Judge(ctx context.Context, workDir string) (*state.Verdict, error)
 }

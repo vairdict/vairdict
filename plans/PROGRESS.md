@@ -18,7 +18,6 @@ already started — #128, #129, #137 are merged.
 - #88 config/standards: team standards in vairdict.yaml
 
 ## In Progress
-- #136 bug(judge/auto-review): wrong intent on docs/scoping PRs
 
 ## Blocked
 - #130 resolver: extend auto backend resolver — needs #126 + #127
@@ -87,6 +86,7 @@ already started — #128, #129, #137 are merged.
 - #128 config: per-phase backend selection in vairdict.yaml (M6)
 - #129 judge/pluggable: swap judge model in vairdict.yaml (M6)
 - #137 perf/plan: cut multi-loop latency on the plan phase (M6)
+- #136 bug(judge/auto-review): correct intent on docs/scoping PRs (M6)
 
 ---
 
@@ -183,5 +183,5 @@ reviewed by the agent judge, only then created in GitHub.
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
 | M5        | in progress | 16/17       |
-| M6        | in progress | 4/12        |
+| M6        | in progress | 5/16        |
 | M7+       | not started | —           |
