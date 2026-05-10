@@ -4,6 +4,24 @@ on:
   push:
     tags:
       - "v*"
+  # Manual trigger from the Actions tab. Computes the next tag, pushes it,
+  # then runs GoReleaser in the same job — no chained workflow runs, no PAT.
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        type: choice
+        required: true
+        default: "patch"
+        options:
+          - patch
+          - minor
+          - major
+          - explicit
+      version:
+        description: "Explicit version (only when bump=explicit, e.g. v1.2.3)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -12,9 +30,62 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Guard: workflow_dispatch must run from main. Prevents accidentally
+      # cutting a release from a feature branch's HEAD.
+      - name: Reject non-main dispatch
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Release dispatch must run from main (got ${GITHUB_REF})"
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Compute and push the new tag on workflow_dispatch. On a tag push the
+      # tag already exists; this step is skipped and GoReleaser uses GITHUB_REF.
+      - name: Compute and push tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          BUMP="${{ inputs.bump }}"
+          EXPLICIT="${{ inputs.version }}"
+
+          if [ "$BUMP" = "explicit" ]; then
+            if [ -z "$EXPLICIT" ]; then
+              echo "::error::bump=explicit requires the version input"
+              exit 1
+            fi
+            if [[ ! "$EXPLICIT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must match v<major>.<minor>.<patch>; got '$EXPLICIT'"
+              exit 1
+            fi
+            NEW="$EXPLICIT"
+          else
+            LATEST=$(git tag --list 'v*' --sort=-v:refname | head -1)
+            LATEST="${LATEST:-v0.0.0}"
+            VER="${LATEST#v}"
+            IFS='.' read -r MAJ MIN PAT <<< "$VER"
+            case "$BUMP" in
+              patch) PAT=$((PAT + 1)) ;;
+              minor) MIN=$((MIN + 1)); PAT=0 ;;
+              major) MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
+            esac
+            NEW="v${MAJ}.${MIN}.${PAT}"
+          fi
+
+          if git rev-parse "$NEW" >/dev/null 2>&1; then
+            echo "::error::Tag $NEW already exists"
+            exit 1
+          fi
+
+          echo "Tagging $NEW (bump=$BUMP, latest=${LATEST:-none})"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEW" -m "Release $NEW"
+          git push origin "$NEW"
+          # GoReleaser keys off the latest reachable tag (`git describe`),
+          # which now points at the just-created tag on this commit.
 
       - uses: actions/setup-go@v5
         with:
