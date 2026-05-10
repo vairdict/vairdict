@@ -39,10 +39,22 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("opening database %s: %w", dbPath, err)
 	}
 
+	// SQLite has a single-writer concurrency model. database/sql will
+	// otherwise open multiple connections under load and race their
+	// writes, surfacing as SQLITE_BUSY errors when concurrent tasks
+	// (M5) all try to persist state at once. One connection serializes
+	// access at the Go layer; busy_timeout adds a small backstop in
+	// case any code path bypasses the connection pool.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("setting WAL mode: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("setting busy_timeout: %w", err)
 	}
 
 	s := &Store{db: db}
