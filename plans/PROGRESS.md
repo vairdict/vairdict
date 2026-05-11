@@ -182,6 +182,6 @@ reviewed by the agent judge, only then created in GitHub.
 | M2        | done        | 6/6         |
 | M3        | done        | 15/15       |
 | M4        | done        | 8/8         |
-| M5        | done        | 17/17       |
+| M5        | done        | 18/18       |
 | M6        | in progress | 5/16        |
 | M7+       | not started | —           |
