@@ -7,6 +7,7 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecli"
 	"github.com/vairdict/vairdict/internal/agents/codex"
+	"github.com/vairdict/vairdict/internal/agents/gemini"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -39,6 +40,9 @@ func TestChooseBackend(t *testing.T) {
 		// influence codex resolution either way.
 		{"codex no claude cli", "codex", false, backendCodex, false},
 		{"codex with claude cli", "codex", true, backendCodex, false},
+		// Gemini pinned — same explicit-choice semantics as codex.
+		{"gemini no claude cli", "gemini", false, backendGemini, false},
+		{"gemini with claude cli", "gemini", true, backendGemini, false},
 		// Typos surface as a hard error so users don't silently get the
 		// wrong backend.
 		{"unknown value", "openai", true, "", true},
@@ -497,6 +501,100 @@ func TestValidateBackends_CodexAvailable(t *testing.T) {
 	}
 	if err := validateBackends(cfg, probes); err != nil {
 		t.Errorf("codex pinned with binary present should validate, got: %v", err)
+	}
+}
+
+// TestResolveCompleter_GeminiBackend: agents.judge: gemini must
+// construct a gemini.Client (not claude/codex) and route through
+// resolveCompleter without touching the claude API path. AC item from
+// #127: the new client is reachable from the resolver and the
+// configured model flows into it.
+func TestResolveCompleter_GeminiBackend(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "gemini",
+		Judge:   "gemini",
+		Model:   "gemini-2.5-pro",
+	}}
+
+	for _, role := range []completerRole{rolePlanner, rolePlanJudge, roleCodeJudge, roleQualityJudge} {
+		c, kind, err := resolveCompleter(cfg, role)
+		if err != nil {
+			t.Fatalf("resolveCompleter(%s): %v", role, err)
+		}
+		if kind != backendGemini {
+			t.Errorf("%s kind = %q, want %q", role, kind, backendGemini)
+		}
+		gc, ok := c.(*gemini.Client)
+		if !ok {
+			t.Fatalf("expected *gemini.Client for %s, got %T", role, c)
+		}
+		if got := gc.Model(); got != "gemini-2.5-pro" {
+			t.Errorf("%s gemini client model = %q, want gemini-2.5-pro", role, got)
+		}
+	}
+}
+
+// TestValidateBackends_GeminiNeedsBinary: gemini pinned but `gemini`
+// not on PATH must error and name both the role and the missing
+// binary. Mirrors the codex missing-binary check.
+func TestValidateBackends_GeminiNeedsBinary(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "claude",
+		Coder:   "claude-code",
+		Judge:   "claude",
+		// QualityJudge is the explicit pinned slot that should fail.
+		QualityJudge: "gemini",
+	}}
+	probes := backendProbes{
+		// claude available (so coder + smart-default judges validate),
+		// gemini absent.
+		cliAvailable:  func(name string) bool { return name == "claude" },
+		apiKeyPresent: func() bool { return true },
+	}
+	err := validateBackends(cfg, probes)
+	if err == nil {
+		t.Fatal("expected error for missing gemini binary")
+	}
+	if !strings.Contains(err.Error(), "quality_judge") {
+		t.Errorf("error should name the role (quality_judge), got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "gemini") {
+		t.Errorf("error should name the missing binary (gemini), got: %v", err)
+	}
+}
+
+// TestValidateBackends_GeminiAvailable: gemini pinned and the binary
+// is on PATH validates without error.
+func TestValidateBackends_GeminiAvailable(t *testing.T) {
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Planner: "gemini",
+		Coder:   "claude-code",
+		Judge:   "gemini",
+	}}
+	probes := backendProbes{
+		// Both binaries present — claude for the coder, gemini for the
+		// completers.
+		cliAvailable:  func(string) bool { return true },
+		apiKeyPresent: func() bool { return false },
+	}
+	if err := validateBackends(cfg, probes); err != nil {
+		t.Errorf("gemini pinned with binary present should validate, got: %v", err)
+	}
+}
+
+// TestSeedCLISession_NoOpForGeminiClient: gemini has no session-resume
+// concept (the CLI lacks a --resume in our wrapper). seed/capture
+// must be safe no-ops so the orchestrator's existing wiring keeps
+// working unchanged when gemini is the configured completer.
+func TestSeedCLISession_NoOpForGeminiClient(t *testing.T) {
+	geminiClient := gemini.New()
+	task := state.NewTask("t", "i")
+	task.CLISessionIDs = map[string]string{string(rolePlanner): "ignored"}
+	// Must not panic; gemini client doesn't have a session concept.
+	seedCLISession(geminiClient, task, rolePlanner)
+	captureCLISession(geminiClient, task, rolePlanner)
+	if task.CLISessionIDs[string(rolePlanner)] != "ignored" {
+		t.Errorf("gemini client should not affect task session ids, got %v", task.CLISessionIDs)
 	}
 }
 
