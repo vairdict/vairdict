@@ -13,10 +13,10 @@ real SQLite contention bug along the way. M6 work continues.
 ---
 
 ## Ready to Start
-- #127 agents/gemini: Gemini CLI completer
 - #88 config/standards: team standards in vairdict.yaml
 
 ## In Progress
+- #127 agents/gemini: Gemini CLI completer
 
 ## Blocked
 - #130 resolver: extend auto backend resolver — needs #126 + #127

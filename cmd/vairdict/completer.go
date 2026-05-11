@@ -2,7 +2,7 @@
 // planner and judges (the "completer" roles, distinct from the "coder" role
 // in internal/agents/claudecode which uses tools and edits the filesystem).
 //
-// Four values are accepted in vairdict.yaml under agents.planner /
+// Five values are accepted in vairdict.yaml under agents.planner /
 // agents.judge (and the per-phase overrides agents.plan_judge,
 // agents.code_judge, agents.quality_judge):
 //
@@ -10,12 +10,13 @@
 //	claude-cli  — strict local subprocess (errors if `claude` not on PATH)
 //	claude-api  — strict HTTP API client (errors if no API key configured)
 //	codex       — OpenAI Codex CLI (errors if `codex` not on PATH)
+//	gemini      — Google Gemini CLI (errors if `gemini` not on PATH)
 //
-// The bare value `claude` exists so future families (gemini, …) can
-// follow the same convention: bare = smart default for the family, suffixed
-// = explicit transport. `codex` is single-transport today (no
-// codex-cli/codex-api distinction); when an OpenAI HTTP client lands the
-// same suffix pattern applies.
+// `codex` and `gemini` are single-transport today (no -cli/-api
+// distinction); when their HTTP clients land the same suffix pattern
+// as claude applies. The bare value `claude` exists so each family can
+// follow the same convention: bare = smart default for the family,
+// suffixed = explicit transport.
 package main
 
 import (
@@ -26,6 +27,7 @@ import (
 	"github.com/vairdict/vairdict/internal/agents/claude"
 	"github.com/vairdict/vairdict/internal/agents/claudecli"
 	"github.com/vairdict/vairdict/internal/agents/codex"
+	"github.com/vairdict/vairdict/internal/agents/gemini"
 	"github.com/vairdict/vairdict/internal/config"
 	"github.com/vairdict/vairdict/internal/state"
 )
@@ -70,6 +72,7 @@ const (
 	backendClaudeCLI backendKind = "claude-cli" // local `claude -p`
 	backendClaudeAPI backendKind = "claude-api" // HTTP API
 	backendCodex     backendKind = "codex"      // OpenAI Codex CLI (`codex exec`)
+	backendGemini    backendKind = "gemini"     // Google Gemini CLI (`gemini -p`)
 )
 
 // backendForRole reads the configured backend string for the given role
@@ -145,8 +148,13 @@ func chooseBackendForRole(roleName, setting string, cliAvailable bool) (backendK
 		// caller errors later if `codex` isn't on PATH (handled in
 		// validateCompleterBackend).
 		return backendCodex, nil
+	case "gemini":
+		// Gemini is single-transport today — no gemini-api fallback
+		// because we don't have a Google HTTP client. Caller errors
+		// later if `gemini` isn't on PATH.
+		return backendGemini, nil
 	default:
-		return "", fmt.Errorf("unknown %s backend %q (want claude|claude-cli|claude-api|codex)", roleName, setting)
+		return "", fmt.Errorf("unknown %s backend %q (want claude|claude-cli|claude-api|codex|gemini)", roleName, setting)
 	}
 }
 
@@ -209,6 +217,18 @@ func resolveCompleter(cfg *config.Config, role completerRole) (completer, backen
 			opts = append(opts, codex.WithModel(model))
 		}
 		return codex.New(opts...), kind, nil
+	case backendGemini:
+		// --yolo lets the subprocess auto-approve tool actions
+		// without interactive prompts, matching the codex
+		// approvals-bypass and claudecli --dangerously-skip-permissions
+		// flags — judges and the planner run unattended.
+		opts := []gemini.Option{
+			gemini.WithExtraArgs("--yolo"),
+		}
+		if model != "" {
+			opts = append(opts, gemini.WithModel(model))
+		}
+		return gemini.New(opts...), kind, nil
 	default:
 		return nil, "", fmt.Errorf("unreachable backend kind: %s", kind)
 	}
@@ -290,8 +310,13 @@ func validateCompleterBackend(roleName, setting string, probes backendProbes) er
 			return fmt.Errorf("%s: codex requires the `codex` binary on PATH", roleName)
 		}
 		return nil
+	case "gemini":
+		if !probes.cliAvailable("gemini") {
+			return fmt.Errorf("%s: gemini requires the `gemini` binary on PATH", roleName)
+		}
+		return nil
 	default:
-		return fmt.Errorf("%s: unknown backend %q (want claude|claude-cli|claude-api|codex)", roleName, setting)
+		return fmt.Errorf("%s: unknown backend %q (want claude|claude-cli|claude-api|codex|gemini)", roleName, setting)
 	}
 }
 
